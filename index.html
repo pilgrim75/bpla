@@ -2590,10 +2590,13 @@ async function aesEncrypt(text,password){
   const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(text));
   const buf=new Uint8Array(iv.length+cipher.byteLength);
   buf.set(iv,0);buf.set(new Uint8Array(cipher),iv.length);
-  return btoa(String.fromCharCode(...buf));
+  const result=btoa(String.fromCharCode(...buf));
+  console.log('[ENC] blob length:', result.length);
+  return result;
 }
 async function aesDecrypt(b64,password){
   console.log('[DEC] key length:', password.length, 'key start:', password.slice(0,6));
+  console.log('[DEC] blob length:', b64.length, 'blob start:', b64.slice(0,20), 'blob end:', b64.slice(-20));
   const key=await getKey(password);
   const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
   const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:buf.slice(0,12)},key,buf.slice(12));
