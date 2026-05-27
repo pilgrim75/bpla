@@ -1519,7 +1519,7 @@ function saveManualFlight(){
     note:document.getElementById('mf-note').value.trim(),
   };
   if(!f.pilot){alert('Укажите пилота');return;}
-  if(f.returned==='no'&&f.drone)writeDroneLoss(f.pilot,f.drone,f.date,f.time);
+  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
   f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
   if(!navigator.onLine)state.offlineQueue.push(f);
   state.flights.unshift(f);
@@ -1673,7 +1673,7 @@ function confirmParsed(i){
     flightnum:fn?parseInt(fn):null,
     note:document.getElementById(`p${i}-note`).value,
   };
-  if(f.returned==='no'&&f.drone)writeDroneLoss(f.pilot,f.drone,f.date,f.time);
+  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
   f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
   if(!navigator.onLine)state.offlineQueue.push(f);
   state.flights.unshift(f);
@@ -2806,50 +2806,105 @@ async function pollCloud(){
   const key=cfg.key||localStorage.getItem('cfg_key')||'';
   const token=authToken||localStorage.getItem('auth_token')||'';
   if(!url||!token)return;
+  const ind=document.getElementById('syncIndicator');
   try{
     const since=_lastPollTs||localStorage.getItem('last_sync')||0;
     const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since);
     const d=await r.json();
-    if(d.error)return;
+    if(d.error){console.warn('[POLL]',d.error);return;}
+    const newFlights=(d.flights||[]).length;
+    const newTransfers=(d.transfers||[]).length;
+    console.log('[POLL]',new Date().toLocaleTimeString('ru'),'новых:',newFlights,'вылетов,',newTransfers,'операций');
     _lastPollTs=Date.now();
-    let changed=false;
 
-    // Расшифровываем и добавляем только новые записи (которых нет локально)
-    async function mergeRows(remoteRows, localArr, idField='id'){
+    async function mergeRows(remoteRows, localArr){
       if(!remoteRows||!remoteRows.length)return false;
       let added=false;
       for(const row of remoteRows){
         try{
           const json=key?await aesDecrypt(row.data,key):row.data;
           const obj=JSON.parse(json);
-          const objId=obj[idField]||obj.id;
-          const exists=localArr.some(x=>(x[idField]||x.id)===objId);
+          const objId=obj.id;
+          const exists=localArr.some(x=>x.id===objId);
           if(!exists){
             localArr.unshift(obj);
             added=true;
-            // Если это вылет с потерей борта — списываем дрон локально
             if(localArr===state.flights&&obj.returned==='no'&&obj.drone){
               writeDroneLoss(obj.pilot,obj.drone,obj.date,obj.time);
+              // Отправляем обновлённые расчёты и склад в облако
+              setTimeout(()=>syncStockAndSquads(),500);
             }
           }
-        }catch(e){}
+        }catch(e){console.warn('[POLL] row error:',e.message);}
       }
       return added;
     }
 
-    if(await mergeRows(d.flights, state.flights))changed=true;
-    if(await mergeRows(d.transfers, state.transfers||[]))changed=true;
+    let changed=false;
+    if(await mergeRows(d.flights,state.flights))changed=true;
+    if(await mergeRows(d.transfers,state.transfers||(state.transfers=[])))changed=true;
+
+    // Для склада и расчётов — заменяем если пришли обновления (они всегда пишутся полностью)
+    if(d.stock&&d.stock.length){
+      const decStock=await Promise.all(d.stock.map(async r=>{
+        try{const j=key?await aesDecrypt(r.data,key):r.data;return JSON.parse(j);}catch(e){return null;}
+      })).then(a=>a.filter(Boolean));
+      if(decStock.length){state.stock=decStock;changed=true;}
+    }
+    if(d.squads&&d.squads.length){
+      const decSquads=await Promise.all(d.squads.map(async r=>{
+        try{const j=key?await aesDecrypt(r.data,key):r.data;const o=JSON.parse(j);
+          if(!Array.isArray(o.drones))o.drones=[];return o;}catch(e){return null;}
+      })).then(a=>a.filter(Boolean));
+      if(decSquads.length){state.squads=decSquads;changed=true;}
+    }
 
     if(changed){
       saveLocal();
       renderDashboard();
       renderFlights();
-      showSyncToast('↓ Получены новые данные');
+      renderInventory();
+      rebuildRoleSelector();
+      if(ind){ind.className='sync-indicator saved';ind.textContent='● онлайн';}
+      if(newFlights>0)showSyncToast('↓ '+newFlights+' новых вылетов');
+    } else {
+      // Обновляем время последней проверки в индикаторе
+      if(ind){
+        ind.className='sync-indicator saved';
+        ind.textContent='● '+new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+      }
     }
-  }catch(e){}
+  }catch(e){
+    console.warn('[POLL] error:',e.message);
+    if(ind){ind.className='sync-indicator';ind.textContent='⚠ нет связи';}
+  }
 }
 
 // Запускаем автополлинг каждые 30 сек
+// Синхронизирует только склад и расчёты (после изменений дронов)
+async function syncStockAndSquads(){
+  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const key=cfg.key||localStorage.getItem('cfg_key')||'';
+  const token=authToken||localStorage.getItem('auth_token')||'';
+  if(!url||!token)return;
+  try{
+    const ts=Date.now();
+    async function encRow(obj){
+      const json=JSON.stringify(obj);
+      if(!key)return{id:obj.id||ts,data:json};
+      return{id:obj.id||ts,data:await aesEncrypt(json,key)};
+    }
+    const stock=await Promise.all(state.stock.map((d,i)=>encRow({...d,id:d.id||(ts+i)})));
+    const squads=await Promise.all(state.squads.map((sq,i)=>encRow({...sq,id:sq.id||(ts+i)})));
+    const body=JSON.stringify({action:'write',token,data:{stock,squads,flights:[],transfers:[]}});
+    try{
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+    }catch(e){
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
+    }
+  }catch(e){console.warn('[SYNC STOCK]',e.message);}
+}
+
 function startPolling(){
   if(window._pollInterval)clearInterval(window._pollInterval);
   window._pollInterval=setInterval(()=>{
