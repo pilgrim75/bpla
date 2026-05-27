@@ -2583,6 +2583,7 @@ async function getKey(password){
   return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('asu-bpla-v1'),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 async function aesEncrypt(text,password){
+  console.log('[ENC] key length:', password.length, 'key start:', password.slice(0,6));
   const key=await getKey(password);
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const enc=new TextEncoder();
@@ -2592,6 +2593,7 @@ async function aesEncrypt(text,password){
   return btoa(String.fromCharCode(...buf));
 }
 async function aesDecrypt(b64,password){
+  console.log('[DEC] key length:', password.length, 'key start:', password.slice(0,6));
   const key=await getKey(password);
   const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
   const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:buf.slice(0,12)},key,buf.slice(12));
