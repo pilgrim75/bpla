@@ -892,7 +892,7 @@ function showAdminTab(tab,btn){
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
   if(tab==='ammo')renderAmmoList();
-  if(tab==='actlog')renderActLog();
+  if(tab==='actlog'){loadActLogFromCloud().then(()=>renderActLog());};
 }
 
 function admClearFilters(){
@@ -917,21 +917,23 @@ function renderAdminFlights(){
     <table style="table-layout:fixed;width:100%">
       <thead><tr>
         <th style="width:115px">Дата/Время</th>
-        <th style="width:90px">Пилот</th>
-        <th style="width:90px">Точка</th>
-        <th style="width:90px">БПЛА</th>
-        <th style="width:45px">#</th>
-        <th style="width:55px">Задача</th>
-        <th style="width:75px">Борт</th>
+        <th style="width:85px">Пилот</th>
+        <th style="width:80px">Точка</th>
+        <th style="width:85px">Боеприпас</th>
+        <th style="width:80px">БПЛА</th>
+        <th style="width:40px">#</th>
+        <th style="width:50px">Задача</th>
+        <th style="width:70px">Борт</th>
         <th>Примечание</th>
-        <th style="width:75px">Действие</th>
+        <th style="width:70px">Действие</th>
       </tr></thead>
       <tbody>${indexed.map(({x,i})=>`<tr>
         <td><input style="width:110px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"><br><input style="width:70px;margin-top:4px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
-        <td><input style="width:85px" value="${x.pilot}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
-        <td><input style="width:85px" value="${x.target}" onchange="adminEditFlight(${i},'target',this.value)"></td>
-        <td><input style="width:85px" value="${x.drone}" onchange="adminEditFlight(${i},'drone',this.value)"></td>
-        <td><input style="width:42px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
+        <td><input style="width:82px" value="${x.pilot}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
+        <td><input style="width:77px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
+        <td><input style="width:82px" list="dl-ammo-catalog" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" autocomplete="off"></td>
+        <td><input style="width:77px" list="dl-drones-smart" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" autocomplete="off"></td>
+        <td><input style="width:37px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
         <td><select onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
         <td><input style="width:100%" value="${x.note||''}" onchange="adminEditFlight(${i},'note',this.value)"></td>
@@ -1458,7 +1460,7 @@ function renderFlights(){
       <div class="flight-cell">${x.drone||'—'}</div>
       <div class="flight-tag"><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></div>
       <div class="flight-tag"><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}">${x.returned==='yes'?'вернул':'потерян'}</span>${x.note?`<br><span style="font-size:10px;color:var(--muted)">⚠ ${x.note}</span>`:''}</div>
-    </div>`).join('')):'<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
+    </div>${renderFlightEditRow(x,state.flights.indexOf(x))}`).join('')):'<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
   fillDataLists();
 }
 
@@ -1623,6 +1625,8 @@ function saveManualFlight(){
   if(!f.pilot){alert('Укажите пилота');return;}
   if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
   f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
+  f._savedTs=Date.now();
+  f._submittedBy=authUser.login||'';
   if(!navigator.onLine)state.offlineQueue.push(f);
   state.flights.unshift(f);
   saveLocal();
@@ -2689,7 +2693,50 @@ async function toggleUser(login,active){
 }
 
 
-// ============ AMMO CATALOG ============
+// ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА (10 минут для пилота) ============
+function canEditFlight(f){
+  // Администратор может всегда
+  if(state.role==='admin'||authUser.role==='admin')return true;
+  // Проверяем 10-минутное окно для всех ролей — по submittedBy или pilot
+  const savedTs=f._savedTs||0;
+  const withinWindow=(Date.now()-savedTs)<10*60*1000;
+  if(!withinWindow)return false;
+  // Кто подал — тот и может редактировать
+  const submitter=f._submittedBy||f.pilot||'';
+  return submitter===authUser.login||f.pilot===authUser.login;
+}
+
+function renderFlightEditRow(x, realIdx){
+  const editable=canEditFlight(x);
+  const minsLeft=x._savedTs?Math.max(0,Math.round((10*60*1000-(Date.now()-x._savedTs))/60000)):0;
+  if(!editable)return '';
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 10px;background:var(--green-dim);border:1px solid var(--green3);margin-top:4px;font-size:11px">
+    <span style="color:var(--green);font-weight:700">✏ Редактировать</span>
+    <span style="color:var(--muted)">(осталось ~${minsLeft} мин)</span>
+    <input style="width:80px" list="dl-ammo-catalog" value="${x.ammo||''}" placeholder="Боеприпас" id="edit-ammo-${realIdx}" autocomplete="off">
+    <input style="width:75px" list="dl-drones-smart" value="${x.drone||''}" placeholder="БПЛА" id="edit-drone-${realIdx}" autocomplete="off">
+    <select id="edit-result-${realIdx}"><option value="yes" ${x.result==='yes'?'selected':''}>✅ выполнена</option><option value="no" ${x.result==='no'?'selected':''}>❌ нет</option></select>
+    <select id="edit-returned-${realIdx}"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select>
+    <input style="width:130px" value="${x.note||''}" placeholder="Примечание" id="edit-note-${realIdx}">
+    <button class="btn btn-success btn-sm" onclick="saveFlightEdit(${realIdx})">Сохранить</button>
+  </div>`;
+}
+
+function saveFlightEdit(idx){
+  const f=state.flights[idx];
+  if(!f||!canEditFlight(f))return;
+  f.ammo=document.getElementById('edit-ammo-'+idx)?.value||f.ammo;
+  f.drone=document.getElementById('edit-drone-'+idx)?.value||f.drone;
+  f.result=document.getElementById('edit-result-'+idx)?.value||f.result;
+  f.returned=document.getElementById('edit-returned-'+idx)?.value||f.returned;
+  f.note=document.getElementById('edit-note-'+idx)?.value||f.note;
+  f._edited=true;
+  saveLocal();
+  appendToCloud('flights',f);
+  renderFlights();
+  renderDashboard();
+  logAction('flight','edit','Вылет #'+f.flightnum+' '+f.pilot+' отредактирован');
+}
 let ammoCatalog=[]; // [{name, category, aliases:[]}]
 
 function ammoLoad(){
@@ -2889,6 +2936,8 @@ function saveQuickFlight(){
   const now=new Date();
   const f={
     id:Date.now()+'_'+Math.random().toString(36).slice(2),
+    _savedTs:Date.now(),
+    _submittedBy:authUser.login||'',
     date:now.toISOString().slice(0,10),
     time:now.toTimeString().slice(0,5),
     pilot,
@@ -2942,6 +2991,26 @@ function actLogLoad(){
     const saved=localStorage.getItem('act_log');
     if(saved)actLog=JSON.parse(saved);
   }catch(e){}
+}
+
+async function loadActLogFromCloud(){
+  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const key=cfg.key||localStorage.getItem('cfg_key')||'';
+  const token=authToken||localStorage.getItem('auth_token')||'';
+  if(!url||!token)return;
+  try{
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
+    const d=await r.json();
+    if(d.error||!d.actlog)return;
+    const entries=await Promise.all(d.actlog.map(async row=>{
+      try{return JSON.parse(key?await aesDecrypt(row.data,key):row.data);}catch(e){return null;}
+    })).then(a=>a.filter(Boolean));
+    // Сливаем с локальным
+    entries.forEach(e=>{if(e&&e.id&&!actLog.some(x=>x.id===e.id))actLog.unshift(e);});
+    actLog.sort((a,b)=>b.ts-a.ts);
+    if(actLog.length>500)actLog=actLog.slice(0,500);
+    try{localStorage.setItem('act_log',JSON.stringify(actLog));}catch(e){}
+  }catch(e){console.warn('[ACTLOG]',e.message);}
 }
 
 function renderActLog(){
@@ -3199,7 +3268,7 @@ async function syncFromCloud(){
     const loaded=await loadFromCloud(url,token,key);
     state.flights=loaded.flights;state.stock=loaded.stock;
     state.squads=loaded.squads;state.transfers=loaded.transfers;state.offlineQueue=[];
-    saveLocal();localStorage.setItem('last_sync',Date.now().toString());
+    saveLocalOnly();localStorage.setItem('last_sync',Date.now().toString());
     renderDashboard();renderInventory();renderFlights();fillDataLists();rebuildRoleSelector();
     if(st){st.textContent='✓ Загружено — '+new Date().toLocaleTimeString('ru');st.style.color='var(--green2)';}
     if(ind){ind.className='sync-indicator saved';ind.textContent='● онлайн';}
@@ -3242,6 +3311,12 @@ function saveLocal(){
     clearTimeout(window._syncTimer);
     window._syncTimer=setTimeout(()=>syncToCloud(true),2000);
   }
+}
+
+// Тихое сохранение — только localStorage, без запуска синхронизации
+// Используется внутри pollCloud чтобы не создавать порочный круг
+function saveLocalOnly(){
+  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
 }
 
 
@@ -3342,7 +3417,7 @@ async function pollCloud(){
     }
 
     if(changed){
-      saveLocal();
+      saveLocalOnly(); // Не запускаем автосинхронизацию — только localStorage
       renderDashboard();
       renderFlights();
       renderInventory();
