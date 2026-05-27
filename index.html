@@ -744,6 +744,13 @@ function showPage(id,btn){
   if(id==='dashboard')renderDashboard();
   if(id==='inventory')renderInventory();
   if(id==='report'){fillReportFilters();buildReport();}
+  if(id==='settings'){
+    // Обновляем поле ключа в форме создания пользователя
+    const nuke=document.getElementById('nu-enckey');
+    if(nuke)nuke.value=cfg.key||localStorage.getItem('cfg_key')||'';
+    if(authToken)loadUsersList();
+    renderSettingsStatus();
+  }
   if(id==='admin'){
     // Инициализируем дефолтные даты фильтра
     const now=new Date();
@@ -2511,20 +2518,30 @@ let cfg={url:'',key:''};
 function cfgLoad(){
   try{
     cfg.url=localStorage.getItem('cfg_url')||'';
-    cfg.key=localStorage.getItem('cfg_key')||'';
+    // Не перезаписываем ключ если он уже установлен (например из URL параметра)
+    if(!cfg.key) cfg.key=localStorage.getItem('cfg_key')||'';
     const u=document.getElementById('cfg-url');
     const k=document.getElementById('cfg-key');
     if(u)u.value=cfg.url;
-    if(k)k.value=cfg.key;
+    if(k&&cfg.key)k.value=cfg.key;
     updateEncryptBadge();
   }catch(e){}
 }
 
 function cfgSaveSettings(){
   cfg.url=(document.getElementById('cfg-url').value||'').trim();
-  cfg.key=(document.getElementById('cfg-key').value||'').trim();
-  try{localStorage.setItem('cfg_url',cfg.url);localStorage.setItem('cfg_key',cfg.key);}catch(e){}
+  const keyField=(document.getElementById('cfg-key').value||'').trim();
+  // Не затираем ключ если поле пустое — берём текущий из памяти
+  if(keyField) cfg.key=keyField;
+  try{
+    localStorage.setItem('cfg_url',cfg.url);
+    if(cfg.key)localStorage.setItem('cfg_key',cfg.key);
+  }catch(e){}
+  // Синхронизируем поле с актуальным ключом
+  const kField=document.getElementById('cfg-key');
+  if(kField&&cfg.key)kField.value=cfg.key;
   updateEncryptBadge();
+  const nuke2=document.getElementById('nu-enckey');if(nuke2)nuke2.value=cfg.key||'';
   const st=document.getElementById('cfg-conn-status');
   st.textContent='✓ Настройки сохранены';st.style.color='var(--green2)';
   renderSettingsStatus();
