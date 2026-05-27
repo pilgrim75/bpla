@@ -2333,46 +2333,67 @@ async function authByToken(token){
 }
 
 async function initAuth(){
+  // Убеждаемся что cfg.url загружен
+  if(!cfg.url)cfg.url=localStorage.getItem('cfg_url')||'';
+  if(!cfg.key)cfg.key=localStorage.getItem('cfg_key')||'';
+
   // 1. Проверяем URL параметры
   const params=new URLSearchParams(window.location.search);
   const urlToken=params.get('t');
   const urlUser=params.get('u');
   const urlKey=params.get('k');
+  const urlServer=params.get('s');
 
   if(urlToken){
-    // Убираем параметры из адресной строки
     window.history.replaceState({},'',window.location.pathname);
+    // Сохраняем URL сервера если передан в ссылке
+    if(urlServer){
+      cfg.url=urlServer;
+      localStorage.setItem('cfg_url',urlServer);
+      const uf=document.getElementById('cfg-url');
+      if(uf)uf.value=urlServer;
+    }
     // Сохраняем ключ если передан
     if(urlKey){
       cfg.key=urlKey;
       localStorage.setItem('cfg_key',urlKey);
+      const kf=document.getElementById('cfg-key');
+      if(kf)kf.value=urlKey;
     }
+    // Сохраняем токен сразу
+    authToken=urlToken;
+    localStorage.setItem('auth_token',urlToken);
     const ok=await authByToken(urlToken);
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
-      // Всегда загружаем свежие данные из облака при входе по ссылке
-      await syncFromCloudSilent();
+      // Загружаем свежие данные из облака при входе по ссылке
+      if(cfg.url)await syncFromCloudSilent();
       return;
     } else {
       showLoginError('Ссылка недействительна или устарела');
+      authToken='';
+      localStorage.removeItem('auth_token');
     }
   }
 
   // 2. Проверяем сохранённый токен
   const saved=localStorage.getItem('auth_token');
   if(saved){
+    authToken=saved;
     const ok=await authByToken(saved);
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
       return;
+    } else {
+      authToken='';
+      localStorage.removeItem('auth_token');
     }
   }
 
   // 3. Если URL настроен — показываем экран входа
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
-  if(url){
+  if(cfg.url){
     showLoginScreen();
   }
   // Если URL не настроен — работаем локально без авторизации
@@ -2438,7 +2459,8 @@ async function createUser(){
 
     // Генерируем ссылку
     const base=window.location.origin+window.location.pathname;
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+token+(encKey?'&k='+encodeURIComponent(encKey):'');
+    const serverUrl=cfg.url||localStorage.getItem('cfg_url')||'';
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(serverUrl);
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     document.getElementById('nu-login').value='';
@@ -2494,7 +2516,8 @@ async function regenerateToken(login){
     if(!updUser){alert('Токен обновлён. Обновите список пользователей вручную.');return;}
     const base=window.location.origin+window.location.pathname;
     const encKey=cfg.key;
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+(encKey?'&k='+encodeURIComponent(encKey):'');
+    const serverUrl2=cfg.url||localStorage.getItem('cfg_url')||'';
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(serverUrl2);
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     showSyncToast('✓ Новая ссылка сгенерирована');
@@ -2780,10 +2803,12 @@ try{
   roleSel.value=optExists?savedRole:'cmd';
   switchRole(roleSel.value);
 }catch(e){applyTheme('terminal');applyFontSize('14');switchRole('cmd');}
+// ВАЖНО: cfgLoad до initAuth — нужен URL для синхронизации
 cfgLoad();
 renderSettingsStatus();
-initAuth();
 document.getElementById('nu-enckey').value=cfg.key||'';
+// initAuth вызываем последним — он использует cfg.url и cfg.key
+initAuth();
 </script>
 </body>
 </html>
