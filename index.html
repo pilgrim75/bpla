@@ -138,7 +138,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:4px;font-wei
 <body>
 <div class="app">
 <div class="topbar">
-  <div class="logo">АСУ БПЛА <span>// ЖУРНАЛ ВЫЛЕТОВ v0.8</span></div>
+  <div class="logo">АСУ БПЛА <span>// ЖУРНАЛ ВЫЛЕТОВ v0.9</span></div>
   <select id="roleSwitch" style="width:auto;padding:4px 10px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -341,9 +341,47 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:4px;font-wei
       <input style="width:130px" type="date" id="filterDate" onchange="renderFlights()">
       <select style="width:120px" id="filterPilot" onchange="renderFlights()">
         <option value="">Все пилоты</option>
-        <option>Рама</option><option>Толстый</option><option>Никита</option><option>Альберт</option><option>Поп</option>
       </select>
     </div>
+  </div>
+
+  <!-- БЫСТРАЯ ФОРМА ВЫЛЕТА (для пилотов) -->
+  <div class="card" id="quickFlightCard" style="margin-bottom:10px;border-color:var(--green3)">
+    <div class="card-title" style="color:var(--green)">⚡ Быстрый ввод вылета</div>
+    <datalist id="dl-ammo-catalog"></datalist>
+    <div style="display:grid;grid-template-columns:1fr 60px 1fr 1fr 1fr;gap:6px;align-items:end;margin-bottom:8px">
+      <div>
+        <label>Пилот</label>
+        <input id="qf-pilot" list="dl-pilots" placeholder="Имя" autocomplete="off">
+      </div>
+      <div>
+        <label>#</label>
+        <input id="qf-num" type="number" min="1" placeholder="1">
+      </div>
+      <div>
+        <label>Точка</label>
+        <input id="qf-target" list="dl-targets" placeholder="305 Вишня" autocomplete="off">
+      </div>
+      <div>
+        <label>Боеприпас</label>
+        <input id="qf-ammo" list="dl-ammo-catalog" placeholder="Пом2" autocomplete="off">
+      </div>
+      <div>
+        <label>БПЛА</label>
+        <input id="qf-drone" list="dl-drones-smart" placeholder="Гамаюн13" autocomplete="off">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="text-transform:none;font-size:12px;letter-spacing:0;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="qf-done" checked style="width:auto"> Задача выполнена
+      </label>
+      <label style="text-transform:none;font-size:12px;letter-spacing:0;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="qf-returned" checked style="width:auto"> Борт вернул
+      </label>
+      <input id="qf-note" placeholder="Примечание (необязательно)" style="flex:1;min-width:150px">
+      <button class="btn btn-success" onclick="saveQuickFlight()" style="white-space:nowrap">✓ Записать вылет</button>
+    </div>
+    <div id="qf-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
   </div>
 
   <div class="card" style="margin-bottom:12px">
@@ -466,10 +504,12 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:4px;font-wei
   <div class="notice" style="background:rgba(255,51,51,0.06);border-color:#7a0000;color:var(--red)">Внимание: все изменения и удаления необратимы. Данные сохраняются немедленно.</div>
 
   <!-- Вкладки внутри раздела -->
-  <div style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid var(--border2)">
+  <div style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid var(--border2);flex-wrap:wrap">
     <button class="adm-tab active" onclick="showAdminTab('flights',this)" style="background:var(--green-dim);border:1px solid var(--border2);border-bottom:none;color:var(--green);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase;margin-bottom:-1px">Журнал вылетов</button>
     <button class="adm-tab" onclick="showAdminTab('stock',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Склад</button>
     <button class="adm-tab" onclick="showAdminTab('squads',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Расчёты</button>
+    <button class="adm-tab" onclick="showAdminTab('ammo',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Боеприпасы</button>
+    <button class="adm-tab" onclick="showAdminTab('actlog',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Журнал действий</button>
     <button class="adm-tab" onclick="showAdminTab('data',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Данные</button>
   </div>
 
@@ -545,6 +585,56 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:4px;font-wei
         <button class="btn btn-danger" onclick="adminClearFlights()">Удалить все вылеты</button>
         <button class="btn btn-danger" onclick="adminResetAll()">Полный сброс данных</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ВКЛАДКА: БОЕПРИПАСЫ -->
+  <div class="adm-panel" id="adm-ammo" style="display:none">
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Справочник боеприпасов</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Эталонные названия. При нормализации все варианты написания из колонки «Алиасы» заменятся на эталонное название в базе вылетов.</div>
+      <div id="ammoList"></div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text2)">Добавить боеприпас</div>
+        <div class="form-row cols3">
+          <div><label>Название (эталон)</label><input id="ammo-new-name" placeholder="Пом2"></div>
+          <div><label>Категория</label>
+            <select id="ammo-new-cat">
+              <option value="минирование">Минирование</option>
+              <option value="доставка">Доставка</option>
+            </select>
+          </div>
+          <div><label>Алиасы (через запятую)</label><input id="ammo-new-aliases" placeholder="пом2,ПОМ2,пом 2"></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-success btn-sm" onclick="ammoAdd()">Добавить</button>
+          <button class="btn btn-primary btn-sm" onclick="ammoNormalize()">⚡ Нормализовать базу вылетов</button>
+          <button class="btn btn-primary btn-sm" onclick="ammoSaveToCloud()">☁ Сохранить в облако</button>
+        </div>
+        <div id="ammo-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ВКЛАДКА: ЖУРНАЛ ДЕЙСТВИЙ -->
+  <div class="adm-panel" id="adm-actlog" style="display:none">
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px">
+        <div><label>С даты</label><input type="date" id="actlog-from" style="width:140px" onchange="renderActLog()"></div>
+        <div><label>По дату</label><input type="date" id="actlog-to" style="width:140px" onchange="renderActLog()"></div>
+        <div><label>Пользователь</label><input id="actlog-user" placeholder="Все" style="width:120px" oninput="renderActLog()"></div>
+        <div><label>Тип</label>
+          <select id="actlog-type" onchange="renderActLog()" style="width:130px">
+            <option value="">Все</option>
+            <option value="flight">Вылеты</option>
+            <option value="stock">Склад</option>
+            <option value="transfer">Передача</option>
+            <option value="auth">Авторизация</option>
+          </select>
+        </div>
+        <button class="btn btn-sm" onclick="actlogClearFilters()" style="color:var(--muted)">Сбросить</button>
+      </div>
+      <div id="actLogList"></div>
     </div>
   </div>
 </div>
@@ -801,6 +891,8 @@ function showAdminTab(tab,btn){
   if(tab==='flights')renderAdminFlights();
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
+  if(tab==='ammo')renderAmmoList();
+  if(tab==='actlog')renderActLog();
 }
 
 function admClearFilters(){
@@ -1417,6 +1509,16 @@ function fillDataLists(){
     toSel.innerHTML='<option value="склад">На склад</option>'+pilotNames.map(p=>`<option value="${p}">Пилот ${p}</option>`).join('');
   }
   rebuildRoleSelector();
+  // Обновляем фильтр пилотов в журнале
+  const fp=document.getElementById('filterPilot');
+  if(fp){
+    const cur=fp.value;
+    const pilots=[...new Set(state.flights.map(x=>x.pilot).filter(Boolean))].sort();
+    fp.innerHTML='<option value="">Все пилоты</option>'+pilots.map(p=>`<option value="${p}">${p}</option>`).join('');
+    if(cur)[...fp.options].forEach(o=>{if(o.value===cur)o.selected=true;});
+  }
+  // Обновляем datalist боеприпасов
+  ammoFillDatalist();
 }
 
 // ============ SQUAD EDITOR ============
@@ -1529,6 +1631,7 @@ function saveManualFlight(){
   renderInventory();
   renderDashboard();
   appendToCloud('flights',f);
+  logAction('flight','add','Вылет '+f.pilot+' #'+f.flightnum+' '+f.drone+(f.returned==='no'?' [потеря]':''));
   ['mf-pilot','mf-target','mf-ammo','mf-drone','mf-note','mf-flightnum'].forEach(id=>document.getElementById(id).value='');
   fillDataLists();
 }
@@ -2373,6 +2476,7 @@ async function initAuth(){
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
+      logAction('auth','login','Вход по ссылке: '+urlUser);
       // Загружаем свежие данные из облака при входе по ссылке
       if(cfg.url)await syncFromCloudSilent();
       return;
@@ -2413,6 +2517,7 @@ function showLoginError(msg){
 function applyRoleFromAuth(){
   const lb=document.getElementById('logoutBtn');
   if(lb)lb.style.display='';
+  setTimeout(applyRoleRestrictions,100);
 
   if(!authUser.role)return;
   const roleMap={admin:'admin',cmd:'cmd',tech:'tech',pilot:'pilot1'};
@@ -2539,6 +2644,260 @@ async function toggleUser(login,active){
     await new Promise(r=>setTimeout(r,1000));
     loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
+}
+
+
+// ============ AMMO CATALOG ============
+let ammoCatalog=[]; // [{name, category, aliases:[]}]
+
+function ammoLoad(){
+  try{
+    const saved=localStorage.getItem('ammo_catalog');
+    if(saved)ammoCatalog=JSON.parse(saved);
+  }catch(e){}
+  ammoFillDatalist();
+}
+
+function ammoSave(){
+  try{localStorage.setItem('ammo_catalog',JSON.stringify(ammoCatalog));}catch(e){}
+  ammoFillDatalist();
+}
+
+function ammoFillDatalist(){
+  const dl=document.getElementById('dl-ammo-catalog');
+  if(!dl)return;
+  dl.innerHTML=ammoCatalog.map(a=>`<option value="${a.name}">`).join('');
+}
+
+// Нормализация названия боеприпаса по справочнику
+function ammoNormalizeName(raw){
+  if(!raw||!ammoCatalog.length)return raw;
+  const r=raw.toLowerCase().trim();
+  for(const item of ammoCatalog){
+    if(item.name.toLowerCase()===r)return item.name;
+    if((item.aliases||[]).some(a=>a.toLowerCase().trim()===r))return item.name;
+  }
+  return raw; // не найдено — оставляем как есть
+}
+
+function renderAmmoList(){
+  const el=document.getElementById('ammoList');
+  if(!el)return;
+  if(!ammoCatalog.length){el.innerHTML='<div style="color:var(--muted);font-size:12px">Справочник пуст</div>';return;}
+  el.innerHTML=`<table style="width:100%;font-size:12px">
+    <thead><tr><th>Название (эталон)</th><th>Категория</th><th>Алиасы</th><th>Действие</th></tr></thead>
+    <tbody>${ammoCatalog.map((a,i)=>`<tr>
+      <td style="padding:5px 8px"><input style="width:100%" value="${a.name}" onchange="ammoCatalog[${i}].name=this.value;ammoSave();"></td>
+      <td style="padding:5px 8px">
+        <select onchange="ammoCatalog[${i}].category=this.value;ammoSave();">
+          <option value="минирование" ${a.category==='минирование'?'selected':''}>Минирование</option>
+          <option value="доставка" ${a.category==='доставка'?'selected':''}>Доставка</option>
+        </select>
+      </td>
+      <td style="padding:5px 8px"><input style="width:100%" value="${(a.aliases||[]).join(', ')}" onchange="ammoCatalog[${i}].aliases=this.value.split(',').map(s=>s.trim()).filter(Boolean);ammoSave();"></td>
+      <td style="padding:5px 8px"><button class="btn btn-danger btn-sm" onclick="ammoDelete(${i})">✕</button></td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function ammoAdd(){
+  const name=document.getElementById('ammo-new-name').value.trim();
+  const cat=document.getElementById('ammo-new-cat').value;
+  const aliases=document.getElementById('ammo-new-aliases').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!name){alert('Введите название');return;}
+  if(ammoCatalog.some(a=>a.name.toLowerCase()===name.toLowerCase())){alert('Уже есть');return;}
+  ammoCatalog.push({name,category:cat,aliases});
+  ammoSave();
+  renderAmmoList();
+  document.getElementById('ammo-new-name').value='';
+  document.getElementById('ammo-new-aliases').value='';
+}
+
+function ammoDelete(i){
+  if(!confirm('Удалить "'+ammoCatalog[i].name+'"?'))return;
+  ammoCatalog.splice(i,1);
+  ammoSave();
+  renderAmmoList();
+}
+
+function ammoNormalize(){
+  let count=0;
+  state.flights.forEach(f=>{
+    if(!f.ammo)return;
+    const norm=ammoNormalizeName(f.ammo);
+    if(norm!==f.ammo){f.ammo=norm;count++;}
+  });
+  saveLocal();
+  renderFlights();
+  const st=document.getElementById('ammo-status');
+  st.textContent=`✓ Исправлено ${count} записей`;
+  st.style.color='var(--green2)';
+  setTimeout(()=>{if(st)st.textContent='';},3000);
+}
+
+async function ammoSaveToCloud(){
+  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const token=authToken||localStorage.getItem('auth_token')||'';
+  if(!url||!token){alert('Нет подключения к облаку');return;}
+  const st=document.getElementById('ammo-status');
+  st.textContent='Сохраняю...';
+  try{
+    const body=JSON.stringify({action:'update_ammo',admin_token:token,items:ammoCatalog});
+    try{
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+    }catch(e){
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
+    }
+    st.textContent='✓ Сохранено в облако';st.style.color='var(--green2)';
+  }catch(e){st.textContent='Ошибка: '+e.message;st.style.color='var(--red)';}
+}
+
+// ============ QUICK FLIGHT FORM ============
+function initQuickForm(){
+  // Заполняем пилота из роли если пилот
+  const qp=document.getElementById('qf-pilot');
+  if(!qp)return;
+  if(authUser.role==='pilot'||authUser.role==='pilot1'||authUser.role==='pilot2'||authUser.role==='pilot3'){
+    qp.value=authUser.login;
+    qp.readOnly=true;
+  }
+  // Номер вылета — следующий по порядку для пилота
+  autoFillFlightNum();
+}
+
+function autoFillFlightNum(){
+  const pilot=document.getElementById('qf-pilot')?.value;
+  if(!pilot)return;
+  const today=new Date().toISOString().slice(0,10);
+  const todayFlights=state.flights.filter(f=>f.pilot===pilot&&f.date===today);
+  const maxNum=todayFlights.reduce((m,f)=>Math.max(m,f.flightnum||0),0);
+  const nf=document.getElementById('qf-num');
+  if(nf)nf.value=maxNum+1;
+}
+
+function saveQuickFlight(){
+  const pilot=(document.getElementById('qf-pilot').value||'').trim();
+  const num=document.getElementById('qf-num').value;
+  const target=(document.getElementById('qf-target').value||'').trim();
+  const ammoRaw=(document.getElementById('qf-ammo').value||'').trim();
+  const drone=(document.getElementById('qf-drone').value||'').trim();
+  const done=document.getElementById('qf-done').checked;
+  const returned=document.getElementById('qf-returned').checked;
+  const note=(document.getElementById('qf-note').value||'').trim();
+  if(!pilot){alert('Укажите пилота');return;}
+  if(!drone){alert('Укажите БПЛА');return;}
+  const ammo=ammoNormalizeName(ammoRaw)||ammoRaw;
+  const now=new Date();
+  const f={
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
+    date:now.toISOString().slice(0,10),
+    time:now.toTimeString().slice(0,5),
+    pilot,
+    flightnum:num?parseInt(num):null,
+    target,ammo,drone,
+    result:done?'yes':'no',
+    returned:returned?'yes':'no',
+    note
+  };
+  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
+  state.flights.unshift(f);
+  saveLocal();
+  appendToCloud('flights',f);
+  renderFlights();renderDashboard();
+  // Сбрасываем форму частично
+  document.getElementById('qf-target').value='';
+  document.getElementById('qf-ammo').value='';
+  document.getElementById('qf-note').value='';
+  document.getElementById('qf-done').checked=true;
+  document.getElementById('qf-returned').checked=true;
+  autoFillFlightNum();
+  const st=document.getElementById('qf-status');
+  st.textContent='✓ Вылет #'+f.flightnum+' записан — '+f.time;
+  st.style.color='var(--green2)';
+  logAction('flight','add','Вылет #'+f.flightnum+' '+pilot+' '+drone+(f.returned==='no'?' [потеря]':''));
+  setTimeout(()=>{if(st)st.textContent='';},3000);
+}
+
+// ============ ACTIVITY LOG ============
+let actLog=[];
+
+function logAction(type, action, details){
+  const entry={
+    ts:Date.now(),
+    date:new Date().toISOString().slice(0,10),
+    time:new Date().toTimeString().slice(0,5),
+    user:authUser.login||'unknown',
+    role:authUser.role||'',
+    type,action,details
+  };
+  actLog.unshift(entry);
+  if(actLog.length>500)actLog=actLog.slice(0,500);
+  try{localStorage.setItem('act_log',JSON.stringify(actLog));}catch(e){}
+}
+
+function actLogLoad(){
+  try{
+    const saved=localStorage.getItem('act_log');
+    if(saved)actLog=JSON.parse(saved);
+  }catch(e){}
+}
+
+function renderActLog(){
+  const el=document.getElementById('actLogList');
+  if(!el)return;
+  const from=document.getElementById('actlog-from')?.value||'';
+  const to=document.getElementById('actlog-to')?.value||'';
+  const user=(document.getElementById('actlog-user')?.value||'').toLowerCase();
+  const type=document.getElementById('actlog-type')?.value||'';
+  let entries=[...actLog];
+  if(from)entries=entries.filter(e=>e.date>=from);
+  if(to)entries=entries.filter(e=>e.date<=to);
+  if(user)entries=entries.filter(e=>(e.user||'').toLowerCase().includes(user));
+  if(type)entries=entries.filter(e=>e.type===type);
+  if(!entries.length){el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:12px">Нет записей</div>';return;}
+  el.innerHTML=`<table style="width:100%;font-size:12px">
+    <thead><tr><th>Дата/Время</th><th>Пользователь</th><th>Роль</th><th>Тип</th><th>Действие</th><th>Детали</th></tr></thead>
+    <tbody>${entries.map(e=>`<tr>
+      <td style="padding:5px 8px;white-space:nowrap">${e.date} ${e.time}</td>
+      <td style="padding:5px 8px;font-weight:700;color:var(--green)">${e.user}</td>
+      <td style="padding:5px 8px;color:var(--muted)">${e.role}</td>
+      <td style="padding:5px 8px"><span class="tag tag-gray">${e.type}</span></td>
+      <td style="padding:5px 8px">${e.action}</td>
+      <td style="padding:5px 8px;color:var(--text2)">${e.details||''}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function actlogClearFilters(){
+  ['actlog-from','actlog-to','actlog-user'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  const ts=document.getElementById('actlog-type');if(ts)ts.value='';
+  renderActLog();
+}
+
+// ============ ПРАВА ДОСТУПА ============
+function applyRoleRestrictions(){
+  const role=state.role||authUser.role||'';
+  const isPilot=role.startsWith('pilot')||role==='pilot';
+  const isTech=role==='tech';
+  const isCmd=role==='cmd';
+  const isAdmin=role==='admin';
+
+  // Быстрая форма — только для пилотов и выше
+  const qfc=document.getElementById('quickFlightCard');
+
+  // Склад — кнопки добавления и передачи только для техника+
+  const addBtn=document.getElementById('addDroneBtn');
+  const trBtn=document.getElementById('transferBtnArea');
+  if(addBtn)addBtn.style.display=(isTech||isAdmin)?'':'none';
+  if(trBtn)trBtn.style.display=(isTech||isAdmin)?'':'none';
+
+  // Форма ручного ввода вылета — скрываем для не-пилотов (они используют быструю)
+  // Все роли могут добавлять вылеты — только синхронизация ограничена
+
+  // Заполняем пилота в быстрой форме
+  if(isPilot)initQuickForm();
 }
 
 // ============ CONFIG & SYNC ENGINE ============
@@ -2945,6 +3304,8 @@ try{
 // ВАЖНО: cfgLoad до initAuth — нужен URL для синхронизации
 cfgLoad();
 renderSettingsStatus();
+ammoLoad();
+actLogLoad();
 document.getElementById('nu-enckey').value=cfg.key||'';
 // initAuth вызываем последним — он использует cfg.url и cfg.key
 initAuth().then(()=>startPolling());
