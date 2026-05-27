@@ -828,6 +828,7 @@ function renderAdminFlights(){
         <th style="width:90px">Пилот</th>
         <th style="width:90px">Точка</th>
         <th style="width:90px">БПЛА</th>
+        <th style="width:45px">#</th>
         <th style="width:55px">Задача</th>
         <th style="width:75px">Борт</th>
         <th>Примечание</th>
@@ -838,6 +839,7 @@ function renderAdminFlights(){
         <td><input style="width:85px" value="${x.pilot}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
         <td><input style="width:85px" value="${x.target}" onchange="adminEditFlight(${i},'target',this.value)"></td>
         <td><input style="width:85px" value="${x.drone}" onchange="adminEditFlight(${i},'drone',this.value)"></td>
+        <td><input style="width:42px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
         <td><select onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
         <td><input style="width:100%" value="${x.note||''}" onchange="adminEditFlight(${i},'note',this.value)"></td>
@@ -2820,8 +2822,16 @@ async function pollCloud(){
         try{
           const json=key?await aesDecrypt(row.data,key):row.data;
           const obj=JSON.parse(json);
-          const exists=localArr.some(x=>(x[idField]||x.id)===obj[idField||'id']);
-          if(!exists){localArr.unshift(obj);added=true;}
+          const objId=obj[idField]||obj.id;
+          const exists=localArr.some(x=>(x[idField]||x.id)===objId);
+          if(!exists){
+            localArr.unshift(obj);
+            added=true;
+            // Если это вылет с потерей борта — списываем дрон локально
+            if(localArr===state.flights&&obj.returned==='no'&&obj.drone){
+              writeDroneLoss(obj.pilot,obj.drone,obj.date,obj.time);
+            }
+          }
         }catch(e){}
       }
       return added;
