@@ -2612,20 +2612,15 @@ async function getKey(password){
   return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('asu-bpla-v1'),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 async function aesEncrypt(text,password){
-  console.log('[ENC] key length:', password.length, 'key start:', password.slice(0,6));
   const key=await getKey(password);
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const enc=new TextEncoder();
   const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(text));
   const buf=new Uint8Array(iv.length+cipher.byteLength);
   buf.set(iv,0);buf.set(new Uint8Array(cipher),iv.length);
-  const result=btoa(String.fromCharCode(...buf));
-  console.log('[ENC] blob length:', result.length);
-  return result;
+  return btoa(String.fromCharCode(...buf));
 }
 async function aesDecrypt(b64,password){
-  console.log('[DEC] key length:', password.length, 'key start:', password.slice(0,6));
-  console.log('[DEC] blob length:', b64.length, 'blob start:', b64.slice(0,20), 'blob end:', b64.slice(-20));
   const key=await getKey(password);
   const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
   const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:buf.slice(0,12)},key,buf.slice(12));
@@ -2800,7 +2795,7 @@ async function appendToCloud(sheet, obj){
 }
 
 // ============ АВТОПОЛЛИНГ — читаем новые записи других пользователей ============
-let _lastPollTs=0;
+let _lastPollTs=Date.now(); // Начинаем с текущего момента — не грузим всю историю
 async function pollCloud(){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   const key=cfg.key||localStorage.getItem('cfg_key')||'';
@@ -2808,14 +2803,16 @@ async function pollCloud(){
   if(!url||!token)return;
   const ind=document.getElementById('syncIndicator');
   try{
-    const since=_lastPollTs||localStorage.getItem('last_sync')||0;
+    // Берём время последнего поллинга — только новее него
+    const since=_lastPollTs;
     const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since);
     const d=await r.json();
     if(d.error){console.warn('[POLL]',d.error);return;}
     const newFlights=(d.flights||[]).length;
     const newTransfers=(d.transfers||[]).length;
-    console.log('[POLL]',new Date().toLocaleTimeString('ru'),'новых:',newFlights,'вылетов,',newTransfers,'операций');
-    _lastPollTs=Date.now();
+    if(newFlights||newTransfers)
+      console.log('[POLL]',new Date().toLocaleTimeString('ru'),'новых:',newFlights,'вылетов,',newTransfers,'операций');
+    _lastPollTs=Date.now(); // Обновляем ПОСЛЕ успешного запроса
 
     async function mergeRows(remoteRows, localArr){
       if(!remoteRows||!remoteRows.length)return false;
