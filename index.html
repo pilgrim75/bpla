@@ -1518,6 +1518,7 @@ function saveManualFlight(){
   };
   if(!f.pilot){alert('Укажите пилота');return;}
   if(f.returned==='no'&&f.drone)writeDroneLoss(f.pilot,f.drone,f.date,f.time);
+  f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
   if(!navigator.onLine)state.offlineQueue.push(f);
   state.flights.unshift(f);
   saveLocal();
@@ -1525,6 +1526,7 @@ function saveManualFlight(){
   renderFlights();
   renderInventory();
   renderDashboard();
+  appendToCloud('flights',f);
   ['mf-pilot','mf-target','mf-ammo','mf-drone','mf-note','mf-flightnum'].forEach(id=>document.getElementById(id).value='');
   fillDataLists();
 }
@@ -1670,12 +1672,14 @@ function confirmParsed(i){
     note:document.getElementById(`p${i}-note`).value,
   };
   if(f.returned==='no'&&f.drone)writeDroneLoss(f.pilot,f.drone,f.date,f.time);
+  f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
   if(!navigator.onLine)state.offlineQueue.push(f);
   state.flights.unshift(f);
   saveLocal();
   checkNet();
   renderDashboard();
   renderInventory();
+  appendToCloud('flights',f);
   const card=document.getElementById(`pcard-${i}`);
   // Скрываем исходную строку сразу
   const src=document.getElementById(`psrc-${i}`);
@@ -2772,6 +2776,79 @@ function saveLocal(){
   }
 }
 
+
+// ============ APPEND TO CLOUD (одна запись) ============
+async function appendToCloud(sheet, obj){
+  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const key=cfg.key||localStorage.getItem('cfg_key')||'';
+  const token=authToken||localStorage.getItem('auth_token')||'';
+  if(!url||!token)return;
+  try{
+    const json=JSON.stringify(obj);
+    const data=key?await aesEncrypt(json,key):json;
+    const body=JSON.stringify({action:'append_one',token,sheet,row:{id:obj.id||Date.now(),data}});
+    // Пробуем cors, потом no-cors
+    try{
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+      await r.json();
+    }catch(e){
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
+    }
+  }catch(e){console.warn('[APPEND] error:',e.message);}
+}
+
+// ============ АВТОПОЛЛИНГ — читаем новые записи других пользователей ============
+let _lastPollTs=0;
+async function pollCloud(){
+  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const key=cfg.key||localStorage.getItem('cfg_key')||'';
+  const token=authToken||localStorage.getItem('auth_token')||'';
+  if(!url||!token)return;
+  try{
+    const since=_lastPollTs||localStorage.getItem('last_sync')||0;
+    const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since);
+    const d=await r.json();
+    if(d.error)return;
+    _lastPollTs=Date.now();
+    let changed=false;
+
+    // Расшифровываем и добавляем только новые записи (которых нет локально)
+    async function mergeRows(remoteRows, localArr, idField='id'){
+      if(!remoteRows||!remoteRows.length)return false;
+      let added=false;
+      for(const row of remoteRows){
+        try{
+          const json=key?await aesDecrypt(row.data,key):row.data;
+          const obj=JSON.parse(json);
+          const exists=localArr.some(x=>(x[idField]||x.id)===obj[idField||'id']);
+          if(!exists){localArr.unshift(obj);added=true;}
+        }catch(e){}
+      }
+      return added;
+    }
+
+    if(await mergeRows(d.flights, state.flights))changed=true;
+    if(await mergeRows(d.transfers, state.transfers||[]))changed=true;
+
+    if(changed){
+      saveLocal();
+      renderDashboard();
+      renderFlights();
+      showSyncToast('↓ Получены новые данные');
+    }
+  }catch(e){}
+}
+
+// Запускаем автополлинг каждые 30 сек
+function startPolling(){
+  if(window._pollInterval)clearInterval(window._pollInterval);
+  window._pollInterval=setInterval(()=>{
+    const url=cfg.url||localStorage.getItem('cfg_url')||'';
+    const token=authToken||localStorage.getItem('auth_token')||'';
+    if(url&&token&&navigator.onLine)pollCloud();
+  },30000);
+}
+
 rebuildRoleSelector();
 renderDashboard();
 renderInventory();
@@ -2808,7 +2885,7 @@ cfgLoad();
 renderSettingsStatus();
 document.getElementById('nu-enckey').value=cfg.key||'';
 // initAuth вызываем последним — он использует cfg.url и cfg.key
-initAuth();
+initAuth().then(()=>startPolling());
 </script>
 </body>
 </html>
