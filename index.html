@@ -2609,45 +2609,31 @@ async function syncToCloud(silent=false){
   if(!url){if(!silent)alert('Укажите URL в настройках');return;}
   const st=document.getElementById('cfg-sync-status');
   const ind=document.getElementById('syncIndicator');
-  if(st)st.textContent='Отправляю...';
+  if(st)st.textContent='Шифрую и отправляю...';
   if(ind){ind.className='sync-indicator syncing';ind.textContent='↑ синхр...';}
   try{
     const token=authToken||localStorage.getItem('auth_token')||'';
-    let dataStr;
-    if(key){
-      // Шифруем
-      const blob=await aesEncrypt(JSON.stringify({flights:state.flights,stock:state.stock,squads:state.squads,transfers:state.transfers||[]}),key);
-      dataStr=JSON.stringify({encrypted:true,blob});
-    } else {
-      const ts=Date.now();
-      dataStr=JSON.stringify({encrypted:false,
-        flights:state.flights.map((f,i)=>({...f,id:f.id||(ts+i)})),
-        stock:state.stock.map((d,i)=>({...d,id:d.id||(ts+i)})),
-        squads:state.squads.map((sq,i)=>({...sq,id:sq.id||(ts+i)})),
-        transfers:(state.transfers||[]).map((t,i)=>({...t,id:t.id||(ts+i)}))
-      });
+    const ts=Date.now();
+    async function encRow(obj){
+      const json=JSON.stringify(obj);
+      if(!key)return{id:obj.id||ts,data:json};
+      return{id:obj.id||ts,data:await aesEncrypt(json,key)};
     }
-    // Разбиваем на чанки по 4000 символов (URL лимит)
-    const chunkSize=4000;
-    const totalChunks=Math.ceil(dataStr.length/chunkSize);
-    const sessionId=Date.now().toString(36);
-    console.log('[SYNC] size:',dataStr.length,'chunks:',totalChunks);
-    for(let i=0;i<totalChunks;i++){
-      const chunk=dataStr.slice(i*chunkSize,(i+1)*chunkSize);
-      const r=await fetch(url+'?action=write_chunk'
-        +'&token='+encodeURIComponent(token)
-        +'&sid='+sessionId
-        +'&idx='+i
-        +'&total='+totalChunks
-        +'&data='+encodeURIComponent(chunk));
+    const flights=await Promise.all(state.flights.map((f,i)=>encRow({...f,id:f.id||(ts+i)})));
+    const stock=await Promise.all(state.stock.map((d,i)=>encRow({...d,id:d.id||(ts+i)})));
+    const squads=await Promise.all(state.squads.map((sq,i)=>encRow({...sq,id:sq.id||(ts+i)})));
+    const transfers=await Promise.all((state.transfers||[]).map((t,i)=>encRow({...t,id:t.id||(ts+i)})));
+    const body=JSON.stringify({action:'write',token,data:{flights,stock,squads,transfers}});
+    console.log('[SYNC] body size:',body.length);
+    try{
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
-      if(st)st.textContent='Отправляю... '+Math.round((i+1)/totalChunks*100)+'%';
+    }catch(e1){
+      if(e1.message.includes('fetch'))
+        await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
+      else throw e1;
     }
-    // Финализируем — сервер собирает чанки
-    const rf=await fetch(url+'?action=finalize&token='+encodeURIComponent(token)+'&sid='+sessionId);
-    const df=await rf.json();
-    if(df.error)throw new Error(df.error);
     localStorage.setItem('last_sync',Date.now().toString());
     if(st){st.textContent='✓ Выгружено — '+new Date().toLocaleTimeString('ru');st.style.color='var(--green2)';}
     if(ind){ind.className='sync-indicator saved';ind.textContent='● онлайн';}
@@ -2660,9 +2646,30 @@ async function syncToCloud(silent=false){
   }
 }
 
+async function decryptRows(rows, key){
+  if(!rows||!rows.length)return[];
+  return Promise.all(rows.map(async r=>{
+    try{
+      const json=key?await aesDecrypt(r.data,key):r.data;
+      return JSON.parse(json);
+    }catch(e){console.warn('[DEC] row error:',e.message,r.id);return null;}
+  })).then(arr=>arr.filter(Boolean));
+}
+
+async function loadFromCloud(url, token, key){
+  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
+  const d=await r.json();
+  if(d.error)throw new Error(d.error);
+  return {
+    flights: await decryptRows(d.flights,key),
+    stock:   await decryptRows(d.stock,key),
+    squads:  (await decryptRows(d.squads,key)).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]})),
+    transfers: await decryptRows(d.transfers,key),
+    users: d.users||[]
+  };
+}
 
 async function syncFromCloudSilent(){
-  // Загрузка из облака без подтверждения — используется при автовходе по ссылке
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   const key=cfg.key||localStorage.getItem('cfg_key')||'';
   if(!url)return;
@@ -2670,31 +2677,9 @@ async function syncFromCloudSilent(){
   if(ind){ind.className='sync-indicator syncing';ind.textContent='↓ загрузка...';}
   try{
     const token=authToken||localStorage.getItem('auth_token')||'';
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
-    const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    let loaded;
-    const encBlob2=d.meta&&d.meta.find&&d.meta.find(m=>m.key==='encrypted_blob');
-    if(key&&encBlob2&&encBlob2.value){
-      try{loaded=JSON.parse(await aesDecrypt(encBlob2.value,key));}
-      catch(e){if(ind){ind.className='sync-indicator';ind.textContent='⚠ неверный ключ';}return;}
-    } else if(key&&d.flights&&d.flights.length===1&&d.flights[0].id==='encrypted'){
-      try{loaded=JSON.parse(await aesDecrypt(d.flights[0].note,key));}
-      catch(e){if(ind){ind.className='sync-indicator';ind.textContent='⚠ неверный ключ';}return;}
-    } else if(d.flights){
-      loaded={
-        flights:d.flights||[],
-        stock:d.stock||[],
-        squads:(d.squads||[]).map(sq=>({...sq,drones:typeof sq.drones_json==='string'?JSON.parse(sq.drones_json||'[]'):sq.drones||[]})),
-        transfers:(d.transfers||[]).map(t=>{try{return typeof t.data_json==='string'?JSON.parse(t.data_json):t;}catch(e){return t;}})
-      };
-    } else return;
-    // Заменяем данные без вопроса
-    state.flights=loaded.flights||[];
-    state.stock=loaded.stock||[];
-    state.squads=loaded.squads||[];
-    state.transfers=loaded.transfers||[];
-    state.offlineQueue=[];
+    const loaded=await loadFromCloud(url,token,key);
+    state.flights=loaded.flights;state.stock=loaded.stock;
+    state.squads=loaded.squads;state.transfers=loaded.transfers;state.offlineQueue=[];
     try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
     localStorage.setItem('last_sync',Date.now().toString());
     renderDashboard();renderInventory();renderFlights();fillDataLists();rebuildRoleSelector();
@@ -2702,9 +2687,9 @@ async function syncFromCloudSilent(){
     renderSettingsStatus();
   }catch(e){
     if(ind){ind.className='sync-indicator';ind.textContent='⚠ ошибка';}
+    console.error('[SYNC] silent error:',e.message);
   }
 }
-
 async function syncFromCloud(){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   const key=cfg.key||localStorage.getItem('cfg_key')||'';
@@ -2714,31 +2699,11 @@ async function syncFromCloud(){
   if(st)st.textContent='Загружаю...';
   if(ind){ind.className='sync-indicator syncing';ind.textContent='↓ загрузка...';}
   try{
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken||localStorage.getItem('auth_token')||''));
-    const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    let loaded;
-    // Проверяем зашифрованный blob в meta
-    const encBlob=d.meta&&d.meta.find&&d.meta.find(m=>m.key==='encrypted_blob');
-    if(key&&encBlob&&encBlob.value){
-      console.log('[DEC] blob length:',encBlob.value.length,'blob start:',encBlob.value.slice(0,20),'blob end:',encBlob.value.slice(-20));
-      try{loaded=JSON.parse(await aesDecrypt(encBlob.value,key));}
-      catch(e){alert('Не удалось расшифровать. Проверьте ключ шифрования.');if(ind){ind.className='sync-indicator';ind.textContent='⚠ неверный ключ';}return;}
-    } else if(key&&d.flights&&d.flights.length===1&&d.flights[0].id==='encrypted'){
-      // Старый формат (обратная совместимость)
-      try{loaded=JSON.parse(await aesDecrypt(d.flights[0].note,key));}
-      catch(e){alert('Не удалось расшифровать. Проверьте ключ шифрования.');if(ind){ind.className='sync-indicator';ind.textContent='⚠ неверный ключ';}return;}
-    } else if(d.flights){
-      loaded={
-        flights:d.flights||[],
-        stock:d.stock||[],
-        squads:(d.squads||[]).map(sq=>({...sq,drones:typeof sq.drones_json==='string'?JSON.parse(sq.drones_json||'[]'):sq.drones||[]})),
-        transfers:(d.transfers||[]).map(t=>{try{return typeof t.data_json==='string'?JSON.parse(t.data_json):t;}catch(e){return t;}})
-      };
-    } else throw new Error('Нет данных в облаке');
+    const token=authToken||localStorage.getItem('auth_token')||'';
     if(!confirm('Загрузить данные из облака? Локальные данные будут заменены.'))return;
-    state.flights=loaded.flights||[];state.stock=loaded.stock||[];
-    state.squads=loaded.squads||[];state.transfers=loaded.transfers||[];state.offlineQueue=[];
+    const loaded=await loadFromCloud(url,token,key);
+    state.flights=loaded.flights;state.stock=loaded.stock;
+    state.squads=loaded.squads;state.transfers=loaded.transfers;state.offlineQueue=[];
     saveLocal();localStorage.setItem('last_sync',Date.now().toString());
     renderDashboard();renderInventory();renderFlights();fillDataLists();rebuildRoleSelector();
     if(st){st.textContent='✓ Загружено — '+new Date().toLocaleTimeString('ru');st.style.color='var(--green2)';}
@@ -2750,7 +2715,6 @@ async function syncFromCloud(){
     alert('Ошибка загрузки: '+e.message);
   }
 }
-
 async function cfgReencrypt(){
   const nk=(document.getElementById('cfg-newkey').value||'').trim();
   const nk2=(document.getElementById('cfg-newkey2').value||'').trim();
