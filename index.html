@@ -1851,16 +1851,29 @@ function buildReport(){
     // Перемещения за последние 24 часа
     const now=Date.now();
     const day=24*60*60*1000;
+    const todayStr=new Date().toISOString().slice(0,10);
     const recentTransfers=(state.transfers||[]).filter(op=>{
       const dt=new Date(op.date+'T'+(op.time||'00:00'));
       return (now-dt.getTime())<=day;
+    }).sort((a,b)=>{
+      const ta=a.date+(a.time||'00:00');
+      const tb=b.date+(b.time||'00:00');
+      return tb.localeCompare(ta);
     });
+    // Префикс даты: если запись вчерашняя — пишем "Вчера HH:MM", если сегодняшняя — просто HH:MM
+    const datePrefix=op=>{
+      if(!op.date)return '';
+      if(op.date<todayStr)return 'Вчера '+(op.time||'');
+      return op.time||'';
+    };
     // Формируем строки перемещений — потери не дедуплицируем, остальные по уникальному тексту
     const moveFmt=op=>{
-      if(op.type==='loss') return '✈ Потеря: '+op.drone+' — пилот '+op.pilot+(op.time?' ('+op.time+')':'');
-      if(op.type==='exchange') return '⇄ Обмен с '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт., получили '+op.get+' — '+op.getQty+' шт.'+(op.note?' ('+op.note+')':'');
-      if(op.type==='arrival') return '📦 Поступление: '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
-      return '→ '+op.from+' → '+op.to+': '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      const prefix=datePrefix(op);
+      const pfx=prefix?'('+prefix+') ':'';
+      if(op.type==='loss') return pfx+'✈ Потеря: '+op.drone+' — пилот '+op.pilot;
+      if(op.type==='exchange') return pfx+'⇄ Обмен с '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт., получили '+op.get+' — '+op.getQty+' шт.'+(op.note?' ('+op.note+')':'');
+      if(op.type==='arrival') return pfx+'📦 Поступление: '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      return pfx+'→ '+op.from+' → '+op.to+': '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
     };
     // Дедупликация только для не-потерь (передачи могут задваиваться технически)
     const seenNonLoss=new Set();
@@ -2683,22 +2696,78 @@ function ammoNormalizeName(raw){
 function renderAmmoList(){
   const el=document.getElementById('ammoList');
   if(!el)return;
-  if(!ammoCatalog.length){el.innerHTML='<div style="color:var(--muted);font-size:12px">Справочник пуст</div>';return;}
-  el.innerHTML=`<table style="width:100%;font-size:12px">
+
+  // Собираем все уникальные значения боеприпасов из базы вылетов
+  const rawAmmo=[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();
+  // Определяем какие из них уже покрыты справочником (эталон или алиас)
+  const covered=new Set();
+  ammoCatalog.forEach(a=>{
+    covered.add(a.name.toLowerCase().trim());
+    (a.aliases||[]).forEach(al=>covered.add(al.toLowerCase().trim()));
+  });
+  const uncovered=rawAmmo.filter(v=>!covered.has(v.toLowerCase().trim()));
+
+  // Блок необработанных значений из базы
+  const rawBlock=rawAmmo.length?`
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">
+        В базе вылетов (${rawAmmo.length} вариантов)
+        ${uncovered.length?`<span class="tag tag-warn" style="margin-left:8px">⚠ ${uncovered.length} не в справочнике</span>`:'<span class="tag tag-ok" style="margin-left:8px">✓ все покрыты</span>'}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${rawAmmo.map(v=>{
+          const isCovered=covered.has(v.toLowerCase().trim());
+          return `<span class="tag ${isCovered?'tag-ok':'tag-warn'}" style="cursor:pointer" title="${isCovered?'Покрыт справочником':'Нет в справочнике — нажмите чтобы добавить в алиасы'}" onclick="ammoQuickAdd('${v.replace(/'/g,"\\'")}')">
+            ${v}${isCovered?'':' ⚡'}
+          </span>`;
+        }).join('')}
+      </div>
+    </div>`:'';
+
+  if(!ammoCatalog.length){
+    el.innerHTML=rawBlock+'<div style="color:var(--muted);font-size:12px">Справочник пуст — добавьте эталонные названия ниже</div>';
+    return;
+  }
+
+  el.innerHTML=rawBlock+`<table style="width:100%;font-size:12px">
     <thead><tr><th>Название (эталон)</th><th>Категория</th><th>Алиасы</th><th>Действие</th></tr></thead>
     <tbody>${ammoCatalog.map((a,i)=>`<tr>
-      <td style="padding:5px 8px"><input style="width:100%" value="${a.name}" onchange="ammoCatalog[${i}].name=this.value;ammoSave();"></td>
+      <td style="padding:5px 8px"><input style="width:100%" value="${a.name}" onchange="ammoCatalog[${i}].name=this.value;ammoSave();renderAmmoList();"></td>
       <td style="padding:5px 8px">
         <select onchange="ammoCatalog[${i}].category=this.value;ammoSave();">
           <option value="минирование" ${a.category==='минирование'?'selected':''}>Минирование</option>
           <option value="доставка" ${a.category==='доставка'?'selected':''}>Доставка</option>
         </select>
       </td>
-      <td style="padding:5px 8px"><input style="width:100%" value="${(a.aliases||[]).join(', ')}" onchange="ammoCatalog[${i}].aliases=this.value.split(',').map(s=>s.trim()).filter(Boolean);ammoSave();"></td>
+      <td style="padding:5px 8px"><input style="width:100%" value="${(a.aliases||[]).join(', ')}" onchange="ammoCatalog[${i}].aliases=this.value.split(',').map(s=>s.trim()).filter(Boolean);ammoSave();renderAmmoList();"></td>
       <td style="padding:5px 8px"><button class="btn btn-danger btn-sm" onclick="ammoDelete(${i})">✕</button></td>
     </tr>`).join('')}
     </tbody>
   </table>`;
+}
+
+// Быстрое добавление из базы — открывает форму с заполненным алиасом
+function ammoQuickAdd(rawName){
+  const nameEl=document.getElementById('ammo-new-name');
+  const aliasEl=document.getElementById('ammo-new-aliases');
+  if(!nameEl||!aliasEl)return;
+  // Если точно такое название уже есть — добавляем в алиасы первого подходящего
+  const existing=ammoCatalog.find(a=>a.name.toLowerCase()===rawName.toLowerCase());
+  if(existing){
+    // Уже есть как эталон — ничего не делать
+    return;
+  }
+  // Проверяем не является ли алиасом
+  const asAlias=ammoCatalog.find(a=>(a.aliases||[]).some(al=>al.toLowerCase()===rawName.toLowerCase()));
+  if(asAlias){
+    // Уже алиас — ничего
+    return;
+  }
+  // Заполняем форму — пусть администратор решит как назвать эталон
+  nameEl.value=rawName;
+  aliasEl.value=rawName;
+  nameEl.focus();
+  nameEl.scrollIntoView({behavior:'smooth',block:'center'});
 }
 
 function ammoAdd(){
@@ -2824,6 +2893,7 @@ let actLog=[];
 
 function logAction(type, action, details){
   const entry={
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
     ts:Date.now(),
     date:new Date().toISOString().slice(0,10),
     time:new Date().toTimeString().slice(0,5),
@@ -2834,6 +2904,8 @@ function logAction(type, action, details){
   actLog.unshift(entry);
   if(actLog.length>500)actLog=actLog.slice(0,500);
   try{localStorage.setItem('act_log',JSON.stringify(actLog));}catch(e){}
+  // Отправляем в облако
+  appendToCloud('actlog',entry);
 }
 
 function actLogLoad(){
@@ -3043,6 +3115,17 @@ async function loadFromCloud(url, token, key){
   const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
   const d=await r.json();
   if(d.error)throw new Error(d.error);
+  // Загружаем журнал действий если есть
+  if(d.actlog&&d.actlog.length){
+    const entries=await Promise.all(d.actlog.map(async row=>{
+      try{return JSON.parse(key?await aesDecrypt(row.data,key):row.data);}catch(e){return null;}
+    })).then(a=>a.filter(Boolean));
+    // Сливаем с локальным
+    entries.forEach(e=>{if(!actLog.some(x=>x.id===e.id))actLog.unshift(e);});
+    actLog.sort((a,b)=>b.ts-a.ts);
+    if(actLog.length>500)actLog=actLog.slice(0,500);
+    try{localStorage.setItem('act_log',JSON.stringify(actLog));}catch(e){}
+  }
   return {
     flights: await decryptRows(d.flights,key),
     stock:   await decryptRows(d.stock,key),
@@ -3199,6 +3282,20 @@ async function pollCloud(){
     let changed=false;
     if(await mergeRows(d.flights,state.flights))changed=true;
     if(await mergeRows(d.transfers,state.transfers||(state.transfers=[])))changed=true;
+    // Сливаем записи журнала действий
+    if(d.actlog&&d.actlog.length){
+      for(const row of d.actlog){
+        try{
+          const obj=JSON.parse(key?await aesDecrypt(row.data,key):row.data);
+          if(!actLog.some(e=>e.id===obj.id)){
+            actLog.unshift(obj);changed=true;
+          }
+        }catch(e){}
+      }
+      actLog.sort((a,b)=>b.ts-a.ts);
+      if(actLog.length>500)actLog=actLog.slice(0,500);
+      try{localStorage.setItem('act_log',JSON.stringify(actLog));}catch(e){}
+    }
 
     // Для склада и расчётов — заменяем если пришли обновления (они всегда пишутся полностью)
     if(d.stock&&d.stock.length){
