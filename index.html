@@ -2722,16 +2722,19 @@ function renderFlightEditRow(x, realIdx){
   const editable=canEditFlight(x);
   const minsLeft=x._savedTs?Math.max(0,Math.round((10*60*1000-(Date.now()-x._savedTs))/60000)):0;
   if(!editable)return '';
-  return `<div style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 10px;background:var(--green-dim);border:1px solid var(--green3);margin-top:4px;font-size:11px">
-    <span style="color:var(--green);font-weight:700">✏ Редактировать</span>
-    <span style="color:var(--muted)">(осталось ~${minsLeft} мин)</span>
-    <input style="width:80px" list="dl-ammo-catalog" value="${x.ammo||''}" placeholder="Боеприпас" id="edit-ammo-${realIdx}" autocomplete="off">
-    <input style="width:75px" list="dl-drones-smart" value="${x.drone||''}" placeholder="БПЛА" id="edit-drone-${realIdx}" autocomplete="off">
-    <select id="edit-result-${realIdx}"><option value="yes" ${x.result==='yes'?'selected':''}>✅ выполнена</option><option value="no" ${x.result==='no'?'selected':''}>❌ нет</option></select>
-    <select id="edit-returned-${realIdx}"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select>
-    <input style="width:130px" value="${x.note||''}" placeholder="Примечание" id="edit-note-${realIdx}">
-    <button class="btn btn-success btn-sm" onclick="saveFlightEdit(${realIdx})">Сохранить</button>
-  </div>`;
+  return '<div style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
+    +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap;min-width:50px">✏ '+minsLeft+' мин</span>'
+    +'<input style="width:90px;font-size:11px;padding:2px 5px" list="dl-ammo-catalog" value="'+(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off">'
+    +'<input style="width:75px;font-size:11px;padding:2px 5px" list="dl-drones-smart" value="'+(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off">'
+    +'<select style="font-size:11px;padding:2px 3px" id="edit-result-'+realIdx+'">'
+    +'<option value="yes" '+(x.result==='yes'?'selected':'')+'>✅ выполнена</option>'
+    +'<option value="no" '+(x.result==='no'?'selected':'')+'>❌ нет</option></select>'
+    +'<select style="font-size:11px;padding:2px 3px" id="edit-returned-'+realIdx+'">'
+    +'<option value="yes" '+(x.returned==='yes'?'selected':'')+'>вернул</option>'
+    +'<option value="no" '+(x.returned==='no'?'selected':'')+'>потерян</option></select>'
+    +'<input style="flex:1;min-width:80px;font-size:11px;padding:2px 5px" value="'+(x.note||'')+'" placeholder="Примечание" id="edit-note-'+realIdx+'">'
+    +'<button class="btn btn-success btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="saveFlightEdit('+realIdx+')">✓</button>'
+    +'</div>';
 }
 
 function saveFlightEdit(idx){
