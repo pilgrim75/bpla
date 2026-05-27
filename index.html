@@ -2417,22 +2417,20 @@ async function createUser(){
   if(!login||!pass){alert('Введите логин и пароль');return;}
 
   try{
-    // Через GET с payload
-    const payload=encodeURIComponent(JSON.stringify({
-      action:'create_user',admin_token:authToken,login,password:pass,role
-    }));
-    const r=await fetch(url+'?action=write&payload='+payload);
-    const d=await r.json();
-    // Apps Script не поддерживает create_user через write — используем прямой вызов
-    // Временно создаём через отдельный запрос
-    const r2=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    // Отправляем через no-cors (не читаем ответ)
+    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'create_user',admin_token:authToken,login,password:pass,role})});
-    const d2=await r2.json();
-    if(d2.error||!d2.ok){alert('Ошибка: '+(d2.error||'неизвестная'));return;}
+    // Ждём чуть и читаем список пользователей чтобы получить токен
+    await new Promise(r=>setTimeout(r,1500));
+    const rList=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
+    const dList=await rList.json();
+    const newUser=(dList.users||[]).find(u=>u.login===login);
+    if(!newUser){alert('Пользователь создан но токен не получен. Обновите список пользователей.');return;}
+    const token=newUser.token;
 
     // Генерируем ссылку
     const base=window.location.origin+window.location.pathname;
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+d2.token+(encKey?'&k='+encodeURIComponent(encKey):'');
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+token+(encKey?'&k='+encodeURIComponent(encKey):'');
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     document.getElementById('nu-login').value='';
@@ -2479,13 +2477,16 @@ async function regenerateToken(login){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   if(!url||!authToken)return;
   try{
-    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'update_user',admin_token:authToken,login,new_token:true})});
-    const d=await r.json();
-    if(!d.ok){alert('Ошибка: '+d.error);return;}
+    await new Promise(r=>setTimeout(r,1500));
+    const rList2=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
+    const dList2=await rList2.json();
+    const updUser=(dList2.users||[]).find(u=>u.login===login);
+    if(!updUser){alert('Токен обновлён. Обновите список пользователей вручную.');return;}
     const base=window.location.origin+window.location.pathname;
     const encKey=cfg.key;
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+d.token+(encKey?'&k='+encodeURIComponent(encKey):'');
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+(encKey?'&k='+encodeURIComponent(encKey):'');
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     showSyncToast('✓ Новая ссылка сгенерирована');
@@ -2496,11 +2497,10 @@ async function toggleUser(login,active){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   if(!url||!authToken)return;
   try{
-    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'update_user',admin_token:authToken,login,active})});
-    const d=await r.json();
-    if(d.ok)loadUsersList();
-    else alert('Ошибка: '+d.error);
+    await new Promise(r=>setTimeout(r,1000));
+    loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
 }
 
