@@ -2278,7 +2278,36 @@ function applyTheme(name){
 }
 
 function applyFontSize(sz){
-  document.body.style.fontSize=sz+'px';
+  const base=parseInt(sz)||14;
+  // Устанавливаем CSS переменную — все размеры масштабируются относительно неё
+  document.documentElement.style.setProperty('--base',base+'px');
+  document.documentElement.style.fontSize=base+'px';
+  document.body.style.fontSize=base+'px';
+  // Принудительно обновляем элементы с жёстко заданным font-size через scale
+  const scale=base/14; // 14px — базовый размер
+  const styleId='fontScaleStyle';
+  let styleEl=document.getElementById(styleId);
+  if(!styleEl){styleEl=document.createElement('style');styleEl.id=styleId;document.head.appendChild(styleEl);}
+  styleEl.textContent=`
+    body, input, select, textarea, button { font-size: ${base}px !important; }
+    .card-title { font-size: ${Math.round(10*scale)}px !important; }
+    .stat { font-size: ${Math.round(30*scale)}px !important; }
+    .stat-sub, label { font-size: ${Math.round(10*scale)}px !important; }
+    th { font-size: ${Math.round(10*scale)}px !important; }
+    td { font-size: ${base}px !important; }
+    .tag { font-size: ${Math.round(11*scale)}px !important; }
+    .nav button { font-size: ${Math.round(11*scale)}px !important; }
+    .section-title { font-size: ${Math.round(15*scale)}px !important; }
+    .flight-pilot { font-size: ${base}px !important; }
+    .flight-time, .flight-cell { font-size: ${base}px !important; }
+    .report-block .rb-head { font-size: ${Math.round(13*scale)}px !important; }
+    .report-block .rb-line { font-size: ${base}px !important; }
+    .dp-day { font-size: ${base}px !important; }
+    .dp-nav-label { font-size: ${Math.round(12*scale)}px !important; }
+    .notice { font-size: ${base}px !important; }
+    .qty { font-size: ${Math.round(13*scale)}px !important; }
+    .drone-name { font-size: ${base}px !important; }
+  `;
   try{localStorage.setItem('fontSize',sz);}catch(e){}
 }
 
