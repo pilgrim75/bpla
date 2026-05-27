@@ -2344,7 +2344,8 @@ async function initAuth(){
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
-      await syncFromCloud();
+      // Всегда загружаем свежие данные из облака при входе по ссылке
+      await syncFromCloudSilent();
       return;
     } else {
       showLoginError('Ссылка недействительна или устарела');
@@ -2616,6 +2617,50 @@ async function syncToCloud(silent=false){
     if(st){st.textContent='Ошибка: '+e.message;st.style.color='var(--red)';}
     if(ind){ind.className='sync-indicator';ind.textContent='⚠ ошибка';}
     if(!silent)alert('Ошибка синхронизации: '+e.message);
+  }
+}
+
+
+async function syncFromCloudSilent(){
+  // Загрузка из облака без подтверждения — используется при автовходе по ссылке
+  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const key=cfg.key||localStorage.getItem('cfg_key')||'';
+  if(!url)return;
+  const ind=document.getElementById('syncIndicator');
+  if(ind){ind.className='sync-indicator syncing';ind.textContent='↓ загрузка...';}
+  try{
+    const token=authToken||localStorage.getItem('auth_token')||'';
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    let loaded;
+    if(key&&d.flights&&d.flights.length===1&&d.flights[0].id==='encrypted'){
+      try{loaded=JSON.parse(await aesDecrypt(d.flights[0].note,key));}
+      catch(e){
+        if(ind){ind.className='sync-indicator';ind.textContent='⚠ неверный ключ';}
+        return;
+      }
+    } else if(d.flights){
+      loaded={
+        flights:d.flights||[],
+        stock:d.stock||[],
+        squads:(d.squads||[]).map(sq=>({...sq,drones:typeof sq.drones_json==='string'?JSON.parse(sq.drones_json||'[]'):sq.drones||[]})),
+        transfers:(d.transfers||[]).map(t=>{try{return typeof t.data_json==='string'?JSON.parse(t.data_json):t;}catch(e){return t;}})
+      };
+    } else return;
+    // Заменяем данные без вопроса
+    state.flights=loaded.flights||[];
+    state.stock=loaded.stock||[];
+    state.squads=loaded.squads||[];
+    state.transfers=loaded.transfers||[];
+    state.offlineQueue=[];
+    try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
+    localStorage.setItem('last_sync',Date.now().toString());
+    renderDashboard();renderInventory();renderFlights();fillDataLists();rebuildRoleSelector();
+    if(ind){ind.className='sync-indicator saved';ind.textContent='● онлайн';}
+    renderSettingsStatus();
+  }catch(e){
+    if(ind){ind.className='sync-indicator';ind.textContent='⚠ ошибка';}
   }
 }
 
