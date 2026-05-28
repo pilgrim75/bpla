@@ -386,7 +386,8 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 
       <div style="min-width:100px;flex:1.2">
         <label>Точка</label>
-        <input id="qf-target" list="dl-targets" placeholder="305 Вишня" autocomplete="off">
+        <input id="qf-target" placeholder="305 Вишня" autocomplete="off"
+          onclick="event.stopPropagation();showQuickPicker(this,getSmartTargets(),v=>{this.value=v})">
       </div>
       <div style="min-width:90px;flex:1">
         <label>Боеприпас</label>
@@ -1507,12 +1508,25 @@ function renderFlights(){
         <th style="width:90px">Задача</th>
         <th style="width:75px">Борт</th>
         <th>Примечание</th>
+        <th style="width:28px"></th>
       </tr></thead>
       <tbody>
         ${f.map(x=>{
           const idx=state.flights.indexOf(x);
           const editRow=renderFlightEditRow(x,idx);
           const num=x._autoNum||x.flightnum||'';
+          // Форматируем дату дд.мм.гггг
+          const dateFmt=x.date?x.date.split('-').reverse().join('.'):'';
+          // Строка для копирования
+          const copyStr='Пилот '+( x.pilot||'')
+            +', '+dateFmt
+            +', '+(x.time||'')
+            +', '+(x.target||'')
+            +', '+(x.ammo||'')
+            +', '+(x.drone||'')
+            +', '+(x.result==='yes'?'выполнена':'не выполнена')
+            +', '+(x.returned==='yes'?'вернул':'потерян')
+            +(x.note?', '+x.note:'');
           return `<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
             <td style="white-space:nowrap">${x.date||'—'}</td>
             <td style="white-space:nowrap;color:var(--muted)">${x.time||'—'}</td>
@@ -1523,7 +1537,8 @@ function renderFlights(){
             <td><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
-          </tr>${editRow?`<tr><td colspan="9" style="padding:0;border:none">${editRow}</td></tr>`:''}`
+            <td style="padding:2px 4px;width:36px"><button class="copy-flight-btn" data-copy="${copyStr.replace(/"/g,'&quot;').replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></td>
+          </tr>${editRow?`<tr><td colspan="10" style="padding:0;border:none">${editRow}</td></tr>`:''}`
         }).join('')}
       </tbody>
     </table>`;
@@ -2885,6 +2900,25 @@ function saveFlightEdit(idx){
   renderDashboard();
   logAction('flight','edit','Вылет #'+f.flightnum+' '+f.pilot+' отредактирован');
 }
+// Умный список точек — часто используемые вверху, не используемые 7 дней скрыты
+function getSmartTargets(){
+  const cutoff=new Date();
+  cutoff.setDate(cutoff.getDate()-7);
+  const cutoffStr=cutoff.toISOString().slice(0,10);
+  const pilot=document.getElementById('qf-pilot')?.value||'';
+  // Берём вылеты текущего пилота за последние 7 дней
+  const recent=state.flights.filter(f=>
+    (!pilot||f.pilot===pilot)&&f.target&&f.date>=cutoffStr
+  );
+  // Считаем частоту
+  const freq={};
+  recent.forEach(f=>{freq[f.target]=(freq[f.target]||0)+1;});
+  // Сортируем по частоте убыванием
+  return Object.entries(freq)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([t])=>t);
+}
+
 // ============ QUICK PICKER ============
 (function(){
   const popup=document.createElement('div');
@@ -3269,6 +3303,24 @@ function applyRoleRestrictions(){
   // Заполняем пилота в быстрой форме
   if(isPilot)initQuickForm();
 }
+
+// Делегирование для кнопки копирования вылета
+document.addEventListener('click',function(e){
+  const btn=e.target.closest('.copy-flight-btn');
+  if(!btn)return;
+  const text=btn.dataset.copy||'';
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent='✓';
+    btn.style.color='var(--green)';
+    setTimeout(()=>{btn.textContent='⎘';btn.style.color='';},1500);
+  }).catch(()=>{
+    // Фолбек для старых браузеров
+    const ta=document.createElement('textarea');
+    ta.value=text;document.body.appendChild(ta);ta.select();
+    document.execCommand('copy');document.body.removeChild(ta);
+    btn.textContent='✓';setTimeout(()=>btn.textContent='⎘',1500);
+  });
+});
 
 // ============ CONFIG & SYNC ENGINE ============
 let cfg={url:'',key:''};
