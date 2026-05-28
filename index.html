@@ -1460,14 +1460,14 @@ function renderFlights(){
     x._autoNum=pilotDayCount[key];
   });
   document.getElementById('flightList').innerHTML=`
-    <table style="table-layout:fixed;width:100%">
+    <table style="table-layout:auto;width:100%">
       <thead><tr>
         <th style="width:100px">Дата</th>
         <th style="width:55px">Время</th>
         <th style="width:80px">Пилот</th>
         <th style="width:120px">Точка</th>
         <th style="width:90px">Боеприпас</th>
-        <th style="width:105px">БПЛА</th>
+        <th style="white-space:nowrap">БПЛА</th>
         <th style="width:90px">Задача</th>
         <th style="width:75px">Борт</th>
         <th>Примечание</th>
@@ -1483,7 +1483,7 @@ function renderFlights(){
             <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${num?'<span style="color:var(--muted);font-weight:400;font-size:10px">#'+num+' </span>':''}${x.pilot||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.target||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.ammo||'—'}</td>
-            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:105px" title="${x.drone||''}">${x.drone||'—'}</td> style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
+            <td style="white-space:nowrap;padding-right:14px">${x.drone||'—'}</td> style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
           </tr>${editRow?`<tr><td colspan="9" style="padding:0;border:none">${editRow}</td></tr>`:''}`
