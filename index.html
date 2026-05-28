@@ -86,10 +86,10 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 .flight-cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:11px}
 .flight-tag{white-space:nowrap;font-size:10px}
 @media(max-width:700px){.flight-entry{grid-template-columns:1fr 1fr;gap:4px}.flight-entry>*{min-width:0}}
-.adm-flight-table{table-layout:fixed;width:100%}
-.adm-flight-table th{font-size:9px;padding:3px 3px;letter-spacing:0;white-space:nowrap;overflow:hidden}
-.adm-flight-table td{padding:2px 3px}
-.adm-flight-table input,.adm-flight-table select{font-size:10px;padding:1px 3px;height:22px}
+.adm-flight-table{table-layout:fixed;width:100%;min-width:900px;font-size:12px}
+.adm-flight-table th{font-size:11px;padding:4px 4px;letter-spacing:0;white-space:nowrap;overflow:hidden;color:var(--green3)}
+.adm-flight-table td{padding:3px 4px;font-size:12px}
+.adm-flight-table input,.adm-flight-table select{font-size:11px;padding:2px 4px;height:24px}
 .report-block{background:#000;border-left:2px solid var(--green);padding:10px 14px;margin-bottom:8px;font-family:var(--font)}
 .report-block .rb-head{font-size:12px;font-weight:700;margin-bottom:6px;color:var(--green);letter-spacing:2px}
 .report-block .rb-line{padding:1px 0;font-size:11px;color:var(--text2)}
@@ -2328,6 +2328,7 @@ function applyFontSize(sz){
   if(!styleEl){styleEl=document.createElement('style');styleEl.id=styleId;document.head.appendChild(styleEl);}
   styleEl.textContent=`
     body, input, select, textarea, button { font-size: ${base}px !important; }
+    .adm-flight-table, .adm-flight-table input, .adm-flight-table select, .adm-flight-table td, .adm-flight-table th { font-size: 12px !important; }
     .card-title { font-size: ${Math.round(10*scale)}px !important; }
     .stat { font-size: ${Math.round(30*scale)}px !important; }
     .stat-sub, label { font-size: ${Math.round(10*scale)}px !important; }
