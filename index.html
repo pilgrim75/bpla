@@ -2565,7 +2565,7 @@ async function authByToken(token){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   if(!url||!token)return false;
   try{
-    const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token)+'&_='+Date.now());
+    const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
     const d=await r.json();
     if(d.ok){
       authToken=token;
@@ -3112,7 +3112,7 @@ async function ammoSaveToCloud(){
   try{
     const body=JSON.stringify({action:'update_ammo',admin_token:token,items:ammoCatalog});
     try{
-      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors',redirect:'follow'});
     }catch(e){
       await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
     }
@@ -3372,7 +3372,7 @@ async function cfgTestConnection(){
   if(!url){st.textContent='Укажите URL';st.style.color='var(--red)';return;}
   st.textContent='Проверяю...';st.style.color='var(--muted)';
   try{
-    const r=await fetch(url+'?action=ping');
+    const r=await fetch(url+'?action=ping',{redirect:'follow'});
     const d=await r.json();
     if(d.status==='ok'){st.textContent='✓ Соединение установлено';st.style.color='var(--green2)';}
     else{st.textContent='Ответ: '+JSON.stringify(d);st.style.color='var(--amber)';}
@@ -3435,7 +3435,7 @@ async function syncToCloud(silent=false){
     let syncOk=false;
     // Пробуем cors сначала
     try{
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors',redirect:'follow'});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
       syncOk=true;
@@ -3475,7 +3475,7 @@ async function decryptRows(rows, key){
 
 async function loadFromCloud(url, token, key){
   // cache-buster чтобы браузер не отдавал кешированный ответ
-  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now());
+  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
   const d=await r.json();
   if(d.error)throw new Error(d.error);
   // Загружаем журнал действий если есть
@@ -3586,7 +3586,7 @@ async function appendToCloud(sheet, obj){
     const body=JSON.stringify({action:'append_one',token,sheet,row:{id:obj.id||Date.now(),data}});
     // Пробуем cors, потом no-cors
     try{
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors',redirect:'follow'});
       await r.json();
     }catch(e){
       await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
@@ -3605,7 +3605,7 @@ async function pollCloud(){
   try{
     // Берём время последнего поллинга — только новее него
     const since=_lastPollTs;
-    const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now());
+    const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now(),{redirect:'follow'});
     const d=await r.json();
     if(d.error){console.warn('[POLL]',d.error);return;}
     const newFlights=(d.flights||[]).length;
@@ -3708,7 +3708,7 @@ async function syncStockAndSquads(){
     const squads=await Promise.all(state.squads.map((sq,i)=>encRow({...sq,id:sq.id||(ts+i)})));
     const body=JSON.stringify({action:'write',token,data:{stock,squads,flights:[],transfers:[]}});
     try{
-      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
+      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors',redirect:'follow'});
     }catch(e){
       await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
     }
