@@ -3722,6 +3722,16 @@ function startPolling(){
     const token=authToken||localStorage.getItem('auth_token')||'';
     if(url&&token&&navigator.onLine)pollCloud();
   },30000);
+  // Полная синхронизация раз в 5 минут — подхватывает удаления
+  if(window._fullSyncInterval)clearInterval(window._fullSyncInterval);
+  window._fullSyncInterval=setInterval(()=>{
+    const url=cfg.url||localStorage.getItem('cfg_url')||'';
+    const token=authToken||localStorage.getItem('auth_token')||'';
+    if(url&&token&&navigator.onLine){
+      console.log('[SYNC] Плановая полная синхронизация');
+      syncFromCloudSilent();
+    }
+  },5*60*1000);
 }
 
 rebuildRoleSelector();
