@@ -918,21 +918,21 @@ function renderAdminFlights(){
   document.getElementById('adminFlightList').innerHTML=indexed.length?`
     <table class="adm-flight-table">
       <thead><tr>
-        <th>Дата</th>
-        <th>Время</th>
-        <th>Пилот</th>
-        <th>Точка</th>
-        <th>Боеприпас</th>
-        <th>БПЛА</th>
-        <th>#</th>
-        <th>Задача</th>
-        <th>Борт</th>
+        <th style="min-width:108px">Дата</th>
+        <th style="min-width:78px">Время</th>
+        <th style="min-width:75px">Пилот</th>
+        <th style="min-width:100px">Точка</th>
+        <th style="min-width:82px">Боеприпас</th>
+        <th style="min-width:82px">БПЛА</th>
+        <th style="min-width:36px">#</th>
+        <th style="min-width:46px">Задача</th>
+        <th style="min-width:82px">Борт</th>
         <th style="width:100%">Примечание</th>
-        <th></th>
+        <th style="min-width:24px"></th>
       </tr></thead>
       <tbody>${indexed.map(({x,i})=>`<tr>
         <td><input style="width:100px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"></td>
-        <td><input style="width:68px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
+        <td><input style="width:76px;min-width:76px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
         <td><input style="width:72px" value="${x.pilot||''}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
         <td><input style="width:100px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
         <td><input style="width:80px" list="dl-ammo-catalog" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" autocomplete="off"></td>
