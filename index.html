@@ -1128,7 +1128,7 @@ function renderDashboard(){
 
   document.getElementById('st-total').textContent=totalAll;
   document.getElementById('st-total-detail').innerHTML=
-    Object.entries(byName).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
+    Object.entries(byName).filter(([,q])=>q!==0).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
       `<span style="color:${q<0?'var(--red)':'var(--text2)'}">${n}: <b style="color:${q<0?'var(--red)':'var(--green)'}">${q}</b></span>`
     ).join('<br>');
 
