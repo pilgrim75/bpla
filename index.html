@@ -274,7 +274,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
     <div class="card">
       <div class="section-head" style="margin-bottom:10px">
         <div class="card-title" style="margin:0">Расчёты</div>
-        <button class="btn btn-primary btn-sm" onclick="toggleSquadEditor()">Редактировать</button>
+        <button id="squadEditBtn" class="btn btn-primary btn-sm" onclick="toggleSquadEditor()">Редактировать</button>
       </div>
       <table>
         <thead><tr><th>Пилот</th><th>БПЛА</th><th>Кол-во</th><th>Статус</th></tr></thead>
@@ -378,7 +378,8 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
   <!-- ФОРМА ВВОДА ВЫЛЕТА -->
   <div class="card" id="quickFlightCard" style="margin-bottom:8px;border-color:var(--green3)">
     <div style="display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap">
-      <div style="min-width:90px;flex:1">
+      <!-- Пилот — показывается только admin/cmd/local -->
+      <div id="qf-pilot-wrap" style="min-width:90px;flex:1">
         <label>Пилот</label>
         <input id="qf-pilot" list="dl-pilots" placeholder="Имя" autocomplete="off">
       </div>
@@ -389,11 +390,13 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
       </div>
       <div style="min-width:90px;flex:1">
         <label>Боеприпас</label>
-        <input id="qf-ammo" list="dl-ammo-catalog" placeholder="Пом2" autocomplete="off">
+        <input id="qf-ammo" placeholder="Пом2" autocomplete="off"
+          onclick="event.stopPropagation();const al=ammoCatalog.length?ammoCatalog.map(a=>a.name):[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();showQuickPicker(this,al,v=>{this.value=v})">
       </div>
       <div style="min-width:100px;flex:1">
         <label>БПЛА</label>
-        <input id="qf-drone" list="dl-drones-smart" placeholder="Гамаюн13" autocomplete="off">
+        <input id="qf-drone" placeholder="Гамаюн13" autocomplete="off"
+          onclick="event.stopPropagation();const dl=[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort();showQuickPicker(this,dl,v=>{this.value=v})">
       </div>
       <div style="width:90px">
         <label>Задача</label>
@@ -862,12 +865,14 @@ function showPage(id,btn){
 function switchRole(r){
   state.role=r;
   let label='';
+  let pilotName='';
   if(r==='admin')label='Администратор';
   else if(r==='cmd')label='Командир';
   else if(r==='tech')label='Техник';
   else if(r.startsWith('pilot_')){
     const idx=parseInt(r.split('_')[1]);
-    label='Пилот '+(state.squads[idx]?state.squads[idx].pilot:'?');
+    pilotName=state.squads[idx]?state.squads[idx].pilot:'?';
+    label='Пилот '+pilotName;
   }
   document.getElementById('roleBadge').innerHTML='<b>'+label+'</b>';
   const canEdit=r==='cmd'||r==='tech'||r==='admin';
@@ -882,6 +887,20 @@ function switchRole(r){
     }
   }
   try{localStorage.setItem('role',r);}catch(e){}
+  // Обновляем форму вылета — скрываем/показываем поле пилота
+  setTimeout(()=>{
+    const isPilot=r.startsWith('pilot_');
+    const qpWrap=document.getElementById('qf-pilot-wrap');
+    const qp=document.getElementById('qf-pilot');
+    if(qpWrap)qpWrap.style.display=isPilot?'none':'';
+    if(qp){
+      if(isPilot) qp.value=pilotName;
+      else qp.value=''; // сбрасываем для командира/техника/админа
+    }
+    if(typeof autoFillFlightNum==='function')autoFillFlightNum();
+    const seBtn=document.getElementById('squadEditBtn');
+    if(seBtn)seBtn.style.display=(r==='admin')?'':'none';
+  },0);
 }
 
 // ============ ADMIN ============
@@ -2622,27 +2641,34 @@ function showLoginError(msg){
 function applyRoleFromAuth(){
   const lb=document.getElementById('logoutBtn');
   if(lb)lb.style.display='';
-  setTimeout(applyRoleRestrictions,100);
 
-  if(!authUser.role)return;
-  const roleMap={admin:'admin',cmd:'cmd',tech:'tech',pilot:'pilot1'};
-  const r=roleMap[authUser.role]||'pilot1';
-  // Обновляем бейдж
-  const badge=document.getElementById('roleBadge');
-  if(badge)badge.innerHTML='<b>'+authUser.login+'</b>';
-  // Применяем права
-  state.role=r;
-  const canEdit=r==='cmd'||r==='tech'||r==='admin';
-  const addBtn=document.getElementById('addDroneBtn');
-  const trBtn=document.getElementById('transferBtnArea');
-  if(addBtn)addBtn.style.display=canEdit?'':'none';
-  if(trBtn)trBtn.style.display=canEdit?'':'none';
-  const adminBtn=document.getElementById('adminNavBtn');
-  if(adminBtn)adminBtn.style.display=r==='admin'?'':'none';
-  // Показываем управление пользователями в настройках
-  const uc=document.getElementById('usersCard');
-  if(uc)uc.style.display=r==='admin'?'block':'none';
+  const isAdminUser=authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin';
+  const roleSwitch=document.getElementById('roleSwitch');
+
+  if(isAdminUser){
+    // Администратор — показываем переключатель, применяем текущую выбранную роль
+    if(roleSwitch)roleSwitch.style.display='';
+    const savedRole=localStorage.getItem('role')||'admin';
+    const r=(['admin','cmd','tech','pilot1','pilot2','pilot3'].includes(savedRole))?savedRole:'admin';
+    if(roleSwitch){
+      const optExists=[...roleSwitch.options].some(o=>o.value===r);
+      roleSwitch.value=optExists?r:'admin';
+    }
+    switchRole(r);
+  } else {
+    // Остальные — скрываем переключатель, роль из учётной записи
+    if(roleSwitch)roleSwitch.style.display='none';
+    const roleMap={admin:'admin',cmd:'cmd',tech:'tech',pilot:'pilot1',pilot1:'pilot1',pilot2:'pilot2',pilot3:'pilot3'};
+    const r=roleMap[authUser.role]||'cmd';
+    if(roleSwitch)roleSwitch.value=r;
+    switchRole(r);
+    const badge=document.getElementById('roleBadge');
+    if(badge)badge.innerHTML='<b>'+authUser.login+'</b>';
+  }
+  setTimeout(applyRoleRestrictions,100);
+  setTimeout(initQuickForm,150);
 }
+
 
 function logout(){
   localStorage.removeItem('auth_token');
@@ -3015,14 +3041,24 @@ async function ammoSaveToCloud(){
 
 // ============ QUICK FLIGHT FORM ============
 function initQuickForm(){
-  // Заполняем пилота из роли если пилот
   const qp=document.getElementById('qf-pilot');
+  const qpWrap=document.getElementById('qf-pilot-wrap');
   if(!qp)return;
-  if(authUser.role==='pilot'||authUser.role==='pilot1'||authUser.role==='pilot2'||authUser.role==='pilot3'){
-    qp.value=authUser.login;
-    qp.readOnly=true;
+  // state.role — текущая роль в переключателе, authUser.role — роль учётной записи
+  const role=state.role||authUser.role||'';
+  const isPilot=role==='pilot'||role==='pilot1'||role==='pilot2'||role==='pilot3';
+  if(isPilot){
+    if(qpWrap)qpWrap.style.display='none';
+    // Для локальной учётки берём имя из переключателя расчётов
+    const pilotName=authUser.login&&authUser.login!=='local'&&authUser.login!=='admin'
+      ?authUser.login
+      :(state.squads[0]?.pilot||'');
+    qp.value=pilotName;
+  } else {
+    if(qpWrap)qpWrap.style.display='';
+    if(authUser.login&&authUser.login!=='local'&&authUser.login!=='admin')
+      qp.value=authUser.login;
   }
-  // Номер вылета — следующий по порядку для пилота
   autoFillFlightNum();
 }
 
