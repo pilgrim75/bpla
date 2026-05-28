@@ -933,7 +933,7 @@ function renderAdminFlights(){
         <td><input style="width:72px" value="${x.pilot||''}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
         <td><input style="width:100px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
         <td><input style="width:80px" list="dl-ammo-catalog" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" autocomplete="off"></td>
-        <td><input style="width:85px" list="dl-drones-smart" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" autocomplete="off"></td>
+        <td><input style="width:85px" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" autocomplete="off"></td>
         <td><input style="width:36px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
         <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select style="width:80px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
