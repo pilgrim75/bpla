@@ -1483,7 +1483,8 @@ function renderFlights(){
             <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${num?'<span style="color:var(--muted);font-weight:400;font-size:10px">#'+num+' </span>':''}${x.pilot||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.target||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.ammo||'—'}</td>
-            <td style="white-space:nowrap;padding-right:14px">${x.drone||'—'}</td> style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
+            <td style="white-space:nowrap;padding-right:14px">${x.drone||'—'}</td>
+            <td><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
           </tr>${editRow?`<tr><td colspan="9" style="padding:0;border:none">${editRow}</td></tr>`:''}`
