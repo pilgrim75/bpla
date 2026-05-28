@@ -2749,25 +2749,26 @@ async function toggleUser(login,active){
 
 // ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА (10 минут для пилота) ============
 function canEditFlight(f){
-  // Администратор может всегда
-  if(state.role==='admin'||authUser.role==='admin')return true;
-  // Проверяем 10-минутное окно для всех ролей — по submittedBy или pilot
+  // Администратор редактирует через свой раздел — в общем журнале полоса не нужна
+  if(state.role==='admin'||authUser.role==='admin')return false;
+  // Проверяем 10-минутное окно
   const savedTs=f._savedTs||0;
-  const withinWindow=(Date.now()-savedTs)<10*60*1000;
-  if(!withinWindow)return false;
+  if(!savedTs)return false; // нет метки времени — не показываем
+  const minsLeft=(10*60*1000-(Date.now()-savedTs));
+  if(minsLeft<=0)return false;
   // Кто подал — тот и может редактировать
   const submitter=f._submittedBy||f.pilot||'';
   return submitter===authUser.login||f.pilot===authUser.login;
 }
 
 function renderFlightEditRow(x, realIdx){
-  const editable=canEditFlight(x);
-  const minsLeft=x._savedTs?Math.max(0,Math.round((10*60*1000-(Date.now()-x._savedTs))/60000)):0;
-  if(!editable)return '';
+  if(!canEditFlight(x))return '';
+  const minsLeft=Math.max(1,Math.round((10*60*1000-(Date.now()-(x._savedTs||0)))/60000));
   return '<div style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
-    +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap;min-width:50px">✏ '+minsLeft+' мин</span>'
+    +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap">✏ '+minsLeft+' мин</span>'
     +'<input style="width:90px;font-size:11px;padding:2px 5px" list="dl-ammo-catalog" value="'+(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off">'
     +'<input style="width:75px;font-size:11px;padding:2px 5px" list="dl-drones-smart" value="'+(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off">'
+    +'<input style="width:36px;font-size:11px;padding:2px 5px;text-align:center" type="number" min="1" value="'+(x.flightnum||'')+'" placeholder="#" id="edit-flightnum-'+realIdx+'">'
     +'<select style="font-size:11px;padding:2px 3px" id="edit-result-'+realIdx+'">'
     +'<option value="yes" '+(x.result==='yes'?'selected':'')+'>✅ выполнена</option>'
     +'<option value="no" '+(x.result==='no'?'selected':'')+'>❌ нет</option></select>'
@@ -2786,7 +2787,9 @@ function saveFlightEdit(idx){
   f.drone=document.getElementById('edit-drone-'+idx)?.value||f.drone;
   f.result=document.getElementById('edit-result-'+idx)?.value||f.result;
   f.returned=document.getElementById('edit-returned-'+idx)?.value||f.returned;
-  f.note=document.getElementById('edit-note-'+idx)?.value||f.note;
+  f.note=document.getElementById('edit-note-'+idx)?.value??f.note;
+  const fn=document.getElementById('edit-flightnum-'+idx)?.value;
+  if(fn)f.flightnum=parseInt(fn);
   f._edited=true;
   saveLocal();
   appendToCloud('flights',f);
