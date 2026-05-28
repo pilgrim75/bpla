@@ -989,29 +989,9 @@ function adminEditFlight(idx,field,val){
 function adminDeleteFlight(idx){
   if(!confirm('Удалить этот вылет?'))return;
   const f=state.flights[idx];
-  const deletedId=f?.id;
   state.flights.splice(idx,1);
-  // Записываем удаление в actlog чтобы другие клиенты тоже удалили
-  if(deletedId){
-    logAction('flight','delete','Удалён вылет id:'+deletedId+' пилот:'+(f.pilot||'')
-      +' '+f.date+' '+f.time);
-    // Сохраняем список удалённых ID для синхронизации
-    if(!state.deletedIds)state.deletedIds=[];
-    if(!state.deletedIds.includes(deletedId))state.deletedIds.push(deletedId);
-    // Отправляем специальную запись в облако — другие клиенты её получат через pollCloud
-    appendToCloud('actlog',{
-      id:'del_'+deletedId+'_'+Date.now(),
-      ts:Date.now(),
-      date:new Date().toISOString().slice(0,10),
-      time:new Date().toTimeString().slice(0,5),
-      user:authUser.login||'admin',
-      role:authUser.role||'admin',
-      type:'delete',
-      action:'delete_flight',
-      details:'id:'+deletedId
-    });
-  }
   saveLocal();
+  logAction('flight','delete','Удалён вылет '+(f?.pilot||'')+' '+( f?.date||'')+' '+(f?.time||''));
   renderAdminFlights();
   renderDashboard();
 }
@@ -3451,15 +3431,25 @@ async function syncToCloud(silent=false){
     const squads=await Promise.all(state.squads.map((sq,i)=>encRow({...sq,id:sq.id||(ts+i)})));
     const transfers=await Promise.all((state.transfers||[]).map((t,i)=>encRow({...t,id:t.id||(ts+i)})));
     const body=JSON.stringify({action:'write',token,data:{flights,stock,squads,transfers}});
-    console.log('[SYNC] body size:',body.length);
+    console.log('[SYNC] body size:',body.length,'flights:',state.flights.length);
+    let syncOk=false;
+    // Пробуем cors сначала
     try{
       const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors'});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
+      syncOk=true;
+      console.log('[SYNC] cors OK, ts:',d.ts);
     }catch(e1){
-      if(e1.message.includes('fetch'))
+      console.warn('[SYNC] cors failed:',e1.message,', trying no-cors');
+      // Любая ошибка — пробуем no-cors
+      try{
         await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
-      else throw e1;
+        syncOk=true;
+        console.log('[SYNC] no-cors sent (unverified)');
+      }catch(e2){
+        throw new Error('Не удалось отправить данные: '+e2.message);
+      }
     }
     localStorage.setItem('last_sync',Date.now().toString());
     if(st){st.textContent='✓ Выгружено — '+new Date().toLocaleTimeString('ru');st.style.color='var(--green2)';}
@@ -3626,14 +3616,12 @@ async function pollCloud(){
 
     async function mergeRows(remoteRows, localArr){
       if(!remoteRows||!remoteRows.length)return false;
-      const deletedIds=state.deletedIds||[];
       let added=false;
       for(const row of remoteRows){
         try{
           const json=key?await aesDecrypt(row.data,key):row.data;
           const obj=JSON.parse(json);
           const objId=obj.id;
-          if(deletedIds.includes(objId))continue; // пропускаем удалённые
           const exists=localArr.some(x=>x.id===objId);
           if(!exists){
             localArr.unshift(obj);
@@ -3651,20 +3639,11 @@ async function pollCloud(){
     let changed=false;
     if(await mergeRows(d.flights,state.flights))changed=true;
     if(await mergeRows(d.transfers,state.transfers||(state.transfers=[])))changed=true;
-    // Сливаем записи журнала действий и обрабатываем удаления
+    // Сливаем записи журнала действий
     if(d.actlog&&d.actlog.length){
       for(const row of d.actlog){
         try{
           const obj=JSON.parse(key?await aesDecrypt(row.data,key):row.data);
-          // Обрабатываем удаление вылета
-          if(obj.type==='delete'&&obj.action==='delete_flight'&&obj.details){
-            const delId=obj.details.replace('id:','');
-            const before=state.flights.length;
-            state.flights=state.flights.filter(f=>f.id!==delId);
-            if(!state.deletedIds)state.deletedIds=[];
-            if(!state.deletedIds.includes(delId))state.deletedIds.push(delId);
-            if(state.flights.length!==before)changed=true;
-          }
           if(!actLog.some(e=>e.id===obj.id)){
             actLog.unshift(obj);changed=true;
           }
