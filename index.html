@@ -376,10 +376,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
         <label>Пилот</label>
         <input id="qf-pilot" list="dl-pilots" placeholder="Имя" autocomplete="off">
       </div>
-      <div style="width:46px">
-        <label>#</label>
-        <input id="qf-num" type="number" min="1" placeholder="1">
-      </div>
+
       <div style="min-width:100px;flex:1.2">
         <label>Точка</label>
         <input id="qf-target" list="dl-targets" placeholder="305 Вишня" autocomplete="off">
@@ -1455,6 +1452,13 @@ function renderFlights(){
     document.getElementById('flightList').innerHTML='<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
     fillDataLists();return;
   }
+  // Автонумерация: считаем вылеты каждого пилота за каждый день
+  const pilotDayCount={};
+  [...f].sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||''))).forEach(x=>{
+    const key=(x.pilot||'')+'|'+(x.date||'');
+    pilotDayCount[key]=(pilotDayCount[key]||0)+1;
+    x._autoNum=pilotDayCount[key];
+  });
   document.getElementById('flightList').innerHTML=`
     <table style="table-layout:fixed;width:100%">
       <thead><tr>
@@ -1464,7 +1468,6 @@ function renderFlights(){
         <th style="width:120px">Точка</th>
         <th style="width:90px">Боеприпас</th>
         <th style="width:95px">БПЛА</th>
-        <th style="width:30px">#</th>
         <th style="width:90px">Задача</th>
         <th style="width:75px">Борт</th>
         <th>Примечание</th>
@@ -1473,22 +1476,21 @@ function renderFlights(){
         ${f.map(x=>{
           const idx=state.flights.indexOf(x);
           const editRow=renderFlightEditRow(x,idx);
+          const num=x._autoNum||x.flightnum||'';
           return `<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
             <td style="white-space:nowrap">${x.date||'—'}</td>
             <td style="white-space:nowrap;color:var(--muted)">${x.time||'—'}</td>
-            <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.pilot||'—'}</td>
+            <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${num?'<span style="color:var(--muted);font-weight:400;font-size:10px">#'+num+' </span>':''}${x.pilot||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.target||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.ammo||'—'}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.drone||'—'}</td>
-            <td style="color:var(--muted);text-align:center">${x.flightnum||''}</td>
             <td><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
-          </tr>${editRow?`<tr><td colspan="10" style="padding:0;border:none">${editRow}</td></tr>`:''}`
+          </tr>${editRow?`<tr><td colspan="9" style="padding:0;border:none">${editRow}</td></tr>`:''}`
         }).join('')}
       </tbody>
     </table>`;
-  fillDataLists();
 }
 
 function fillDataLists(){
@@ -2978,7 +2980,11 @@ function autoFillFlightNum(){
 
 function saveQuickFlight(){
   const pilot=(document.getElementById('qf-pilot').value||'').trim();
-  const num=document.getElementById('qf-num').value;
+  // Автонумерация: считаем вылеты пилота за сегодня
+  const today2=new Date().toISOString().slice(0,10);
+  const todayPilotFlights=state.flights.filter(f=>f.pilot===pilot&&f.date===today2);
+  const maxNum2=todayPilotFlights.reduce((m,f)=>Math.max(m,f.flightnum||0),0);
+  const num=maxNum2+1;
   const target=(document.getElementById('qf-target').value||'').trim();
   const ammoRaw=(document.getElementById('qf-ammo').value||'').trim();
   const drone=(document.getElementById('qf-drone').value||'').trim();
@@ -2996,7 +3002,7 @@ function saveQuickFlight(){
     date:now.toISOString().slice(0,10),
     time:now.toTimeString().slice(0,5),
     pilot,
-    flightnum:num?parseInt(num):null,
+    flightnum:num,
     target,ammo,drone,
     result:done?'yes':'no',
     returned:returned?'yes':'no',
