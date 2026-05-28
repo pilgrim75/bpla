@@ -933,28 +933,28 @@ function renderAdminFlights(){
   document.getElementById('adminFlightList').innerHTML=indexed.length?`
     <table class="adm-flight-table">
       <thead><tr>
-        <th style="width:85px">Дата</th>
-        <th style="width:45px">Время</th>
-        <th style="width:70px">Пилот</th>
-        <th style="width:75px">Точка</th>
-        <th style="width:70px">Боеприпас</th>
-        <th style="width:70px">БПЛА</th>
+        <th style="width:90px">Дата</th>
+        <th style="width:52px">Время</th>
+        <th style="width:80px">Пилот</th>
+        <th style="width:110px">Точка</th>
+        <th style="width:85px">Боеприпас</th>
+        <th style="width:85px">БПЛА</th>
         <th style="width:32px">#</th>
-        <th style="width:34px">Зад</th>
-        <th style="width:60px">Борт</th>
+        <th style="width:36px">Зад</th>
+        <th style="width:75px">Борт</th>
         <th>Примечание</th>
-        <th style="width:52px">Действие</th>
+        <th style="width:36px"></th>
       </tr></thead>
       <tbody>${indexed.map(({x,i})=>`<tr>
-        <td><input style="width:83px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"></td>
-        <td><input style="width:43px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
-        <td><input style="width:68px" value="${x.pilot}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
-        <td><input style="width:73px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
-        <td><input style="width:68px" list="dl-ammo-catalog" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" autocomplete="off"></td>
-        <td><input style="width:68px" list="dl-drones-smart" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" autocomplete="off"></td>
+        <td><input style="width:88px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"></td>
+        <td><input style="width:50px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
+        <td><input style="width:78px" value="${x.pilot||''}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
+        <td><input style="width:108px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
+        <td><input style="width:83px" list="dl-ammo-catalog" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" autocomplete="off"></td>
+        <td><input style="width:83px" list="dl-drones-smart" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" autocomplete="off"></td>
         <td><input style="width:30px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
-        <td><select style="width:32px;padding:1px 1px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
-        <td><select style="width:58px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
+        <td><select style="width:34px;padding:1px 1px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
+        <td><select style="width:73px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
         <td><input style="width:100%" value="${x.note||''}" onchange="adminEditFlight(${i},'note',this.value)"></td>
         <td><button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
       </tr>`).join('')}
