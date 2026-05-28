@@ -354,7 +354,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 <div class="page" id="page-flights">
   <div class="section-head">
     <div class="section-title">Журнал вылетов</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       <input style="width:130px" type="date" id="filterDate" onchange="renderFlights()">
       <select style="width:120px" id="filterPilot" onchange="renderFlights()">
         <option value="">Все пилоты</option>
@@ -362,79 +362,64 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
     </div>
   </div>
 
-  <!-- БЫСТРАЯ ФОРМА ВЫЛЕТА (для пилотов) -->
-  <div class="card" id="quickFlightCard" style="margin-bottom:10px;border-color:var(--green3)">
-    <div class="card-title" style="color:var(--green)">⚡ Быстрый ввод вылета</div>
-    <datalist id="dl-ammo-catalog"></datalist>
-    <div style="display:grid;grid-template-columns:1fr 60px 1fr 1fr 1fr;gap:6px;align-items:end;margin-bottom:8px">
-      <div>
+  <!-- datalists -->
+  <datalist id="dl-ammo-catalog"></datalist>
+  <datalist id="dl-pilots"></datalist>
+  <datalist id="dl-ammo"></datalist>
+  <datalist id="dl-drones"></datalist>
+  <datalist id="dl-targets"></datalist>
+
+  <!-- ФОРМА ВВОДА ВЫЛЕТА -->
+  <div class="card" id="quickFlightCard" style="margin-bottom:8px;border-color:var(--green3)">
+    <div style="display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap">
+      <div style="min-width:90px;flex:1">
         <label>Пилот</label>
         <input id="qf-pilot" list="dl-pilots" placeholder="Имя" autocomplete="off">
       </div>
-      <div>
+      <div style="width:46px">
         <label>#</label>
         <input id="qf-num" type="number" min="1" placeholder="1">
       </div>
-      <div>
+      <div style="min-width:100px;flex:1.2">
         <label>Точка</label>
         <input id="qf-target" list="dl-targets" placeholder="305 Вишня" autocomplete="off">
       </div>
-      <div>
+      <div style="min-width:90px;flex:1">
         <label>Боеприпас</label>
         <input id="qf-ammo" list="dl-ammo-catalog" placeholder="Пом2" autocomplete="off">
       </div>
-      <div>
+      <div style="min-width:100px;flex:1">
         <label>БПЛА</label>
         <input id="qf-drone" list="dl-drones-smart" placeholder="Гамаюн13" autocomplete="off">
       </div>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <label style="text-transform:none;font-size:12px;letter-spacing:0;display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="qf-done" checked style="width:auto"> Задача выполнена
-      </label>
-      <label style="text-transform:none;font-size:12px;letter-spacing:0;display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="qf-returned" checked style="width:auto"> Борт вернул
-      </label>
-      <input id="qf-note" placeholder="Примечание (необязательно)" style="flex:1;min-width:150px">
-      <button class="btn btn-success" onclick="saveQuickFlight()" style="white-space:nowrap">✓ Записать вылет</button>
-    </div>
-    <div id="qf-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
-  </div>
-
-  <div class="card" style="margin-bottom:12px">
-    <div class="card-title">Добавить вылет вручную</div>
-
-    <!-- datalists — заполняются динамически -->
-    <datalist id="dl-pilots"></datalist>
-    <datalist id="dl-ammo"></datalist>
-    <datalist id="dl-drones"></datalist>
-    <datalist id="dl-targets"></datalist>
-
-    <div class="form-row cols3">
-      <div><label>Дата</label><input id="mf-date" type="date"></div>
-      <div><label>Время</label><input id="mf-time" type="time"></div>
-      <div><label>Пилот</label><input id="mf-pilot" list="dl-pilots" placeholder="Рама" autocomplete="off"></div>
-    </div>
-    <div class="form-row cols3">
-      <div><label>Точка</label><input id="mf-target" list="dl-targets" placeholder="305 Вишня" autocomplete="off"></div>
-      <div><label>Боеприпас / груз</label><input id="mf-ammo" list="dl-ammo" placeholder="Пом2 / Провизия" autocomplete="off"></div>
-      <div><label>Номер вылета</label><input id="mf-flightnum" type="number" min="1" placeholder="1"></div>
-    </div>
-    <div class="form-row cols3">
-      <div><label>БПЛА</label><input id="mf-drone" list="dl-drones" placeholder="Гамаюн13" autocomplete="off"></div>
-      <div><label>Задача</label>
-        <select id="mf-result"><option value="yes">Выполнена</option><option value="no">Не выполнена</option></select>
+      <div style="width:90px">
+        <label>Задача</label>
+        <select id="qf-result">
+          <option value="yes">✅ выполнена</option>
+          <option value="no">❌ нет</option>
+        </select>
       </div>
-      <div><label>Борт</label>
-        <select id="mf-returned"><option value="yes">Вернул</option><option value="no">Потерян / списать</option></select>
+      <div style="width:90px">
+        <label>Борт</label>
+        <select id="qf-returned">
+          <option value="yes">вернул</option>
+          <option value="no">потерян</option>
+        </select>
+      </div>
+      <div style="min-width:120px;flex:1.5">
+        <label>Примечание</label>
+        <input id="qf-note" placeholder="необязательно">
+      </div>
+      <div style="padding-bottom:1px">
+        <label style="visibility:hidden">.</label>
+        <button class="btn btn-success" onclick="saveQuickFlight()" style="white-space:nowrap;height:29px">✓ Записать</button>
       </div>
     </div>
-    <div style="margin-bottom:10px"><label>Примечание</label><input id="mf-note" placeholder="Перебили видео, потеря управления..."></div>
-    <button class="btn btn-success" onclick="saveManualFlight()">Сохранить вылет</button>
+    <div id="qf-status" style="font-size:10px;color:var(--green2);margin-top:4px;min-height:14px"></div>
   </div>
 
-  <div class="card">
-    <div class="card-title">Журнал</div>
+  <!-- ЖУРНАЛ ТАБЛИЦЕЙ -->
+  <div class="card" style="overflow-x:auto">
     <div id="flightList"></div>
   </div>
 </div>
@@ -1458,7 +1443,7 @@ function renderFlights(){
   const fp=document.getElementById('filterPilot').value;
   const fd=document.getElementById('filterDate').value;
   let f=[...state.flights];
-  if(fp)f=f.filter(x=>x.pilot.includes(fp));
+  if(fp)f=f.filter(x=>x.pilot&&x.pilot.includes(fp));
   if(fd)f=f.filter(x=>x.date===fd);
   const toMs=x=>{
     const t=(x.time||'00:00').trim();
@@ -1466,19 +1451,43 @@ function renderFlights(){
     return new Date((x.date||'2000-01-01')+'T'+norm);
   };
   f.sort((a,b)=>toMs(b)-toMs(a));
-  const header=`<div style="display:grid;grid-template-columns:130px 90px 1fr 1fr 110px 120px 90px;gap:6px;padding:6px 12px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;border-bottom:0.5px solid var(--border)">
-    <div>Пилот</div><div>Дата/Время</div><div>Точка</div><div>Боеприпас</div><div>БПЛА</div><div>Задача</div><div>Борт</div>
-  </div>`;
-  document.getElementById('flightList').innerHTML=f.length?(header+f.map(x=>`
-    <div class="flight-entry">
-      <div class="flight-pilot">${x.flightnum?'<span style="color:var(--muted);font-weight:400">#'+x.flightnum+'</span> ':''} ${x.pilot}</div>
-      <div class="flight-time">${x.date}<br>${x.time}</div>
-      <div class="flight-cell">${x.target||'—'}</div>
-      <div class="flight-cell">${x.ammo||'—'}</div>
-      <div class="flight-cell">${x.drone||'—'}</div>
-      <div class="flight-tag"><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></div>
-      <div class="flight-tag"><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}">${x.returned==='yes'?'вернул':'потерян'}</span>${x.note?`<br><span style="font-size:10px;color:var(--muted)">⚠ ${x.note}</span>`:''}</div>
-    </div>${renderFlightEditRow(x,state.flights.indexOf(x))}`).join('')):'<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
+  if(!f.length){
+    document.getElementById('flightList').innerHTML='<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
+    fillDataLists();return;
+  }
+  document.getElementById('flightList').innerHTML=`
+    <table style="table-layout:fixed;width:100%">
+      <thead><tr>
+        <th style="width:100px">Дата</th>
+        <th style="width:55px">Время</th>
+        <th style="width:80px">Пилот</th>
+        <th style="width:120px">Точка</th>
+        <th style="width:90px">Боеприпас</th>
+        <th style="width:95px">БПЛА</th>
+        <th style="width:30px">#</th>
+        <th style="width:90px">Задача</th>
+        <th style="width:75px">Борт</th>
+        <th>Примечание</th>
+      </tr></thead>
+      <tbody>
+        ${f.map(x=>{
+          const idx=state.flights.indexOf(x);
+          const editRow=renderFlightEditRow(x,idx);
+          return `<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
+            <td style="white-space:nowrap">${x.date||'—'}</td>
+            <td style="white-space:nowrap;color:var(--muted)">${x.time||'—'}</td>
+            <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.pilot||'—'}</td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.target||'—'}</td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.ammo||'—'}</td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.drone||'—'}</td>
+            <td style="color:var(--muted);text-align:center">${x.flightnum||''}</td>
+            <td><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
+            <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
+          </tr>${editRow?`<tr><td colspan="10" style="padding:0;border:none">${editRow}</td></tr>`:''}`
+        }).join('')}
+      </tbody>
+    </table>`;
   fillDataLists();
 }
 
@@ -2972,8 +2981,8 @@ function saveQuickFlight(){
   const target=(document.getElementById('qf-target').value||'').trim();
   const ammoRaw=(document.getElementById('qf-ammo').value||'').trim();
   const drone=(document.getElementById('qf-drone').value||'').trim();
-  const done=document.getElementById('qf-done').checked;
-  const returned=document.getElementById('qf-returned').checked;
+  const done=document.getElementById('qf-result').value==='yes';
+  const returned=document.getElementById('qf-returned').value==='yes';
   const note=(document.getElementById('qf-note').value||'').trim();
   if(!pilot){alert('Укажите пилота');return;}
   if(!drone){alert('Укажите БПЛА');return;}
@@ -3001,8 +3010,8 @@ function saveQuickFlight(){
   document.getElementById('qf-target').value='';
   document.getElementById('qf-ammo').value='';
   document.getElementById('qf-note').value='';
-  document.getElementById('qf-done').checked=true;
-  document.getElementById('qf-returned').checked=true;
+  document.getElementById('qf-result').value='yes';
+  document.getElementById('qf-returned').value='yes';
   autoFillFlightNum();
   const st=document.getElementById('qf-status');
   st.textContent='✓ Вылет #'+f.flightnum+' записан — '+f.time;
