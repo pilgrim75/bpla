@@ -2585,7 +2585,7 @@ async function authByToken(token){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   if(!url||!token)return false;
   try{
-    const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token));
+    const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token)+'&_='+Date.now());
     const d=await r.json();
     if(d.ok){
       authToken=token;
@@ -3484,7 +3484,8 @@ async function decryptRows(rows, key){
 }
 
 async function loadFromCloud(url, token, key){
-  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
+  // cache-buster чтобы браузер не отдавал кешированный ответ
+  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now());
   const d=await r.json();
   if(d.error)throw new Error(d.error);
   // Загружаем журнал действий если есть
@@ -3614,7 +3615,7 @@ async function pollCloud(){
   try{
     // Берём время последнего поллинга — только новее него
     const since=_lastPollTs;
-    const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since);
+    const r=await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now());
     const d=await r.json();
     if(d.error){console.warn('[POLL]',d.error);return;}
     const newFlights=(d.flights||[]).length;
