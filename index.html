@@ -236,7 +236,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
     <div class="section-title">Складской учёт</div>
     <button class="btn btn-primary btn-sm" id="addDroneBtn" onclick="toggleAddDrone()">+ Добавить БПЛА</button>
   </div>
-  <div class="notice">Передача: техник инициирует → пилот подтверждает получение. Командир может поставить задачу технику.</div>
+
 
   <!-- Глобальный умный список БПЛА — подключается ко всем полям -->
   <datalist id="dl-drones-smart"></datalist>
@@ -706,15 +706,26 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
     <div style="padding-top:10px;border-top:1px solid var(--border)">
       <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text2)">Добавить пользователя</div>
       <div class="form-row cols3">
-        <div><label>Логин</label><input id="nu-login" placeholder="Рама"></div>
+        <div><label>Логин</label><input id="nu-login" placeholder="pop"></div>
         <div><label>Пароль</label><input id="nu-password" type="password" placeholder="пароль"></div>
         <div><label>Роль</label>
-          <select id="nu-role">
+          <select id="nu-role" onchange="nuRoleChange()">
             <option value="pilot">Пилот</option>
             <option value="tech">Техник</option>
             <option value="cmd">Командир</option>
             <option value="admin">Администратор</option>
           </select>
+        </div>
+      </div>
+      <div class="form-row cols2" id="nu-callsign-row">
+        <div>
+          <label>Позывной в базе (имя пилота)</label>
+          <select id="nu-callsign">
+            <option value="">— выбрать из расчётов —</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:center;font-size:11px;color:var(--muted);padding-top:16px">
+          Свяжет логин с вылетами и дронами пилота
         </div>
       </div>
       <div class="form-row cols2">
@@ -843,11 +854,11 @@ function showPage(id,btn){
   if(id==='inventory')renderInventory();
   if(id==='report'){fillReportFilters();buildReport();}
   if(id==='settings'){
-    // Обновляем поле ключа в форме создания пользователя
     const nuke=document.getElementById('nu-enckey');
     if(nuke)nuke.value=cfg.key||localStorage.getItem('cfg_key')||'';
     if(authToken)loadUsersList();
     renderSettingsStatus();
+    if(typeof nuRoleChange==='function')nuRoleChange();
   }
   if(id==='admin'){
     // Инициализируем дефолтные даты фильтра
@@ -2677,6 +2688,20 @@ function logout(){
 }
 
 // ============ УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ============
+function nuRoleChange(){
+  const role=document.getElementById('nu-role').value;
+  const row=document.getElementById('nu-callsign-row');
+  const sel=document.getElementById('nu-callsign');
+  if(role==='pilot'){
+    row.style.display='';
+    // Заполняем список из расчётов
+    sel.innerHTML='<option value="">— выбрать из расчётов —</option>'
+      +state.squads.map(sq=>`<option value="${sq.pilot}">${sq.pilot}</option>`).join('');
+  } else {
+    row.style.display='none';
+  }
+}
+
 async function createUser(){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   if(!url){alert('URL не настроен');return;}
@@ -2685,14 +2710,13 @@ async function createUser(){
   const pass=document.getElementById('nu-password').value.trim();
   const role=document.getElementById('nu-role').value;
   const encKey=document.getElementById('nu-enckey').value.trim()||cfg.key;
+  const callsign=role==='pilot'?(document.getElementById('nu-callsign')?.value||''):'';
   if(!login||!pass){alert('Введите логин и пароль');return;}
+  if(role==='pilot'&&!callsign){alert('Выберите позывной пилота из расчётов');return;}
 
   try{
-    // Отправляем через no-cors (не читаем ответ)
     await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'create_user',admin_token:authToken,login,password:pass,role})});
-    // Ждём чуть и читаем список пользователей чтобы получить токен
-    // Ждём чуть дольше — Apps Script может быть медленным
     await new Promise(r=>setTimeout(r,2500));
     const rList=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
     const dList=await rList.json();
@@ -2703,6 +2727,27 @@ async function createUser(){
       return;
     }
     const token=newUser.token;
+
+    // Если пилот — переименовываем позывной в расчётах и вылетах на логин
+    if(role==='pilot'&&callsign&&callsign!==login){
+      let changed=false;
+      // Обновляем расчёты
+      state.squads.forEach(sq=>{if(sq.pilot===callsign){sq.pilot=login;changed=true;}});
+      // Обновляем вылеты
+      state.flights.forEach(f=>{if(f.pilot===callsign){f.pilot=login;changed=true;}});
+      // Обновляем передачи
+      (state.transfers||[]).forEach(t=>{
+        if(t.pilot===callsign)t.pilot=login;
+        if(t.from===callsign)t.from=login;
+        if(t.to===callsign)t.to=login;
+      });
+      if(changed){
+        saveLocal();
+        await syncToCloud(true);
+        renderInventory();renderFlights();renderDashboard();
+        showSyncToast('✓ Позывной «'+callsign+'» → логин «'+login+'»');
+      }
+    }
 
     // Генерируем ссылку
     const base=window.location.origin+window.location.pathname;
