@@ -1899,8 +1899,15 @@ function buildReport(){
     };
     // Дедупликация только для не-потерь (передачи могут задваиваться технически)
     const seenNonLoss=new Set();
+    const seenLoss=new Set();
     const moveItems=recentTransfers.filter(op=>{
-      if(op.type==='loss')return true; // потери всегда показываем
+      if(op.type==='loss'){
+        // Дедуплицируем потери по ключу пилот+борт+дата+время
+        const lk=(op.pilot||'')+'|'+(op.drone||'')+'|'+(op.date||'')+'|'+(op.time||'');
+        if(seenLoss.has(lk))return false;
+        seenLoss.add(lk);
+        return true;
+      }
       const k=moveFmt(op);
       if(seenNonLoss.has(k))return false;
       seenNonLoss.add(k);
@@ -1912,8 +1919,8 @@ function buildReport(){
     // Текст для копирования
     window._reportText=[
       'ФПВ ИСР',
-      ...state.squads.flatMap(sq=>['','✅ Пилот '+sq.pilot,...sq.drones.map(d=>d.name+' — '+d.qty+' шт.')]),
-      '','✅ Склад:',...stockBG.map(d=>d.name+' — '+d.qty+' шт.'),
+      ...state.squads.flatMap(sq=>['','✅ Пилот '+sq.pilot,...sq.drones.filter(d=>d.qty!==0).map(d=>d.name+' — '+d.qty+' шт.')]),
+      '','✅ Склад:',...stockBG.filter(d=>d.qty>0).map(d=>d.name+' — '+d.qty+' шт.'),
       ...(stockNBG.length?['','Не БГ:',...stockNBG.map(d=>d.name+' — '+d.qty+' шт.')]:[]),
       ...(moveKeys.length?['','Изменения (последние 24ч):',...moveKeys]:[]),
     ].join('\n');
@@ -1924,9 +1931,9 @@ function buildReport(){
       :'<div style="color:var(--muted);font-size:11px;margin-top:8px">Изменений за последние 24ч нет</div>';
     out.innerHTML='<div class="report-block">'
       +'<div class="rb-head">ФПВ ИСР</div>'
-      +state.squads.map(sq=>'<div style="margin:8px 0 4px;font-weight:700">✅ Пилот '+sq.pilot+'</div>'+sq.drones.map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')).join('')
+      +state.squads.map(sq=>'<div style="margin:8px 0 4px;font-weight:700">✅ Пилот '+sq.pilot+'</div>'+sq.drones.filter(d=>d.qty!==0).map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')).join('')
       +'<div style="margin:10px 0 4px;font-weight:700">✅ Склад:</div>'
-      +stockBG.map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')
+      +stockBG.filter(d=>d.qty>0).map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')
       +(stockNBG.length?'<div style="margin:10px 0 4px;font-weight:700">Не БГ:</div>'+stockNBG.map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join(''):'')
       +movementsBlock
       +'</div>';
