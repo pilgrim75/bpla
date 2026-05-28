@@ -2513,7 +2513,7 @@ async function authByToken(token){
 }
 
 async function initAuth(){
-  // Убеждаемся что cfg.url загружен
+  // Убеждаемся что cfg загружен из localStorage
   if(!cfg.url)cfg.url=localStorage.getItem('cfg_url')||'';
   if(!cfg.key)cfg.key=localStorage.getItem('cfg_key')||'';
 
@@ -2526,29 +2526,25 @@ async function initAuth(){
 
   if(urlToken){
     window.history.replaceState({},'',window.location.pathname);
-    // Сохраняем URL сервера если передан в ссылке
     if(urlServer){
       cfg.url=urlServer;
       localStorage.setItem('cfg_url',urlServer);
       const uf=document.getElementById('cfg-url');
       if(uf)uf.value=urlServer;
     }
-    // Сохраняем ключ если передан
     if(urlKey){
       cfg.key=urlKey;
       localStorage.setItem('cfg_key',urlKey);
       const kf=document.getElementById('cfg-key');
       if(kf)kf.value=urlKey;
     }
-    // Сохраняем токен сразу
     authToken=urlToken;
     localStorage.setItem('auth_token',urlToken);
     const ok=await authByToken(urlToken);
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
-      logAction('auth','login','Вход по ссылке: '+urlUser);
-      // Загружаем свежие данные из облака при входе по ссылке
+      logAction('auth','login','Вход по ссылке: '+(urlUser||''));
       if(cfg.url)await syncFromCloudSilent();
       return;
     } else {
@@ -2560,24 +2556,33 @@ async function initAuth(){
 
   // 2. Проверяем сохранённый токен
   const saved=localStorage.getItem('auth_token');
-  if(saved){
+  if(saved&&cfg.url){
     authToken=saved;
-    const ok=await authByToken(saved);
+    // Пробуем дважды — сеть может быть нестабильна
+    let ok=await authByToken(saved);
+    if(!ok){
+      await new Promise(r=>setTimeout(r,1500));
+      ok=await authByToken(saved);
+    }
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
       return;
     } else {
       authToken='';
-      localStorage.removeItem('auth_token');
+      // НЕ удаляем токен — возможно временная ошибка сети
+      // localStorage.removeItem('auth_token');
     }
   }
 
-  // 3. Если URL настроен — показываем экран входа
-  if(cfg.url){
-    showLoginScreen();
+  // 3. Если URL не настроен — работаем локально без авторизации
+  if(!cfg.url){
+    hideLoginScreen();
+    return;
   }
-  // Если URL не настроен — работаем локально без авторизации
+
+  // 4. URL настроен но токен не прошёл — показываем экран входа
+  showLoginScreen();
 }
 
 function showLoginError(msg){
