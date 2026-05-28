@@ -934,7 +934,7 @@ function renderAdminFlights(){
     <table class="adm-flight-table">
       <thead><tr>
         <th style="width:100px">Дата</th>
-        <th style="width:62px">Время</th>
+        <th style="width:72px">Время</th>
         <th style="width:80px">Пилот</th>
         <th style="width:110px">Точка</th>
         <th style="width:85px">Боеприпас</th>
@@ -947,7 +947,7 @@ function renderAdminFlights(){
       </tr></thead>
       <tbody>${indexed.map(({x,i})=>`<tr>
         <td><input style="width:98px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"></td>
-        <td><input style="width:60px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
+        <td><input style="width:70px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
         <td><input style="width:78px" value="${x.pilot||''}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
         <td><input style="width:108px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
         <td><input style="width:83px" list="dl-ammo-catalog" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" autocomplete="off"></td>
