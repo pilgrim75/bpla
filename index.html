@@ -2637,11 +2637,16 @@ async function createUser(){
     await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'create_user',admin_token:authToken,login,password:pass,role})});
     // Ждём чуть и читаем список пользователей чтобы получить токен
-    await new Promise(r=>setTimeout(r,1500));
+    // Ждём чуть дольше — Apps Script может быть медленным
+    await new Promise(r=>setTimeout(r,2500));
     const rList=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
     const dList=await rList.json();
     const newUser=(dList.users||[]).find(u=>u.login===login);
-    if(!newUser){alert('Пользователь создан но токен не получен. Обновите список пользователей.');return;}
+    if(!newUser||!newUser.token){
+      alert('Пользователь создан, но не удалось получить токен автоматически.\nОткройте лист users в Google Sheets и скопируйте токен вручную.');
+      loadUsersList();
+      return;
+    }
     const token=newUser.token;
 
     // Генерируем ссылку
@@ -2694,20 +2699,27 @@ async function regenerateToken(login){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   if(!url||!authToken)return;
   try{
+    // Отправляем запрос на смену токена
     await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'update_user',admin_token:authToken,login,new_token:true})});
-    await new Promise(r=>setTimeout(r,1500));
-    const rList2=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
-    const dList2=await rList2.json();
-    const updUser=(dList2.users||[]).find(u=>u.login===login);
-    if(!updUser){alert('Токен обновлён. Обновите список пользователей вручную.');return;}
+    // Ждём пока Apps Script обработает
+    await new Promise(r=>setTimeout(r,2000));
+    // Читаем обновлённый список пользователей
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
+    const d=await r.json();
+    const updUser=(d.users||[]).find(u=>u.login===login);
+    if(!updUser||!updUser.token){
+      alert('Токен сменён. Откройте лист users в Google Sheets и скопируйте новый токен вручную.');
+      return;
+    }
     const base=window.location.origin+window.location.pathname;
     const encKey=cfg.key;
-    const serverUrl2=cfg.url||localStorage.getItem('cfg_url')||'';
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(serverUrl2);
+    const serverUrl=cfg.url||'';
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(serverUrl);
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     showSyncToast('✓ Новая ссылка сгенерирована');
+    loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
 }
 
