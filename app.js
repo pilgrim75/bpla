@@ -1,4 +1,3 @@
-
 // ============ STATE ============
 const ROLES_BASE={admin:'Администратор',cmd:'Командир',tech:'Техник'};
 const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','Упырь11','Упырь18','Курьер21'];
@@ -604,18 +603,24 @@ function saveTransfer(){
   }
 
   if(!state.transfers)state.transfers=[];
-  state.transfers.unshift({
+  const op={
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
     type:'transfer',
     date:new Date().toISOString().slice(0,10),
     time:new Date().toTimeString().slice(0,5),
     from,to,drone,qty,note
-  });
+  };
+  state.transfers.unshift(op);
   saveLocal();
+  appendToCloud('transfers',op);
+  // Немедленно синхронизируем склад и расчёты — не ждём 2 сек
+  setTimeout(()=>syncStockAndSquads(),300);
   renderInventory();
   renderDashboard();
   document.getElementById('transferCard').style.display='none';
   document.getElementById('transDrone').value='';
   document.getElementById('transNote').value='';
+  logAction('transfer','add',from+' → '+to+': '+drone+' ×'+qty);
 }
 
 function saveExchange(){
@@ -2836,7 +2841,8 @@ async function appendToCloud(sheet, obj){
 }
 
 // ============ АВТОПОЛЛИНГ — читаем новые записи других пользователей ============
-let _lastPollTs=Date.now(); // Начинаем с текущего момента — не грузим всю историю
+let _lastPollTs=Date.now();
+let _lastStockTs=0; // Начинаем с текущего момента — не грузим всю историю
 async function pollCloud(){
   const url=cfg.url||localStorage.getItem('cfg_url')||'';
   const key=cfg.key||localStorage.getItem('cfg_key')||'';
@@ -2895,19 +2901,22 @@ async function pollCloud(){
       try{localStorage.setItem('act_log',JSON.stringify(actLog));}catch(e){}
     }
 
-    // Для склада и расчётов — заменяем если пришли обновления (они всегда пишутся полностью)
-    if(d.stock&&d.stock.length){
-      const decStock=await Promise.all(d.stock.map(async r=>{
-        try{const j=key?await aesDecrypt(r.data,key):r.data;return JSON.parse(j);}catch(e){return null;}
-      })).then(a=>a.filter(Boolean));
-      if(decStock.length){state.stock=decStock;changed=true;}
-    }
-    if(d.squads&&d.squads.length){
-      const decSquads=await Promise.all(d.squads.map(async r=>{
-        try{const j=key?await aesDecrypt(r.data,key):r.data;const o=JSON.parse(j);
-          if(!Array.isArray(o.drones))o.drones=[];return o;}catch(e){return null;}
-      })).then(a=>a.filter(Boolean));
-      if(decSquads.length){state.squads=decSquads;changed=true;}
+    // Для склада и расчётов — если timestamp склада в облаке новее нашего, запрашиваем полную синхронизацию
+    if(d.stock_updated_ts&&d.stock_updated_ts>(_lastStockTs||0)){
+      console.log('[POLL] Склад обновился в облаке, запрашиваем полную синхронизацию');
+      _lastStockTs=d.stock_updated_ts;
+      // Тихая полная синхронизация только склада и расчётов
+      try{
+        const r2=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
+        const d2=await r2.json();
+        if(!d2.error){
+          const loaded=await loadFromCloud(url,token,key);
+          state.stock=loaded.stock;
+          state.squads=loaded.squads;
+          changed=true;
+          console.log('[POLL] Склад и расчёты обновлены');
+        }
+      }catch(e){console.warn('[POLL] stock sync error:',e.message);}
     }
 
     if(changed){
