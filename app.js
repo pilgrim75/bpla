@@ -273,8 +273,23 @@ function adminAddStock(){
   const q=parseInt(document.getElementById('adm-newQty').value)||1;
   const s=document.getElementById('adm-newStatus').value;
   if(!n)return;
-  state.stock.push({name:n,qty:q,status:s});
+  const ex=state.stock.find(d=>d.name.toLowerCase()===n.toLowerCase()&&d.status===s);
+  if(ex){ex.qty+=q;}
+  else{state.stock.push({name:n,qty:q,status:s});}
+  const op={
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
+    type:'arrival',
+    date:new Date().toISOString().slice(0,10),
+    time:new Date().toTimeString().slice(0,5),
+    drone:n,qty:q,note:'статус: '+s
+  };
+  if(!state.transfers)state.transfers=[];
+  state.transfers.unshift(op);
   saveLocal();
+  localStorage.setItem('last_local_change',Date.now().toString());
+  appendToCloud('transfers',op);
+  syncStockAndSquads();
+  logAction('stock','add','Поступление (адм): '+n+' ×'+q+' ('+s+')');
   renderAdminStock();
   renderDashboard();
   document.getElementById('adm-newName').value='';
@@ -2761,17 +2776,23 @@ async function syncFromCloudSilent(){
     const loaded=await loadFromCloud(url,token,key);
     const lastSync=parseInt(localStorage.getItem('last_sync')||'0');
     const lastLocalChange=parseInt(localStorage.getItem('last_local_change')||'0');
-    // Если есть несинхронизированные локальные изменения — не затираем их
     const hasUnsyncedChanges=lastLocalChange>lastSync;
+    // Вылеты всегда обновляем из облака
     state.flights=loaded.flights;
     if(!hasUnsyncedChanges){
-      // Локальных несинхронизированных изменений нет — безопасно обновляем
+      // Нет несинхронизированных изменений — безопасно обновляем всё
       state.stock=loaded.stock;
       state.squads=loaded.squads;
+      state.transfers=loaded.transfers;
     } else {
-      console.log('[SYNC] Пропускаем обновление склада — есть несинхронизированные изменения');
+      // Есть несинхронизированные изменения — сливаем transfers (добавляем новые из облака)
+      console.log('[SYNC] Защита локальных изменений — сливаем transfers вместо замены');
+      const localIds=new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
+      const newFromCloud=(loaded.transfers||[]).filter(t=>t.id&&!localIds.has(t.id));
+      state.transfers=[...(state.transfers||[]),...newFromCloud]
+        .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
     }
-    state.transfers=loaded.transfers;state.offlineQueue=[];
+    state.offlineQueue=[];
     try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
     localStorage.setItem('last_sync',Date.now().toString());
     localStorage.removeItem('last_local_change');
