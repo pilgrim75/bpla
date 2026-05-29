@@ -2942,18 +2942,23 @@ async function pollCloud(){
 
     // Для склада и расчётов — если timestamp склада в облаке новее нашего, запрашиваем полную синхронизацию
     if(d.stock_updated_ts&&d.stock_updated_ts>(_lastStockTs||0)){
-      console.log('[POLL] Склад обновился в облаке, запрашиваем полную синхронизацию');
+      console.log('[POLL] Склад обновился в облаке, загружаем только склад и расчёты');
       _lastStockTs=d.stock_updated_ts;
-      // Тихая полная синхронизация только склада и расчётов
       try{
         const r2=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
         const d2=await r2.json();
         if(!d2.error){
-          const loaded=await loadFromCloud(url,token,key);
-          state.stock=loaded.stock;
-          state.squads=loaded.squads;
-          changed=true;
-          console.log('[POLL] Склад и расчёты обновлены');
+          // Расшифровываем только stock и squads — flights НЕ трогаем
+          const decStock=await Promise.all((d2.stock||[]).map(async r=>{
+            try{return JSON.parse(key?await aesDecrypt(r.data,key):r.data);}catch(e){return null;}
+          })).then(a=>a.filter(Boolean));
+          const decSquads=await Promise.all((d2.squads||[]).map(async r=>{
+            try{const o=JSON.parse(key?await aesDecrypt(r.data,key):r.data);
+              if(!Array.isArray(o.drones))o.drones=[];return o;}catch(e){return null;}
+          })).then(a=>a.filter(Boolean));
+          if(decStock.length||d2.stock?.length===0){state.stock=decStock;changed=true;}
+          if(decSquads.length||d2.squads?.length===0){state.squads=decSquads;changed=true;}
+          console.log('[POLL] Склад обновлён:',decStock.length,'позиций, расчётов:',decSquads.length);
         }
       }catch(e){console.warn('[POLL] stock sync error:',e.message);}
     }
@@ -2995,15 +3000,16 @@ async function syncStockAndSquads(){
     }
     const stock=await Promise.all(state.stock.map((d,i)=>encRow({...d,id:d.id||(ts+i)})));
     const squads=await Promise.all(state.squads.map((sq,i)=>encRow({...sq,id:sq.id||(ts+i)})));
-    const body=JSON.stringify({action:'write',token,data:{stock,squads,flights:[],transfers:[]}});
+    // flights и transfers НЕ передаём (null) — writeAll их не тронет
+    const body=JSON.stringify({action:'write',token,data:{stock,squads}});
     try{
       await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors',redirect:'follow'});
     }catch(e){
       await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
     }
-    // Склад синхронизирован — снимаем метку несинхронизированных изменений
     localStorage.setItem('last_sync',Date.now().toString());
     localStorage.removeItem('last_local_change');
+    console.log('[SYNC] stock+squads OK');
   }catch(e){console.warn('[SYNC STOCK]',e.message);}
 }
 
