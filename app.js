@@ -533,18 +533,24 @@ function addDrone(){
   const ex=state.stock.find(d=>d.name.toLowerCase()===n.toLowerCase()&&d.status==='bg');
   if(ex){ex.qty+=q;}
   else{state.stock.push({name:n,qty:q,status:'bg'});}
-  if(!state.transfers)state.transfers=[];
-  state.transfers.unshift({
+  const op={
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
     type:'arrival',
     date:new Date().toISOString().slice(0,10),
     time:new Date().toTimeString().slice(0,5),
     drone:n,qty:q,note:''
-  });
+  };
+  if(!state.transfers)state.transfers=[];
+  state.transfers.unshift(op);
   saveLocal();
+  localStorage.setItem('last_local_change',Date.now().toString());
+  appendToCloud('transfers',op);
+  syncStockAndSquads();
   renderInventory();
   toggleAddDrone();
   document.getElementById('newDroneName').value='';
   document.getElementById('newDroneQty').value='1';
+  logAction('stock','add','Поступление: '+n+' ×'+q);
 }
 
 function openTransferForm(){
@@ -612,8 +618,8 @@ function saveTransfer(){
   };
   state.transfers.unshift(op);
   saveLocal();
+  localStorage.setItem('last_local_change',Date.now().toString());
   appendToCloud('transfers',op);
-  // Немедленно синхронизируем склад и расчёты — не ждём 2 сек
   setTimeout(()=>syncStockAndSquads(),300);
   renderInventory();
   renderDashboard();
@@ -2753,10 +2759,22 @@ async function syncFromCloudSilent(){
   try{
     const token=authToken||localStorage.getItem('auth_token')||'';
     const loaded=await loadFromCloud(url,token,key);
-    state.flights=loaded.flights;state.stock=loaded.stock;
-    state.squads=loaded.squads;state.transfers=loaded.transfers;state.offlineQueue=[];
+    const lastSync=parseInt(localStorage.getItem('last_sync')||'0');
+    const lastLocalChange=parseInt(localStorage.getItem('last_local_change')||'0');
+    // Если есть несинхронизированные локальные изменения — не затираем их
+    const hasUnsyncedChanges=lastLocalChange>lastSync;
+    state.flights=loaded.flights;
+    if(!hasUnsyncedChanges){
+      // Локальных несинхронизированных изменений нет — безопасно обновляем
+      state.stock=loaded.stock;
+      state.squads=loaded.squads;
+    } else {
+      console.log('[SYNC] Пропускаем обновление склада — есть несинхронизированные изменения');
+    }
+    state.transfers=loaded.transfers;state.offlineQueue=[];
     try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
     localStorage.setItem('last_sync',Date.now().toString());
+    localStorage.removeItem('last_local_change');
     renderDashboard();renderInventory();renderFlights();fillDataLists();rebuildRoleSelector();
     if(ind){ind.className='sync-indicator saved';ind.textContent='● онлайн';}
     renderSettingsStatus();
@@ -2962,6 +2980,9 @@ async function syncStockAndSquads(){
     }catch(e){
       await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
     }
+    // Склад синхронизирован — снимаем метку несинхронизированных изменений
+    localStorage.setItem('last_sync',Date.now().toString());
+    localStorage.removeItem('last_local_change');
   }catch(e){console.warn('[SYNC STOCK]',e.message);}
 }
 
