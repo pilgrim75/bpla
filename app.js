@@ -1599,41 +1599,19 @@ const THEMES={
 };
 
 function applyTheme(name){
-  const t=THEMES[name]||THEMES.terminal;
-  const vars=Object.entries(t).filter(([k])=>k.startsWith('--')).map(([k,v])=>`${k}:${v}`).join(';');
-  const optionStyle=(name==='bw')
-    ?'select option{background:#fff;color:#111}'
-    :(name==='field')
-    ?'select option{background:#2e2b1c;color:#d4c99a}'
-    :'select option{background:#000;color:var(--green)}';
-  // Для bw и wb — явно задаём цвета badge и sync
-  const badgeStyle=(name==='bw')
-    ?`.role-badge{background:#eee;border:1px solid #bbb;color:#333} .role-badge b{color:#111}
-      .sync-indicator{background:#eee;border:1px solid #999;color:#333;font-weight:700}
-      .sync-indicator.saved{background:#d4edda;border-color:#555;color:#155724}
-      .sync-indicator.syncing{background:#fff3cd;border-color:#856404;color:#856404}
-      .nav button{color:#222} .nav button.active{color:#000;border-bottom-color:#000;background:#ddd}
-      .nav button:hover:not(.active){background:#eee;color:#000}`
-    :(name==='wb')
-    ?`.role-badge{background:#111;border:1px solid #444;color:#aaa} .role-badge b{color:#fff}
-      .sync-indicator{border:1px solid #555;color:#ccc}
-      .sync-indicator.saved{border-color:#888;color:#ddd}`
-    :'';
-  document.getElementById('themeStyle').textContent=`:root{${vars}} body{${t.body}font-family:${t['--font']}} ${optionStyle} ${badgeStyle}`;
-  document.querySelector('.topbar').style.cssText=`background:${t.topbarBg};border-bottom:1px solid ${t.topbarBorder};box-shadow:none`;
-  document.querySelector('.logo').style.cssText=`font-size:15px;font-weight:700;letter-spacing:2px;color:${t.topbarColor};text-shadow:none`;
-  document.querySelectorAll('.topbar select').forEach(s=>{
-    s.style.background=t.selectBg;s.style.color=t.selectColor;s.style.borderColor=t.selectBorder;
-  });
-  const logoEl=document.querySelector('.logo');
-  if(t.blink){logoEl.style.setProperty('--cursor-display','inline');}
-  else{logoEl.style.setProperty('--cursor-display','none');}
-  document.body.style.backgroundImage=t.scanlines
-    ?'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,10,0,0.1) 3px,rgba(0,10,0,0.1) 4px)'
-    :'none';
+  const map={terminal:'theme-terminal',wb:'theme-white',bw:'theme-paper',field:'theme-field'};
+  const cls=map[name]||'theme-terminal';
+  document.body.className=document.body.className
+    .replace(/theme-\w+/g,'').trim()+' '+cls;
+  // Полевой планшет — сетка на фоне
   if(name==='field'){
     document.body.style.backgroundImage='repeating-linear-gradient(0deg,transparent,transparent 29px,rgba(0,0,0,0.06) 29px,rgba(0,0,0,0.06) 30px),repeating-linear-gradient(90deg,transparent,transparent 29px,rgba(0,0,0,0.04) 29px,rgba(0,0,0,0.04) 30px)';
+  } else {
+    document.body.style.backgroundImage='';
   }
+  // Обновляем themeStyle — очищаем старые инлайн-переменные
+  const ts=document.getElementById('themeStyle');
+  if(ts)ts.textContent='';
   try{localStorage.setItem('theme',name);}catch(e){}
 }
 
