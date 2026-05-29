@@ -40,9 +40,9 @@ body.theme-paper{
 body.theme-field{
   --bg:#2e3818;--bg2:#252e12;--bg3:#222a0e;
   --green:#c8bc6a;--green2:#98a848;--green3:#5a6838;--green-dim:#1a2008;--green-muted:#4a5830;
-  --amber:#d4a840;--red:#c04828;--muted:#5a6838;
+  --amber:#d4a840;--red:#c04828;--muted:#8a9a60;
   --border:#2a3410;--border2:#303a18;
-  --text:#a8b868;--text2:#6a7848;
+  --text:#c8bc6a;--text2:#c8bc6a;
   --card:#222a0e;
   --accent:#c8bc6a;--accent2:#98a848;--accent3:#5a6838;
   --nav-bg:#252e12;--topbar-bg:#1a2008;--topbar-border:#3a4820;
