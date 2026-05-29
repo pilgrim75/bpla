@@ -53,7 +53,7 @@ body.theme-field{
 /* ============ BASE ============ */
 body{
   font-family:'Times New Roman',Times,serif;
-  background:var(--bg);color:var(--text);font-size:13px;
+  background:var(--bg);color:var(--text);font-size:14px;
   background-image:var(--scanlines);
 }
 .app{display:flex;height:100vh;flex-direction:column}
@@ -76,7 +76,7 @@ body{
 .nav button{
   background:none;border:none;border-right:1px solid var(--border2);
   color:var(--text2);padding:9px 16px;cursor:pointer;
-  font-size:12px;font-weight:700;font-family:'Times New Roman',Times,serif;
+  font-size:13px;font-weight:700;font-family:'Times New Roman',Times,serif;
   letter-spacing:1px;text-transform:uppercase;transition:all .1s;
 }
 .nav button.active{background:var(--green-dim);color:var(--accent);border-bottom:2px solid var(--accent);margin-bottom:-2px}
@@ -93,17 +93,17 @@ body{
 .card{background:var(--card);border:1px solid var(--border2);padding:12px;margin-bottom:0;position:relative}
 .card::before{content:'';position:absolute;top:-1px;left:8px;width:24px;height:1px;background:var(--accent)}
 .card::after{content:'';position:absolute;bottom:-1px;right:8px;width:24px;height:1px;background:var(--accent)}
-.card-title{font-size:10px;color:var(--accent3);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;font-weight:700}
+.card-title{font-size:12px;color:var(--accent3);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;font-weight:700}
 
 /* ============ STATS ============ */
-.stat{font-size:32px;font-weight:700;line-height:1;color:var(--accent)}
-.stat-sub{font-size:12px;color:var(--text2);margin-top:4px}
+.stat{font-size:36px;font-weight:700;line-height:1;color:var(--accent)}
+.stat-sub{font-size:13px;color:var(--text2);margin-top:4px}
 /* Строки статистики — единый стиль везде */
-.stat-row{font-size:12px;color:var(--text2);margin-top:3px;line-height:1.6;display:flex;justify-content:space-between}
+.stat-row{font-size:13px;color:var(--text2);margin-top:3px;line-height:1.6;display:flex;justify-content:space-between}
 .stat-row span:last-child{color:var(--text)}
 
 /* ============ TAGS ============ */
-.tag{display:inline-block;padding:2px 7px;font-size:11px;font-weight:700;letter-spacing:.5px;border:1px solid}
+.tag{display:inline-block;padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.5px;border:1px solid}
 .tag-ok{background:rgba(57,255,20,0.08);color:var(--accent);border-color:var(--accent2)}
 .tag-warn{background:rgba(255,215,0,0.08);color:var(--amber);border-color:var(--amber)}
 .tag-danger{background:rgba(255,51,51,0.08);color:var(--red);border-color:var(--red)}
@@ -112,27 +112,27 @@ body{
 
 /* ============ TABLE ============ */
 table{width:100%;border-collapse:collapse}
-th{text-align:left;font-size:11px;color:var(--accent3);font-weight:700;padding:4px 6px;border-bottom:1px solid var(--border2);text-transform:uppercase;letter-spacing:1px;white-space:nowrap}
-td{padding:4px 6px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;color:var(--text)}
+th{text-align:left;font-size:12px;color:var(--accent3);font-weight:700;padding:4px 6px;border-bottom:1px solid var(--border2);text-transform:uppercase;letter-spacing:1px;white-space:nowrap}
+td{padding:5px 6px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle;color:var(--text)}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(128,128,0,0.04)}
 
 /* ============ FORMS ============ */
 input,select,textarea{
-  border:1px solid var(--border2);padding:4px 8px;font-size:12px;
+  border:1px solid var(--border2);padding:5px 8px;font-size:13px;
   font-family:'Times New Roman',Times,serif;
   color:var(--input-color);background:var(--input-bg);width:100%;outline:none;transition:border .1s;
 }
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 textarea{resize:vertical;min-height:80px}
 select option{background:var(--input-bg);color:var(--input-color)}
-label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+label{font-size:11px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
 .form-row{display:grid;gap:6px;margin-bottom:6px}
 .form-row.cols2{grid-template-columns:1fr 1fr}
 .form-row.cols3{grid-template-columns:1fr 1fr 1fr}
 
 /* ============ BUTTONS ============ */
-.btn{border:1px solid;padding:5px 12px;font-size:11px;font-family:'Times New Roman',Times,serif;cursor:pointer;font-weight:700;transition:all .1s;letter-spacing:1px;text-transform:uppercase}
+.btn{border:1px solid;padding:5px 12px;font-size:12px;font-family:'Times New Roman',Times,serif;cursor:pointer;font-weight:700;transition:all .1s;letter-spacing:1px;text-transform:uppercase}
 .btn-primary{background:var(--input-bg);border-color:var(--border2);color:var(--accent2)}
 .btn-primary:hover{background:var(--green-dim);border-color:var(--accent);color:var(--accent)}
 .btn-success{background:rgba(57,255,20,0.06);border-color:var(--accent2);color:var(--accent)}
@@ -143,20 +143,20 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 
 /* ============ SECTION ============ */
 .section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px}
-.section-title{font-size:13px;font-weight:700;color:var(--accent);letter-spacing:2px;text-transform:uppercase;border-left:3px solid var(--accent);padding-left:8px}
+.section-title{font-size:14px;font-weight:700;color:var(--accent);letter-spacing:2px;text-transform:uppercase;border-left:3px solid var(--accent);padding-left:8px}
 
 /* ============ STOCK / DRONES ============ */
 .drone-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)}
 .drone-row:last-child{border-bottom:none}
-.drone-name{font-weight:700;flex:1;color:var(--text);letter-spacing:.5px;font-size:12px}
-.qty{background:var(--input-bg);border:1px solid var(--border2);padding:1px 7px;font-weight:700;font-size:12px;min-width:26px;text-align:center;color:var(--accent)}
+.drone-name{font-weight:700;flex:1;color:var(--text);letter-spacing:.5px;font-size:13px}
+.qty{background:var(--input-bg);border:1px solid var(--border2);padding:1px 7px;font-weight:700;font-size:13px;min-width:26px;text-align:center;color:var(--accent)}
 
 /* ============ FLIGHTS ============ */
-.flight-entry{display:grid;grid-template-columns:62px 72px 100px 95px 85px 85px 75px;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--card);font-size:12px}
+.flight-entry{display:grid;grid-template-columns:62px 72px 100px 95px 85px 85px 75px;align-items:center;gap:4px;padding:5px 8px;border-bottom:1px solid var(--border);background:var(--card);font-size:13px}
 .flight-entry:hover{background:var(--green-dim)}
-.flight-pilot{font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
-.flight-time{color:var(--muted);font-size:11px;white-space:nowrap;line-height:1.4}
-.flight-cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:12px}
+.flight-pilot{font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.flight-time{color:var(--muted);font-size:12px;white-space:nowrap;line-height:1.4}
+.flight-cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:13px}
 .flight-tag{white-space:nowrap;font-size:11px}
 @media(max-width:700px){.flight-entry{grid-template-columns:1fr 1fr;gap:4px}.flight-entry>*{min-width:0}}
 
@@ -168,11 +168,11 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 
 /* ============ REPORTS ============ */
 .report-block{background:var(--input-bg);border-left:2px solid var(--accent);padding:10px 14px;margin-bottom:8px}
-.report-block .rb-head{font-size:12px;font-weight:700;margin-bottom:6px;color:var(--accent);letter-spacing:2px}
-.report-block .rb-line{padding:1px 0;font-size:12px;color:var(--text2)}
+.report-block .rb-head{font-size:13px;font-weight:700;margin-bottom:6px;color:var(--accent);letter-spacing:2px}
+.report-block .rb-line{padding:2px 0;font-size:13px;color:var(--text2)}
 
 /* ============ MISC ============ */
-.notice{background:rgba(255,215,0,0.04);border:1px solid var(--amber);padding:7px 12px;font-size:12px;color:var(--amber);margin-bottom:8px}
+.notice{background:rgba(255,215,0,0.04);border:1px solid var(--amber);padding:7px 12px;font-size:13px;color:var(--amber);margin-bottom:8px}
 .offline-bar{background:#100000;color:var(--red);padding:4px 16px;font-size:10px;text-align:center;border-bottom:1px solid var(--red);letter-spacing:1px}
 .online-bar{background:var(--green-dim);color:var(--accent2);padding:4px 16px;font-size:10px;text-align:center;letter-spacing:1px}
 .avatar{width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px;flex-shrink:0;border:1px solid var(--border2);color:var(--accent);background:var(--input-bg)}
@@ -187,7 +187,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 /* ============ QUICK PICKER ============ */
 .qp-popup{position:fixed;z-index:9998;background:var(--card);border:1px solid var(--border2);box-shadow:0 4px 20px rgba(0,0,0,.7);min-width:140px;max-height:220px;overflow-y:auto;display:none}
 .qp-popup.open{display:block}
-.qp-item{padding:5px 10px;font-size:12px;cursor:pointer;color:var(--text);border-bottom:1px solid var(--border);white-space:nowrap}
+.qp-item{padding:6px 10px;font-size:13px;cursor:pointer;color:var(--text);border-bottom:1px solid var(--border);white-space:nowrap}
 .qp-item:last-child{border-bottom:none}
 .qp-item:hover{background:var(--green-dim);color:var(--accent)}
 
@@ -206,7 +206,7 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-wei
 .dp-weekdays{display:grid;grid-template-columns:repeat(7,1fr);padding:4px 6px 0}
 .dp-weekday{text-align:center;font-size:10px;color:var(--muted);padding:3px 0;font-weight:700}
 .dp-days{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:4px 6px 8px}
-.dp-day{text-align:center;padding:5px 2px;font-size:12px;cursor:pointer;color:var(--text);border:1px solid transparent;transition:all .1s}
+.dp-day{text-align:center;padding:5px 2px;font-size:13px;cursor:pointer;color:var(--text);border:1px solid transparent;transition:all .1s}
 .dp-day:hover{background:var(--green-dim);color:var(--accent);border-color:var(--border2)}
 .dp-day.today{border-color:var(--accent3);color:var(--accent)}
 .dp-day.selected{background:var(--accent);color:var(--bg);font-weight:700}
