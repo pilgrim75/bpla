@@ -2670,6 +2670,21 @@ async function aesDecrypt(b64,password){
 //   5. Полная загрузка — только при первом входе или вручную
 // ============================================================
 
+// --- Toast уведомления ---
+function showSyncToast(msg, duration=2500){
+  let el=document.getElementById('syncToast');
+  if(!el){
+    el=document.createElement('div');
+    el.id='syncToast';
+    el.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9999;background:var(--card);border:1px solid var(--accent2);color:var(--accent);padding:6px 14px;font-size:12px;font-family:inherit;letter-spacing:1px;pointer-events:none;opacity:0;transition:opacity .2s';
+    document.body.appendChild(el);
+  }
+  el.textContent=msg;
+  el.style.opacity='1';
+  clearTimeout(el._t);
+  el._t=setTimeout(()=>el.style.opacity='0',duration);
+}
+
 // --- Вспомогательные функции ---
 
 function syncGetCfg(){
@@ -2768,7 +2783,7 @@ function syncBumpStockVersion(){
 
 // --- Время последнего поллинга ---
 let _lastPollTs = Date.now();
-let _lastStockTs = 0;
+let _lastStockTs = Date.now(); // Инициализируем текущим временем — не грузим старые изменения склада
 
 // ============================================================
 // ЗАПИСЬ ИЗМЕНЕНИЙ — единая точка входа для всех операций
@@ -2990,8 +3005,15 @@ async function syncPullOnLogin(){
 async function syncFromCloud(){
   const {url} = syncGetCfg();
   if(!url){ alert('Укажите URL в настройках'); return; }
+  const st=document.getElementById('cfg-sync-status');
+  const ind=document.getElementById('syncIndicator');
+  if(st){ st.textContent='Загружаю из облака...'; st.style.color='var(--amber)'; }
+  if(ind){ ind.className='sync-indicator syncing'; ind.textContent='↓ загрузка...'; }
   const loaded = await syncPullAll(true);
-  if(!loaded) return;
+  if(!loaded){
+    if(st){ st.textContent='Ошибка загрузки'; st.style.color='var(--red)'; }
+    return;
+  }
   state.flights   = loaded.flights;
   state.stock     = loaded.stock;
   state.squads    = loaded.squads;
@@ -3001,7 +3023,6 @@ async function syncFromCloud(){
   saveLocal();
   syncIndicator('ok');
   syncRenderAll();
-  const st=document.getElementById('cfg-sync-status');
   if(st){ st.textContent='✓ Загружено — '+new Date().toLocaleTimeString('ru'); st.style.color='var(--green2)'; }
   renderSettingsStatus();
   showSyncToast('✓ Данные загружены из облака');
