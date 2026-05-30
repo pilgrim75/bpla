@@ -430,15 +430,15 @@ function renderDashboard(){
   document.getElementById('st-total').textContent=totalAll;
   document.getElementById('st-total-detail').innerHTML=
     Object.entries(byName).filter(([,q])=>q!==0).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
-      `<span style="color:${q<0?'var(--red)':'var(--text2)'}">${n}: <b style="color:${q<0?'var(--red)':'var(--green)'}">${q}</b></span>`
-    ).join('<br>');
+      `<div class="stat-row"><span>${n}</span><span style="color:${q<0?'var(--red)':'var(--text)'}">${q}</span></div>`
+    ).join('');
 
   document.getElementById('st-stock').textContent=totalStock;
   document.getElementById('st-stock-detail').innerHTML=
     Object.entries(stockByName).length
       ? Object.entries(stockByName).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
-          `<span style="color:var(--text2)">${n}: <b style="color:var(--green)">${q}</b></span>`
-        ).join('<br>')
+          `<div class="stat-row"><span>${n}</span><span>${q}</span></div>`
+        ).join('')
       :'<span style="color:var(--muted)">склад пуст</span>';
 
   // --- Вылеты ---
@@ -1614,17 +1614,14 @@ const THEMES={
 };
 
 function applyTheme(name){
-  const map={terminal:'theme-terminal',wb:'theme-white',bw:'theme-paper',field:'theme-field'};
-  const cls=map[name]||'theme-terminal';
-  document.body.className=document.body.className
-    .replace(/theme-\w+/g,'').trim()+' '+cls;
-  // Полевой планшет — сетка на фоне
+  const map={terminal:'theme-terminal',wb:'theme-gray',gray:'theme-gray',white:'theme-gray',bw:'theme-paper',field:'theme-field'};
+  const cls=map[name]||'theme-gray';
+  document.body.className=document.body.className.replace(/theme-\w+/g,'').trim()+' '+cls;
   if(name==='field'){
     document.body.style.backgroundImage='repeating-linear-gradient(0deg,transparent,transparent 29px,rgba(0,0,0,0.06) 29px,rgba(0,0,0,0.06) 30px),repeating-linear-gradient(90deg,transparent,transparent 29px,rgba(0,0,0,0.04) 29px,rgba(0,0,0,0.04) 30px)';
   } else {
     document.body.style.backgroundImage='';
   }
-  // Обновляем themeStyle — очищаем старые инлайн-переменные
   const ts=document.getElementById('themeStyle');
   if(ts)ts.textContent='';
   try{localStorage.setItem('theme',name);}catch(e){}
