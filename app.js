@@ -949,12 +949,16 @@ function writeDroneLoss(pilot, drone, date, time){
 
   // Логируем в историю перемещений
   if(!state.transfers)state.transfers=[];
-  state.transfers.unshift({
+  const lossOp={
+    id:Date.now()+'_loss_'+Math.random().toString(36).slice(2),
     type:'loss',
     date:date||new Date().toISOString().slice(0,10),
     time:time||new Date().toTimeString().slice(0,5),
     pilot,drone,qty:1,note:''
-  });
+  };
+  state.transfers.unshift(lossOp);
+  // Сразу синхронизируем с облаком
+  appendToCloud('transfers',lossOp);
 }
 
 function saveManualFlight(){
