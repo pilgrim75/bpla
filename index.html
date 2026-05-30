@@ -34,7 +34,7 @@
   <div class="sync-indicator" id="syncIndicator">● локально</div>
   <select id="themeSwitch" onchange="applyTheme(this.value)" title="Цветовая схема" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
     <option value="terminal">Терминал</option>
-    <option value="wb">Белый на чёрном</option>
+    <option value="wb">Серый</option>
     <option value="bw">Чёрный на белом</option>
     <option value="field">Полевой планшет</option>
   </select>
@@ -48,13 +48,13 @@
 <div id="netBar"></div>
 
 <div class="nav" id="nav">
-  <button class="active" onclick="showPage('dashboard',this)">Обзор</button>
-  <button onclick="showPage('inventory',this)">Склад</button>
-  <button onclick="showPage('flights',this)">Вылеты</button>
-  <button onclick="showPage('report',this)">Отчёты</button>
-  <button onclick="showPage('import',this)">Импорт текста</button>
-  <button id="adminNavBtn" onclick="showPage('admin',this)" style="display:none;background:#3f0000;color:#fca5a5">Администратор</button>
-  <button onclick="showPage('settings',this)" style="margin-left:auto;border-right:none">⚙ Настройки</button>
+  <button class="active" onclick="showPage('dashboard',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Обзор</button>
+  <button onclick="showPage('inventory',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Склад</button>
+  <button onclick="showPage('flights',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>Вылеты</button>
+  <button onclick="showPage('report',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Отчёты</button>
+  <button onclick="showPage('import',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Импорт</button>
+  <button id="adminNavBtn" onclick="showPage('admin',this)" style="display:none;color:#fca5a5"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Администратор</button>
+  <button onclick="showPage('settings',this)" style="margin-left:auto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Настройки</button>
 </div>
 
 <div class="main">
@@ -64,17 +64,17 @@
   <!-- Строка 1: статистика -->
   <div class="grid3" style="margin-bottom:8px">
     <div class="card">
-      <div class="card-title">Всего БПЛА на учёте</div>
+      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Всего БПЛА на учёте</div>
       <div class="stat" id="st-total">—</div>
       <div id="st-total-detail" style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6"></div>
     </div>
     <div class="card">
-      <div class="card-title">На складе БГ</div>
+      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>На складе БГ</div>
       <div class="stat" id="st-stock">—</div>
       <div id="st-stock-detail" style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6"></div>
     </div>
     <div class="card">
-      <div class="card-title">Вылеты</div>
+      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>Вылеты</div>
       <div class="stat" id="st-flights">—</div>
       <div id="st-flights-detail" style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6"></div>
     </div>
@@ -82,11 +82,11 @@
   <!-- Строка 2: расчёты + вылеты -->
   <div class="grid2">
     <div class="card">
-      <div class="card-title">Расчёты</div>
+      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>Расчёты</div>
       <div id="dashSquads"></div>
     </div>
     <div class="card">
-      <div class="card-title">Вылеты сегодня / вчера</div>
+      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Вылеты сегодня / вчера</div>
       <div id="dashRecent"></div>
     </div>
   </div>
