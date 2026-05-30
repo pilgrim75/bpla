@@ -229,11 +229,28 @@ function adminEditFlight(idx,field,val){
 function adminDeleteFlight(idx){
   if(!confirm('Удалить этот вылет?'))return;
   const f=state.flights[idx];
+  // Если вылет был с потерей — возвращаем дрон расчёту
+  if(f&&f.returned==='no'&&f.drone&&f.pilot){
+    const sq=state.squads.find(s=>s.pilot===f.pilot);
+    if(sq){
+      const d=sq.drones.find(d=>d.name.toLowerCase()===f.drone.toLowerCase());
+      if(d){d.qty++;}
+      else{sq.drones.push({name:f.drone,qty:1});}
+    }
+    // Удаляем соответствующую запись о потере из transfers
+    const lossIdx=(state.transfers||[]).findIndex(t=>
+      t.type==='loss'&&t.pilot===f.pilot&&t.drone===f.drone&&t.date===f.date
+    );
+    if(lossIdx>-1)state.transfers.splice(lossIdx,1);
+    // Синхронизируем склад и расчёты
+    setTimeout(()=>syncStockAndSquads(),300);
+  }
   state.flights.splice(idx,1);
   saveLocal();
-  logAction('flight','delete','Удалён вылет '+(f?.pilot||'')+' '+( f?.date||'')+' '+(f?.time||''));
+  logAction('flight','delete','Удалён вылет '+(f?.pilot||'')+' '+(f?.date||'')+' '+(f?.time||''));
   renderAdminFlights();
   renderDashboard();
+  renderInventory();
 }
 
 function renderAdminStock(){
@@ -883,22 +900,31 @@ function toggleSquadEditor(){
 function renderSquadEditor(){
   const el=document.getElementById('squadEditorList');
   el.innerHTML=state.squads.map((sq,si)=>`
-    <div style="border:0.5px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+    <div style="border:0.5px solid var(--border2);padding:10px;margin-bottom:8px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <input style="flex:1;font-weight:600" value="${sq.pilot}" onchange="squadEditPilot(${si},this.value)" placeholder="Имя пилота">
+        <button class="btn btn-sm btn-primary" onclick="squadCleanZeros(${si})">Удалить нули</button>
         <button class="btn btn-danger btn-sm" onclick="squadDeletePilot(${si})">Удалить расчёт</button>
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">БПЛА расчёта:</div>
       ${sq.drones.map((d,di)=>`
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px${d.qty===0?';opacity:0.5':''}">
           <input style="flex:1" list="dl-drones-smart" value="${d.name}" onchange="squadEditDrone(${si},${di},'name',this.value)" autocomplete="off">
-          <input type="number" style="width:60px" min="0" value="${d.qty}" onchange="squadEditDrone(${si},${di},'qty',parseInt(this.value)||0)">
-          <button class="btn btn-sm" style="color:var(--cr)" onclick="squadDeleteDrone(${si},${di})">✕</button>
+          <input type="number" style="width:60px${d.qty===0?';color:var(--red)':''}" min="0" value="${d.qty}" onchange="squadEditDrone(${si},${di},'qty',parseInt(this.value)||0)">
+          <button class="btn btn-sm" style="color:var(--red)" onclick="squadDeleteDrone(${si},${di})">✕</button>
         </div>`).join('')}
       <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 10px" onclick="squadAddDrone(${si})">+ БПЛА</button>
     </div>`).join('');
 }
 
+function squadCleanZeros(si){
+  state.squads[si].drones=state.squads[si].drones.filter(d=>d.qty!==0);
+  saveLocal();
+  localStorage.setItem('last_local_change',Date.now().toString());
+  syncStockAndSquads();
+  renderSquadEditor();
+  renderInventory();
+}
 function squadEditPilot(si,val){state.squads[si].pilot=val;saveLocal();renderInventory();}
 function squadEditDrone(si,di,field,val){state.squads[si].drones[di][field]=val;saveLocal();renderInventory();}
 function squadDeleteDrone(si,di){
