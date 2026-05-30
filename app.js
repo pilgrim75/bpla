@@ -2867,7 +2867,10 @@ async function syncPushStockSquads(){
   const squads = await Promise.all(state.squads.map((sq,i)=>encRow(sq,i)));
   const body = JSON.stringify({action:'write', token, data:{stock, squads}});
   const res = await syncPost(url, body);
-  if(res.ok) console.log('[SYNC] stock+squads OK, sv:', _stockVersion);
+  if(res.ok){
+    _lastStockTs = _stockVersion; // Помним что эту версию мы сами отправили — не перезагружаем
+    console.log('[SYNC] stock+squads OK, sv:', _stockVersion);
+  }
   else console.warn('[SYNC] stock push failed:', res.error);
 }
 
@@ -2888,6 +2891,7 @@ async function syncPushAll(silent=false){
   console.log('[SYNC] pushAll flights:', state.flights.length, 'size:', body.length);
   const res = await syncPost(url, body);
   if(res.ok){
+    _lastStockTs = _stockVersion; // Не перезагружаем склад который только что сами отправили
     console.log('[SYNC] pushAll OK');
     await syncFlushQueue();
     if(!silent){ syncIndicator('ok'); showSyncToast('✓ Данные выгружены'); }
