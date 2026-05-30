@@ -2847,12 +2847,9 @@ function syncEditFlight(idx, field, val){
   syncEditFlight._timer = setTimeout(()=>syncPushAll(true), 2000);
 }
 
-// Добавить transfer/arrival/loss
+// Добавить transfer/arrival/loss — только отправляет в облако, не добавляет локально
 async function syncAddTransfer(op){
   if(!op.id) op.id = Date.now()+'_t_'+Math.random().toString(36).slice(2);
-  if(!state.transfers) state.transfers=[];
-  state.transfers.unshift(op);
-  saveLocal();
   const {url,key,token} = syncGetCfg();
   if(!url||!token){ pendingQueue.add({type:'transfer',data:op}); return; }
   const enc = await syncEncrypt(op, key);
