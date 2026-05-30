@@ -2819,10 +2819,18 @@ async function syncDeleteFlight(idx){
       const d = sq.drones.find(d=>d.name.toLowerCase()===f.drone.toLowerCase());
       if(d) d.qty++; else sq.drones.push({name:f.drone, qty:1});
     }
-    const li = (state.transfers||[]).findIndex(t=>
-      t.type==='loss' && t.pilot===f.pilot && t.drone===f.drone && t.date===f.date
+    // Удаляем ВСЕ записи о потере этого пилота в эту дату+время
+    // (имя дрона может не совпадать из-за опечатки)
+    const before=(state.transfers||[]).length;
+    state.transfers=(state.transfers||[]).filter(t=>
+      !(t.type==='loss' && t.pilot===f.pilot && t.date===f.date && t.time===f.time)
     );
-    if(li>-1) state.transfers.splice(li,1);
+    // Если не нашли по времени — ищем по дрону и дате
+    if(state.transfers.length===before){
+      state.transfers=(state.transfers||[]).filter(t=>
+        !(t.type==='loss' && t.pilot===f.pilot && t.drone===f.drone && t.date===f.date)
+      );
+    }
     syncBumpStockVersion();
     setTimeout(()=>syncPushStockSquads(), 300);
   }
@@ -2830,7 +2838,6 @@ async function syncDeleteFlight(idx){
   state.flights.splice(idx,1);
   saveLocal();
   logAction('flight','delete','Удалён вылет '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||''));
-  // Полная запись всех вылетов без удалённого
   syncPushAll(true);
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
