@@ -61,7 +61,15 @@ function saveLocal(){
 function loadLocal(){
   try{
     const s=localStorage.getItem('droneState');
-    if(s)state=JSON.parse(s);
+    if(s){
+      state=JSON.parse(s);
+      // Чистим невалидные записи transfers (с undefined полями)
+      if(state.transfers){
+        state.transfers=state.transfers.filter(t=>
+          t&&t.type&&(t.drone||t.from||t.to)
+        );
+      }
+    }
   }catch(e){}
 }
 loadLocal();
@@ -3158,7 +3166,21 @@ function startPolling(){
 // ============================================================
 function syncFromCloudSilent(){ return syncPullOnLogin(); }
 function syncStockAndSquads(){ return syncPushStockSquads(); }
-function appendToCloud(sheet, obj){ return syncAddTransfer(obj); }
+function appendToCloud(sheet, obj){
+  if(sheet==='actlog'){
+    // Журнал действий — отправляем отдельно напрямую
+    const {url,key,token}=syncGetCfg();
+    if(!url||!token)return;
+    (async()=>{
+      const enc=await syncEncrypt({...obj,id:obj.id||Date.now()+'_a'},key);
+      const body=JSON.stringify({action:'append_one',token,sheet:'actlog',row:enc});
+      await syncPost(url,body);
+    })();
+    return;
+  }
+  // transfers, flights и т.д.
+  return syncAddTransfer(obj);
+}
 function saveLocalOnly(){
   try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){}
 }
