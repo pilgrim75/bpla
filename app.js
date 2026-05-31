@@ -1,6 +1,9 @@
+
 // ============ STATE ============
 const ROLES_BASE={admin:'Администратор',cmd:'Командир',tech:'Техник'};
 const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','Упырь11','Упырь18','Курьер21'];
+
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 function rebuildRoleSelector(){
   const sel=document.getElementById('roleSwitch');
@@ -80,14 +83,9 @@ function checkNet(){
   const ind=document.getElementById('syncIndicator');
   if(navigator.onLine){
     bar.innerHTML='';
-    if(state.offlineQueue.length>0){
-      ind.className='sync-indicator syncing';
-      ind.textContent='↑ синхронизация...';
-      setTimeout(()=>{state.offlineQueue=[];saveLocal();ind.className='sync-indicator saved';ind.textContent='✓ сохранено';},1500);
-    } else {
-      ind.className='sync-indicator saved';
-      ind.textContent='● онлайн';
-    }
+    state.offlineQueue=[];
+    ind.className='sync-indicator saved';
+    ind.textContent='● онлайн';
   } else {
     bar.innerHTML='<div class="offline-bar">ОФЛАЙН — данные сохраняются локально, синхронизируются при появлении сети</div>';
     ind.className='sync-indicator';
@@ -406,6 +404,42 @@ function adminResetAll(){
   location.reload();
 }
 
+// Удаляет записи о потерях, у которых нет соответствующего вылета
+// (остаются когда вылет удаляют или меняют returned: no → yes без очистки)
+function adminCleanOrphanLosses(){
+  const losses=(state.transfers||[]).filter(t=>t.type==='loss');
+  if(!losses.length){
+    const el=document.getElementById('saveStatus');
+    if(el){el.textContent='Записей о потерях в журнале нет';el.style.color='var(--muted)';}
+    return;
+  }
+  // Строим ключи вылетов с потерей: pilot+drone+date (без времени — допуск на редактирование)
+  const lostFlightKeys=new Set(
+    state.flights
+      .filter(f=>f.returned==='no')
+      .map(f=>(f.pilot||'').toLowerCase()+'|'+(f.drone||'').toLowerCase()+'|'+(f.date||''))
+  );
+  const before=(state.transfers||[]).length;
+  state.transfers=(state.transfers||[]).filter(t=>{
+    if(t.type!=='loss')return true;
+    const key=(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase()+'|'+(t.date||'');
+    return lostFlightKeys.has(key);
+  });
+  const removed=before-(state.transfers||[]).length;
+  saveLocal();
+  if(removed>0){
+    syncStockAndSquads();
+    renderInventory();
+  }
+  const el=document.getElementById('saveStatus');
+  if(el){
+    el.textContent=removed>0
+      ?`✓ Удалено ${removed} осирот. ${removed===1?'запись':'записей'} о потерях — ${new Date().toLocaleString('ru')}`
+      :'✓ Осиротевших записей не найдено — журнал чистый';
+    el.style.color=removed>0?'#166534':'var(--muted)';
+  }
+}
+
 // ============ DASHBOARD ============
 function renderDashboard(){
   const now=new Date();
@@ -599,6 +633,8 @@ function saveTransfer(){
     const item=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='bg');
     if(!item||item.qty<qty){
       if(!confirm(`На складе недостаточно "${drone}". Всё равно оформить?`))return;
+      if(item){item.qty-=qty;}
+      else{state.stock.push({name:drone,qty:-qty,status:'bg'});}
     } else {
       item.qty-=qty;
       if(item.qty===0)state.stock=state.stock.filter(d=>d!==item);
@@ -609,6 +645,8 @@ function saveTransfer(){
       const di=sq.drones.find(d=>d.name.toLowerCase()===drone.toLowerCase());
       if(!di||di.qty<qty){
         if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
+        if(di){di.qty-=qty;}
+        else{sq.drones.push({name:drone,qty:-qty});}
       } else {
         di.qty-=qty;
         if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);
@@ -675,7 +713,8 @@ function saveExchange(){
 
   // Записать в историю
   if(!state.transfers)state.transfers=[];
-  state.transfers.unshift({
+  const exOp={
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
     type:'exchange',
     date,
     time:new Date().toTimeString().slice(0,5),
@@ -683,9 +722,11 @@ function saveExchange(){
     give,giveQty,
     get,getQty,
     note
-  });
-
+  };
+  state.transfers.unshift(exOp);
   saveLocal();
+  syncAddTransfer(exOp);
+  syncStockAndSquads();
   renderInventory();
   renderDashboard();
   document.getElementById('exchangeCard').style.display='none';
@@ -763,12 +804,13 @@ function renderFlights(){
     document.getElementById('flightList').innerHTML='<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
     fillDataLists();return;
   }
-  // Автонумерация: считаем вылеты каждого пилота за каждый день
+  // Автонумерация без мутации объектов вылетов
   const pilotDayCount={};
+  const autoNums=new Map();
   [...f].sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||''))).forEach(x=>{
     const key=(x.pilot||'')+'|'+(x.date||'');
     pilotDayCount[key]=(pilotDayCount[key]||0)+1;
-    x._autoNum=pilotDayCount[key];
+    autoNums.set(x,pilotDayCount[key]);
   });
   document.getElementById('flightList').innerHTML=`
     <table style="table-layout:auto;width:100%">
@@ -788,7 +830,7 @@ function renderFlights(){
         ${f.map(x=>{
           const idx=state.flights.indexOf(x);
           const editRow=renderFlightEditRow(x,idx);
-          const num=x._autoNum||x.flightnum||'';
+          const num=autoNums.get(x)||x.flightnum||'';
           // Форматируем дату дд.мм.гггг
           const dateFmt=x.date?x.date.split('-').reverse().join('.'):'';
           // Строка для копирования
@@ -941,14 +983,13 @@ function squadAddPilot(){
 }
 
 // Списать дрон при потере — ищем сначала у пилота, потом на складе
-function writeDroneLoss(pilot, drone, date, time){
+function writeDroneLoss(pilot, drone, date, time, flightId){
   if(!drone)return;
   const dn=drone.toLowerCase();
 
   // Всегда списываем у пилота — даже если уйдёт в минус
   let sq=state.squads.find(s=>s.pilot===pilot);
   if(!sq){
-    // Пилот не в расчётах — создаём запись с -1
     sq={pilot,drones:[]};
     state.squads.push(sq);
   }
@@ -956,7 +997,6 @@ function writeDroneLoss(pilot, drone, date, time){
   if(di){
     di.qty--;
   } else {
-    // Борта не было в списке пилота — добавляем с qty=-1
     sq.drones.push({name:drone,qty:-1});
   }
 
@@ -965,45 +1005,15 @@ function writeDroneLoss(pilot, drone, date, time){
   const lossOp={
     id:Date.now()+'_loss_'+Math.random().toString(36).slice(2),
     type:'loss',
+    flightId:flightId||null,
     date:date||new Date().toISOString().slice(0,10),
     time:time||new Date().toTimeString().slice(0,5),
     pilot,drone,qty:1,note:''
   };
   state.transfers.unshift(lossOp);
-  // Сразу синхронизируем с облаком
   syncAddTransfer(lossOp);
 }
 
-function saveManualFlight(){
-  const fn=document.getElementById('mf-flightnum').value;
-  const f={
-    date:document.getElementById('mf-date').value||new Date().toISOString().slice(0,10),
-    time:document.getElementById('mf-time').value||new Date().toTimeString().slice(0,5),
-    pilot:document.getElementById('mf-pilot').value.trim(),
-    target:document.getElementById('mf-target').value.trim(),
-    ammo:document.getElementById('mf-ammo').value.trim(),
-    drone:document.getElementById('mf-drone').value.trim(),
-    result:document.getElementById('mf-result').value,
-    returned:document.getElementById('mf-returned').value,
-    flightnum:fn?parseInt(fn):null,
-    note:document.getElementById('mf-note').value.trim(),
-  };
-  if(!f.pilot){alert('Укажите пилота');return;}
-  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
-  f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
-  f._savedTs=Date.now();
-  f._submittedBy=authUser.login||'';
-  if(!navigator.onLine)state.offlineQueue.push(f);
-  state.flights.unshift(f);
-  saveLocal();
-  checkNet();
-  renderFlights();
-  renderInventory();
-  renderDashboard();
-  logAction('flight','add','Вылет '+f.pilot+' #'+f.flightnum+' '+f.drone+(f.returned==='no'?' [потеря]':''));
-  ['mf-pilot','mf-target','mf-ammo','mf-drone','mf-note','mf-flightnum'].forEach(id=>document.getElementById(id).value='');
-  fillDataLists();
-}
 
 // ============ API KEY ============
 function saveApiKey(val){
@@ -1145,8 +1155,8 @@ function confirmParsed(i){
     flightnum:fn?parseInt(fn):null,
     note:document.getElementById(`p${i}-note`).value,
   };
-  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
   f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
+  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);setTimeout(()=>syncStockAndSquads(),500);}
   if(!navigator.onLine)state.offlineQueue.push(f);
   state.flights.unshift(f);
   saveLocal();
@@ -1476,65 +1486,6 @@ function buildDetailedReport(f,filterLabel,out){
   </div>`;
 }
 
-function buildReportText(){
-  // Собираем текст из отчёта с правильными отступами и пустыми строками
-  const out=document.getElementById('reportOutput');
-  const lines=[];
-  // rb-head
-  out.querySelectorAll('.rb-head').forEach(el=>{
-    lines.push('');
-    lines.push(el.innerText.trim());
-    lines.push('');
-  });
-  // Если rb-head есть — строим заново весь блок
-  if(out.querySelector('.rb-head')){
-    lines.length=0;
-    const block=out.querySelector('.report-block');
-    if(block){
-      let prevWasSection=false;
-      block.childNodes.forEach(node=>{
-        if(node.nodeType!==1)return;
-        const txt=node.innerText?.trim();
-        if(!txt)return;
-        const isBold=node.style?.fontWeight==='700'||node.tagName==='DIV'&&node.querySelector('b');
-        // секционные заголовки (✅ Пилот, Склад, Не БГ, Перемещения)
-        const isSection=txt.startsWith('✅')||txt.startsWith('Не БГ')||txt.startsWith('Перемещения');
-        if(isSection){lines.push('');lines.push(txt);prevWasSection=true;}
-        else{lines.push(txt);prevWasSection=false;}
-      });
-    }
-    // fallback — берём весь innerText и добавляем пустую строку перед секциями
-    if(lines.length===0){
-      const raw=out.innerText;
-      raw.split('\n').forEach(l=>{
-        const t=l.trim();
-        if(!t)return;
-        if(t.startsWith('✅')||t.startsWith('Не БГ')||t.startsWith('Перемещения'))lines.push('');
-        lines.push(t);
-      });
-    }
-  }
-  // Дедуплицируем перемещения — уникальные строки в секции перемещений
-  const seen=new Set();
-  const deduped=[];
-  let inMoves=false;
-  lines.forEach(l=>{
-    if(l.startsWith('Перемещения'))inMoves=true;
-    if(inMoves&&l){
-      if(seen.has(l))return;
-      seen.add(l);
-    }
-    deduped.push(l);
-  });
-  // Убираем множественные пустые строки подряд
-  const result=[];
-  let lastEmpty=false;
-  deduped.forEach(l=>{
-    if(l===''){if(!lastEmpty)result.push('');lastEmpty=true;}
-    else{result.push(l);lastEmpty=false;}
-  });
-  return result.join('\n').trim();
-}
 
 function copyReport(){
   const txt=window._reportText||document.getElementById('reportOutput').innerText;
@@ -1560,58 +1511,6 @@ function printReport(){
   </style></head><body>${content}<script>window.onload=function(){window.print();window.close();}<\/script></body></html>`);
   win.document.close();
 }
-
-// ============ THEMES ============
-const THEMES={
-  terminal:{
-    '--bg':'#050a05','--bg2':'#0a110a','--card':'#060c06',
-    '--text':'#b8f0b8','--text2':'#6aaf6a','--muted':'#3d6b3d',
-    '--border':'#112211','--border2':'#1f4d1f',
-    '--green':'#39ff14','--green2':'#22c55e','--green3':'#16a34a','--green-dim':'#0d1f0d',
-    '--amber':'#ffd700','--red':'#ff3333',
-    '--font':"'Share Tech Mono','Courier New',monospace",
-    body:'background:#050a05;color:#b8f0b8;',
-    topbarBg:'#000',topbarColor:'#39ff14',topbarBorder:'#16a34a',
-    selectBg:'#000',selectColor:'#39ff14',selectBorder:'#1f4d1f',
-    scanlines:true,blink:true
-  },
-  wb:{
-    '--bg':'#0a0a0a','--bg2':'#111','--card':'#050505',
-    '--text':'#e8e8e8','--text2':'#aaa','--muted':'#666',
-    '--border':'#1a1a1a','--border2':'#333',
-    '--green':'#fff','--green2':'#ccc','--green3':'#888','--green-dim':'#1a1a1a',
-    '--amber':'#ccc','--red':'#ff5555',
-    '--font':"'Share Tech Mono','Courier New',monospace",
-    body:'background:#0a0a0a;color:#e8e8e8;',
-    topbarBg:'#000',topbarColor:'#fff',topbarBorder:'#333',
-    selectBg:'#111',selectColor:'#fff',selectBorder:'#333',
-    scanlines:false,blink:true
-  },
-  bw:{
-    '--bg':'#f5f5f0','--bg2':'#ececec','--card':'#fff',
-    '--text':'#111','--text2':'#444','--muted':'#888',
-    '--border':'#ddd','--border2':'#bbb',
-    '--green':'#111','--green2':'#333','--green3':'#555','--green-dim':'#eee',
-    '--amber':'#222','--red':'#c00',
-    '--font':"'Share Tech Mono','Courier New',monospace",
-    body:'background:#f5f5f0;color:#111;',
-    topbarBg:'#111',topbarColor:'#fff',topbarBorder:'#333',
-    selectBg:'#222',selectColor:'#fff',selectBorder:'#444',
-    scanlines:false,blink:false
-  },
-  field:{
-    '--bg':'#3d3a28','--bg2':'#343120','--card':'#2e2b1c',
-    '--text':'#d4c99a','--text2':'#b0a070','--muted':'#7a6e48',
-    '--border':'#2a2718','--border2':'#4a4530',
-    '--green':'#c8b870','--green2':'#a89850','--green3':'#8a7a3a','--green-dim':'#252310',
-    '--amber':'#e8c840','--red':'#c84040',
-    '--font':"Georgia,'Times New Roman',serif",
-    body:'background:#3d3a28;color:#d4c99a;',
-    topbarBg:'#1e1c10',topbarColor:'#c8b870',topbarBorder:'#4a4530',
-    selectBg:'#1e1c10',selectColor:'#c8b870',selectBorder:'#4a4530',
-    scanlines:false,blink:false
-  }
-};
 
 function applyTheme(name){
   const map={terminal:'theme-terminal',wb:'theme-gray',gray:'theme-gray',white:'theme-gray',bw:'theme-paper',field:'theme-field'};
@@ -1943,9 +1842,19 @@ function applyRoleFromAuth(){
   } else {
     // Остальные — скрываем переключатель, роль из учётной записи
     if(roleSwitch)roleSwitch.style.display='none';
-    const roleMap={admin:'admin',cmd:'cmd',tech:'tech',pilot:'pilot1',pilot1:'pilot1',pilot2:'pilot2',pilot3:'pilot3'};
-    const r=roleMap[authUser.role]||'cmd';
-    if(roleSwitch)roleSwitch.value=r;
+    let r='cmd';
+    if(authUser.role==='admin')r='admin';
+    else if(authUser.role==='cmd')r='cmd';
+    else if(authUser.role==='tech')r='tech';
+    else if(authUser.role==='pilot'){
+      const idx=state.squads.findIndex(sq=>sq.pilot===authUser.login);
+      r=idx>=0?'pilot_'+idx:'cmd';
+    }
+    if(roleSwitch){
+      rebuildRoleSelector();
+      const optExists=[...roleSwitch.options].some(o=>o.value===r);
+      roleSwitch.value=optExists?r:'cmd';
+    }
     switchRole(r);
     const badge=document.getElementById('roleBadge');
     if(badge)badge.innerHTML='<b>'+authUser.login+'</b>';
@@ -2400,13 +2309,7 @@ function initQuickForm(){
 }
 
 function autoFillFlightNum(){
-  const pilot=document.getElementById('qf-pilot')?.value;
-  if(!pilot)return;
-  const today=new Date().toISOString().slice(0,10);
-  const todayFlights=state.flights.filter(f=>f.pilot===pilot&&f.date===today);
-  const maxNum=todayFlights.reduce((m,f)=>Math.max(m,f.flightnum||0),0);
-  const nf=document.getElementById('qf-num');
-  if(nf)nf.value=maxNum+1;
+  // Нумерация вычисляется в saveQuickFlight при записи — здесь ничего не делаем
 }
 
 function saveQuickFlight(){
@@ -2439,7 +2342,7 @@ function saveQuickFlight(){
     returned:returned?'yes':'no',
     note
   };
-  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time);setTimeout(()=>syncStockAndSquads(),500);}
+  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);setTimeout(()=>syncStockAndSquads(),500);}
   state.flights.unshift(f);
   saveLocal();
   renderFlights();renderDashboard();
@@ -2812,28 +2715,54 @@ async function syncAddFlight(flight){
 async function syncDeleteFlight(idx){
   const f = state.flights[idx];
   if(!f) return;
-  // Компенсируем потерю если была
+
+  const pLow=(f.pilot||'').toLowerCase();
+  const dLow=(f.drone||'').toLowerCase();
+
+  // Компенсируем квоту дрона только если вылет числится как потеря
   if(f.returned==='no' && f.drone && f.pilot){
     const sq = state.squads.find(s=>s.pilot===f.pilot);
     if(sq){
-      const d = sq.drones.find(d=>d.name.toLowerCase()===f.drone.toLowerCase());
+      const d = sq.drones.find(d=>d.name.toLowerCase()===dLow);
       if(d) d.qty++; else sq.drones.push({name:f.drone, qty:1});
-    }
-    // Удаляем ВСЕ записи о потере этого пилота в эту дату+время
-    // (имя дрона может не совпадать из-за опечатки)
-    const before=(state.transfers||[]).length;
-    state.transfers=(state.transfers||[]).filter(t=>
-      !(t.type==='loss' && t.pilot===f.pilot && t.date===f.date && t.time===f.time)
-    );
-    // Если не нашли по времени — ищем по дрону и дате
-    if(state.transfers.length===before){
-      state.transfers=(state.transfers||[]).filter(t=>
-        !(t.type==='loss' && t.pilot===f.pilot && t.drone===f.drone && t.date===f.date)
-      );
     }
     syncBumpStockVersion();
     setTimeout(()=>syncPushStockSquads(), 300);
   }
+
+  // Всегда чистим связанные записи о потере — они могут остаться
+  // если вылет был отредактирован (returned: no→yes) перед удалением.
+  // Три прохода от точного к нестрогому:
+
+  const before=(state.transfers||[]).length;
+
+  // Проход 1: по flightId (для записей, созданных после обновления)
+  if(f.id){
+    state.transfers=(state.transfers||[]).filter(t=>!(t.type==='loss'&&t.flightId===f.id));
+  }
+
+  // Проход 2: пилот + борт + дата + время (регистронезависимо)
+  if((state.transfers||[]).length===before){
+    state.transfers=(state.transfers||[]).filter(t=>!(
+      t.type==='loss' &&
+      (t.pilot||'').toLowerCase()===pLow &&
+      (t.drone||'').toLowerCase()===dLow &&
+      t.date===f.date &&
+      t.time===f.time
+    ));
+  }
+
+  // Проход 3: пилот + борт + дата (без времени — для вылетов,
+  // чьё время менялось после первичной записи потери)
+  if((state.transfers||[]).length===before){
+    state.transfers=(state.transfers||[]).filter(t=>!(
+      t.type==='loss' &&
+      (t.pilot||'').toLowerCase()===pLow &&
+      (t.drone||'').toLowerCase()===dLow &&
+      t.date===f.date
+    ));
+  }
+
   tombstones.add(f.id);
   state.flights.splice(idx,1);
   saveLocal();
@@ -3075,7 +3004,7 @@ async function pollCloud(){
         changed = true;
         // Списываем дрон если потеря
         if(obj.returned==='no' && obj.drone){
-          writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time);
+          writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id);
           setTimeout(()=>syncPushStockSquads(), 500);
         }
       }
@@ -3184,25 +3113,6 @@ function appendToCloud(sheet, obj){
 }
 function saveLocalOnly(){
   try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){}
-}
-
-function startPolling(){
-  if(window._pollInterval)clearInterval(window._pollInterval);
-  window._pollInterval=setInterval(()=>{
-    const url=cfg.url||localStorage.getItem('cfg_url')||'';
-    const token=authToken||localStorage.getItem('auth_token')||'';
-    if(url&&token&&navigator.onLine)pollCloud();
-  },30000);
-  // Полная синхронизация раз в 5 минут — подхватывает удаления
-  if(window._fullSyncInterval)clearInterval(window._fullSyncInterval);
-  window._fullSyncInterval=setInterval(()=>{
-    const url=cfg.url||localStorage.getItem('cfg_url')||'';
-    const token=authToken||localStorage.getItem('auth_token')||'';
-    if(url&&token&&navigator.onLine){
-      console.log('[SYNC] Плановая полная синхронизация');
-      syncFromCloudSilent();
-    }
-  },5*60*1000);
 }
 
 rebuildRoleSelector();
