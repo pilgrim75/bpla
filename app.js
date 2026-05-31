@@ -30,8 +30,8 @@ let state = {
     {name:'Курьер21',qty:1,status:'nbg'},
   ],
   squads: [
-    {pilot:'Поп',drones:[{name:'Гамаюн13',qty:2},{name:'ПВХ1',qty:1}]},
-    {pilot:'Толстый',drones:[{name:'Гамаюн13',qty:1},{name:'КИРМ',qty:1}]},
+    {pilot:'Поп',drones:[{name:'Гамаюн13д',qty:2},{name:'ПВХ1',qty:1}]},
+    {pilot:'Толстый',drones:[{name:'Гамаюн13д',qty:1},{name:'КИРМ',qty:1}]},
   ],
   flights: [
     {date:'2026-05-25',time:'08:57',pilot:'Поп (Альберт)',target:'305 Вишня',ammo:'Доставка',drone:'Гамаюн13',result:'yes',returned:'yes',note:''},
@@ -996,8 +996,10 @@ function writeDroneLoss(pilot, drone, date, time, flightId){
   const di=sq.drones.find(d=>d.name.toLowerCase()===dn);
   if(di){
     di.qty--;
+    if(di.qty<=0)sq.drones=sq.drones.filter(d=>d!==di);
   } else {
-    sq.drones.push({name:drone,qty:-1});
+    // Борта нет в списке — логируем расхождение, но не создаём запись qty:-1
+    // чтобы не засорять список пилота фантомными бортами
   }
 
   // Логируем в историю перемещений
@@ -1049,6 +1051,7 @@ async function parseMessages(){
   const srcLines=raw.split('\n').map(l=>l.trim());
   const srcNonEmpty=srcLines.filter(Boolean);
   const numberedInput=srcLines.map((l,i)=>`[${i}] ${l}`).join('\n');
+  const ammoKnown=ammoCatalog.flatMap(a=>[a.name,...(a.aliases||[])]).filter(Boolean);
   try{
     const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
@@ -1064,12 +1067,14 @@ async function parseMessages(){
         system:`Ты парсер военных сообщений о вылетах дронов ФПВ. Из входного текста извлеки КАЖДЫЙ вылет отдельно.
 Каждая строка входного текста помечена номером в квадратных скобках [N]. Используй этот номер как _line.
 Верни ТОЛЬКО валидный JSON-массив без лишнего текста, пример:
-[{"_line":0,"date":"2026-05-23","time":"08:34","pilot":"Рама","flightnum":1,"target":"305 Вишня","ammo":"Доставка","drone":"Гамаюн13","result":"yes","returned":"yes","note":""},...]
+[{"_line":0,"date":"2026-05-23","time":"08:34","pilot":"Рама","flightnum":1,"target":"305 Вишня","ammo":"пом2","drone":"Гамаюн13","result":"yes","returned":"yes","note":""},...]
 Правила:
 - _line: ТОЧНЫЙ номер строки [N] из которой взят этот вылет — обязателен и уникален для каждого вылета
 - время всегда в формате HH:MM с ведущим нулём (08:34, не 8:34)
 - flightnum: число вылета если упомянуто ("первый вылет"=1, "второй вылет"=2 и т.д.), иначе null
-- note: ТОЛЬКО дополнительные обстоятельства (перебили видео, потеря управления, спикировал и т.п.) — НЕ номер вылета
+- target: комбинация "ЧИСЛО + СЛОВО-ЦВЕТ" (янтарь, красный, синий, зелёный, белый, чёрный, жёлтый, фиолетовый, серый, оранжевый, розовый) — это ВСЕГДА точка/цель; пиши оба слова в target, не разбивай, не путай с позывным
+- ammo: если токен совпадает (точно или приблизительно) с одним из известных боеприпасов [${ammoKnown.length?ammoKnown.join(', '):'—'}] — это груз/боеприпас, пиши в ammo; НЕ путай с позывным или целью${ammoKnown.length?'':'; если список пуст — определяй по контексту'}
+- note: ТОЛЬКО дополнительные обстоятельства (перебили видео, потеря управления, спикировал и т.п.) — НЕ номер вылета, НЕ цель, НЕ боеприпас
 - returned: вернул/борт вернул = yes; не вернули/спикировал/перебили/потеря управления/борт остался/борт не вернул = no
 - result: на месте/выполнена = yes; не на месте/не выполнена = no
 - drone: нормализуй написание к ближайшему из словаря: ${DRONE_CATALOG.join(', ')}
@@ -1141,20 +1146,169 @@ function hideCard(i){
   if(card)card.style.display='none';
 }
 
-function confirmParsed(i){
+function levenshtein(a,b){
+  const m=a.length,n=b.length;
+  const dp=Array.from({length:m+1},(_,i)=>Array.from({length:n+1},(_,j)=>i===0?j:j===0?i:0));
+  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)
+    dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+function getKnownDrones(){
+  const names=new Set();
+  state.stock.forEach(d=>{if(d.name)names.add(d.name);});
+  state.squads.forEach(sq=>sq.drones.forEach(d=>{if(d.name)names.add(d.name);}));
+  return [...names];
+}
+
+function getKnownPilots(){
+  return state.squads.map(sq=>sq.pilot).filter(Boolean);
+}
+
+// Возвращает все кандидаты в пределах порога, отсортированные по расстоянию
+function findClosestCandidates(input,candidates){
+  if(!candidates.length)return[];
+  const lo=input.toLowerCase();
+  const threshold=Math.max(3,Math.floor(input.length/2));
+  return candidates
+    .map(name=>({name,dist:levenshtein(lo,name.toLowerCase())}))
+    .filter(r=>r.dist<=threshold)
+    .sort((a,b)=>a.dist-b.dist);
+}
+
+// Борты конкретного пилота с qty>0. Возвращает [] если пилот не в расчётах — НЕ падает на всю базу
+function getKnownDronesForPilot(pilotName){
+  const sq=state.squads.find(s=>s.pilot.toLowerCase()===pilotName.toLowerCase());
+  if(!sq)return[];
+  return sq.drones.filter(d=>d.qty>0).map(d=>d.name).filter(Boolean);
+}
+
+// Диалог выбора одного значения из нескольких кандидатов.
+// cfg.showManual — показывать кнопку "Ввести вручную" (default true)
+// cfg.cancelLabel — текст кнопки отмены (default 'Пропустить')
+// Возвращает: выбранное имя | 'manual' | null (отмена/пропустить)
+function showFuzzySelectDialog(fieldLabel,inputName,options,cfg={}){
+  const showManual=cfg.showManual!==false;
+  const cancelLabel=cfg.cancelLabel||'Пропустить';
+  return new Promise(resolve=>{
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+    const optBtns=options.map((name,idx)=>
+      `<button class="btn btn-success btn-sm" id="fuz-opt-${idx}">${esc(name)}</button>`
+    ).join('');
+    ov.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
+      <div style="font-size:13px;font-weight:700;color:#dc2626;margin-bottom:10px">${esc(fieldLabel)} не найден</div>
+      <div style="font-size:12px;color:var(--text);margin-bottom:12px">«<b>${esc(inputName)}</b>» отсутствует. Выберите:</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${optBtns}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px">
+        ${showManual?'<button class="btn btn-sm" id="fuz-manual">Ввести вручную</button>':''}
+        <button class="btn btn-sm" id="fuz-skip" style="color:var(--muted)">${esc(cancelLabel)}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    options.forEach((name,idx)=>{
+      ov.querySelector(`#fuz-opt-${idx}`).onclick=()=>{ov.remove();resolve(name);};
+    });
+    if(showManual)ov.querySelector('#fuz-manual').onclick=()=>{ov.remove();resolve('manual');};
+    ov.querySelector('#fuz-skip').onclick=()=>{ov.remove();resolve(null);};
+  });
+}
+
+function showImportBlockError(cardIndex,label,inputName,srcText){
+  const card=document.getElementById(`pcard-${cardIndex}`);
+  if(!card)return;
+  const existing=card.querySelector('.import-block-err');
+  if(existing)existing.remove();
+  const err=document.createElement('div');
+  err.className='import-block-err';
+  err.style.cssText='background:#3f1212;border:1px solid #dc2626;border-radius:6px;padding:8px 12px;font-size:11px;color:#fca5a5;margin-top:8px';
+  err.innerHTML=`⛔ ${esc(label)} «<b>${esc(inputName)}</b>» не найден в базе. Отредактируйте поле вручную и попробуйте снова.`
+    +(srcText?`<div style="margin-top:4px;color:var(--muted);font-family:monospace;white-space:pre-wrap">${esc(srcText)}</div>`:'');
+  card.appendChild(err);
+}
+
+// Возвращает существующий вылет или null
+function findFlightDuplicate(date,time,pilot){
+  return state.flights.find(f=>
+    f.date===date&&f.time===time&&f.pilot.toLowerCase()===pilot.toLowerCase()
+  )||null;
+}
+
+// Диалог подтверждения дубликата. Возвращает: 'save'|'cancel'
+function showDuplicateDialog(date,time,pilot){
+  return new Promise(resolve=>{
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+    ov.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:380px;width:92%;box-shadow:0 8px 32px #0008">
+      <div style="font-size:13px;font-weight:700;color:var(--amber,#f59e0b);margin-bottom:10px">⚠ Вылет уже существует</div>
+      <div style="font-size:12px;color:var(--text);margin-bottom:16px"><b>${esc(date)} ${esc(time)}</b> · пилот <b>${esc(pilot)}</b><br>Добавить повторно?</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm" id="dup-add" style="color:#dc2626;border-color:#dc2626">Всё равно добавить</button>
+        <button class="btn btn-success btn-sm" id="dup-cancel">Отмена</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#dup-add').onclick=()=>{ov.remove();resolve('save');};
+    ov.querySelector('#dup-cancel').onclick=()=>{ov.remove();resolve('cancel');};
+  });
+}
+
+async function confirmParsed(i){
+  const droneInput=document.getElementById(`p${i}-drone`);
+  const pilotInput=document.getElementById(`p${i}-pilot`);
+  const srcEl=document.getElementById(`psrc-${i}`);
+  const srcText=srcEl?srcEl.textContent.trim():'';
+
+  // Шаг 1: пилот — при несовпадении показываем всех пилотов из базы
+  const pilotName=(pilotInput.value||'').trim();
+  const knownPilots=getKnownPilots();
+  if(pilotName&&knownPilots.length){
+    const exactPilot=knownPilots.some(n=>n.toLowerCase()===pilotName.toLowerCase());
+    if(!exactPilot){
+      const chosen=await showFuzzySelectDialog('Пилот',pilotName,knownPilots,{showManual:false,cancelLabel:'Отмена'});
+      if(chosen===null){const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';return;}
+      pilotInput.value=chosen;
+    }
+  }
+
+  // Шаг 2: борт — читаем имя ПОСЛЕ шага 1, проверяем только по списку подтверждённого пилота
+  const resolvedPilot=pilotInput.value.trim();
+  const droneName=(droneInput.value||'').trim();
+  const pilotDrones=getKnownDronesForPilot(resolvedPilot);
+  if(droneName&&pilotDrones.length){
+    const canonical=pilotDrones.find(n=>n.toLowerCase()===droneName.toLowerCase());
+    if(canonical){
+      // Точное совпадение — нормализуем регистр к каноническому из базы
+      droneInput.value=canonical;
+    }else{
+      const candidates=findClosestCandidates(droneName,pilotDrones);
+      if(!candidates.length){showImportBlockError(i,'Борт',droneName,srcText);return;}
+      const chosen=await showFuzzySelectDialog('Борт',droneName,candidates.map(c=>c.name));
+      if(chosen===null){const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';return;}
+      if(chosen==='manual'){droneInput.focus();droneInput.select();return;}
+      droneInput.value=chosen;
+    }
+  }
+
   const fn=document.getElementById(`p${i}-flightnum`).value;
   const f={
     date:document.getElementById(`p${i}-date`).value,
     time:document.getElementById(`p${i}-time`).value,
-    pilot:document.getElementById(`p${i}-pilot`).value,
+    pilot:pilotInput.value,
     target:document.getElementById(`p${i}-target`).value,
     ammo:document.getElementById(`p${i}-ammo`).value,
-    drone:document.getElementById(`p${i}-drone`).value,
+    drone:droneInput.value,
     result:document.getElementById(`p${i}-result`).value,
     returned:document.getElementById(`p${i}-returned`).value,
     flightnum:fn?parseInt(fn):null,
     note:document.getElementById(`p${i}-note`).value,
   };
+
+  if(findFlightDuplicate(f.date,f.time,f.pilot)){
+    const choice=await showDuplicateDialog(f.date,f.time,f.pilot);
+    if(choice==='cancel')return;
+  }
+
   f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
   if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);setTimeout(()=>syncStockAndSquads(),500);}
   if(!navigator.onLine)state.offlineQueue.push(f);
@@ -1164,7 +1318,6 @@ function confirmParsed(i){
   renderDashboard();
   renderInventory();
   const card=document.getElementById(`pcard-${i}`);
-  // Скрываем исходную строку сразу
   const src=document.getElementById(`psrc-${i}`);
   if(src)src.style.display='none';
   card.style.background='var(--green-dim)';
@@ -2312,7 +2465,7 @@ function autoFillFlightNum(){
   // Нумерация вычисляется в saveQuickFlight при записи — здесь ничего не делаем
 }
 
-function saveQuickFlight(){
+async function saveQuickFlight(){
   const pilot=(document.getElementById('qf-pilot').value||'').trim();
   // Автонумерация: считаем вылеты пилота за сегодня
   const today2=new Date().toISOString().slice(0,10);
@@ -2329,13 +2482,19 @@ function saveQuickFlight(){
   if(!drone){alert('Укажите БПЛА');return;}
   const ammo=ammoNormalizeName(ammoRaw)||ammoRaw;
   const now=new Date();
+  const date=now.toISOString().slice(0,10);
+  const time=now.toTimeString().slice(0,5);
+
+  if(findFlightDuplicate(date,time,pilot)){
+    const choice=await showDuplicateDialog(date,time,pilot);
+    if(choice==='cancel')return;
+  }
+
   const f={
     id:Date.now()+'_'+Math.random().toString(36).slice(2),
     _savedTs:Date.now(),
     _submittedBy:authUser.login||'',
-    date:now.toISOString().slice(0,10),
-    time:now.toTimeString().slice(0,5),
-    pilot,
+    date,time,pilot,
     flightnum:num,
     target,ammo,drone,
     result:done?'yes':'no',
