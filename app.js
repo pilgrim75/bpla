@@ -1306,7 +1306,11 @@ async function confirmParsed(i){
 
   if(findFlightDuplicate(f.date,f.time,f.pilot)){
     const choice=await showDuplicateDialog(f.date,f.time,f.pilot);
-    if(choice==='cancel')return;
+    if(choice==='cancel'){
+      const card=document.getElementById(`pcard-${i}`);
+      if(card)card.style.display='none';
+      return;
+    }
   }
 
   f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
