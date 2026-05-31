@@ -349,9 +349,232 @@ label{
 
 /* ============ PRINT ============ */
 @media print{
-  .topbar,.nav,.section-head .btn,.btn,.adm-tab,#syncIndicator,#netBar{display:none!important}
+  .topbar,.nav,.navbar,.section-head .btn,.btn,.adm-tab,#syncIndicator,#netBar{display:none!important}
   .main{padding:0}.page{display:block!important}.page:not(.active){display:none!important}
   body{background:#fff!important;color:#000!important}
   .report-block{border-left:2px solid #000;background:#fff!important}
   .rb-head,.rb-line{color:#000!important}
+}
+
+/* ============ DESIGN TOKENS (новый дизайн) ============ */
+:root,body.theme-terminal{
+  --color-background-primary:var(--card);
+  --color-background-secondary:var(--bg2);
+  --color-background-tertiary:var(--bg);
+  --color-background-danger:var(--red-dim);
+  --color-background-success:var(--tag-ok-bg);
+  --color-background-warning:var(--amber-dim);
+  --color-background-info:rgba(59,130,246,0.12);
+  --color-text-primary:var(--text);
+  --color-text-secondary:var(--text2);
+  --color-text-danger:var(--red);
+  --color-text-success:var(--tag-ok-color);
+  --color-text-warning:var(--amber);
+  --color-text-info:#60a5fa;
+  --color-border-tertiary:var(--border);
+  --color-border-secondary:var(--border2);
+  --color-border-danger:var(--tag-danger-border);
+  --color-border-success:var(--tag-ok-border);
+  --color-border-warning:var(--amber);
+  --color-border-info:#3b82f6;
+  --border-radius-lg:var(--radius);
+  --border-radius-md:var(--radius);
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+body.theme-gray{
+  --color-background-primary:var(--card);
+  --color-background-secondary:var(--bg2);
+  --color-background-tertiary:var(--bg);
+  --color-background-danger:var(--red-dim);
+  --color-background-success:var(--tag-ok-bg);
+  --color-background-warning:var(--amber-dim);
+  --color-background-info:rgba(59,130,246,0.12);
+  --color-text-primary:var(--text);
+  --color-text-secondary:var(--text2);
+  --color-text-danger:var(--red);
+  --color-text-success:var(--tag-ok-color);
+  --color-text-warning:var(--amber);
+  --color-text-info:#60a5fa;
+  --color-border-tertiary:var(--border);
+  --color-border-secondary:var(--border2);
+  --color-border-danger:var(--tag-danger-border);
+  --color-border-success:var(--tag-ok-border);
+  --color-border-warning:var(--amber);
+  --color-border-info:#3b82f6;
+  --border-radius-lg:var(--radius);
+  --border-radius-md:var(--radius);
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+body.theme-paper{
+  --color-background-primary:var(--card);
+  --color-background-secondary:var(--bg2);
+  --color-background-tertiary:var(--bg);
+  --color-background-danger:var(--red-dim);
+  --color-background-success:var(--tag-ok-bg);
+  --color-background-warning:var(--amber-dim);
+  --color-background-info:rgba(59,130,246,0.12);
+  --color-text-primary:var(--text);
+  --color-text-secondary:var(--text2);
+  --color-text-danger:var(--red);
+  --color-text-success:var(--tag-ok-color);
+  --color-text-warning:var(--amber);
+  --color-text-info:#60a5fa;
+  --color-border-tertiary:var(--border);
+  --color-border-secondary:var(--border2);
+  --color-border-danger:var(--tag-danger-border);
+  --color-border-success:var(--tag-ok-border);
+  --color-border-warning:var(--amber);
+  --color-border-info:#3b82f6;
+  --border-radius-lg:var(--radius);
+  --border-radius-md:var(--radius);
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+body.theme-field{
+  --color-background-primary:var(--card);
+  --color-background-secondary:var(--bg2);
+  --color-background-tertiary:var(--bg);
+  --color-background-danger:var(--red-dim);
+  --color-background-success:var(--tag-ok-bg);
+  --color-background-warning:var(--amber-dim);
+  --color-background-info:rgba(59,130,246,0.12);
+  --color-text-primary:var(--text);
+  --color-text-secondary:var(--text2);
+  --color-text-danger:var(--red);
+  --color-text-success:var(--tag-ok-color);
+  --color-text-warning:var(--amber);
+  --color-text-info:#60a5fa;
+  --color-border-tertiary:var(--border);
+  --color-border-secondary:var(--border2);
+  --color-border-danger:var(--tag-danger-border);
+  --color-border-success:var(--tag-ok-border);
+  --color-border-warning:var(--amber);
+  --color-border-info:#3b82f6;
+  --border-radius-lg:var(--radius);
+  --border-radius-md:var(--radius);
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+
+/* ============ NEW DESIGN CLASSES ============ */
+
+/* Topbar additions */
+.version{font-size:11px;background:var(--color-background-secondary);color:var(--color-text-secondary);padding:2px 8px;border-radius:999px;border:0.5px solid var(--color-border-tertiary)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.role-dot{width:6px;height:6px;background:#3B6D11;border-radius:50%;flex-shrink:0}
+.time-chip{font-size:12px;font-weight:500;color:var(--color-text-primary);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:4px 10px}
+.btn-exit{font-size:12px;color:var(--color-text-danger);background:var(--color-background-danger);border:0.5px solid var(--color-border-danger);border-radius:var(--border-radius-md);padding:4px 12px;cursor:pointer;font-family:inherit}
+
+/* Navbar */
+.navbar{background:var(--color-background-primary);border-bottom:0.5px solid var(--color-border-tertiary);padding:0 20px;display:flex;align-items:center;gap:2px;flex-shrink:0;flex-wrap:wrap;min-height:56px}
+.nav-tab{font-size:20px;font-weight:500;color:var(--color-text-secondary);padding:14px 16px;cursor:pointer;border:none;border-bottom:2px solid transparent;background:none;display:flex;align-items:center;gap:6px;letter-spacing:0.02em;font-family:inherit;white-space:nowrap}
+.nav-tab.active{color:var(--color-text-primary);border-bottom:2px solid var(--color-text-primary)}
+.nav-tab:hover:not(.active){color:var(--color-text-primary)}
+.nav-tab i{font-size:20px}
+
+/* Stats row (Dashboard) */
+.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat-card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:14px 16px}
+.stat-label{font-size:11px;color:var(--color-text-secondary);letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.stat-label i{font-size:14px}
+.stat-num{font-size:28px;font-weight:500;color:var(--color-text-primary);line-height:1;margin-bottom:10px}
+.stat-list{display:flex;flex-direction:column;gap:3px}
+.stat-meta{font-size:12px;color:var(--color-text-secondary);margin-top:8px;display:flex;flex-direction:column;gap:3px}
+
+/* Overrides for .stat-row already defined in BASE - new design version */
+/* .stat-row already exists, no conflict since new design uses same name consistently */
+
+/* Section cards */
+.section-card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);overflow:hidden}
+.section-header{padding:12px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;justify-content:space-between}
+.section-card .section-title,.section-header .section-title{font-size:12px;font-weight:500;color:var(--color-text-secondary);letter-spacing:0.04em;text-transform:uppercase;display:flex;align-items:center;gap:6px;padding-left:0;border-left:none}
+.section-card .section-title i,.section-header .section-title i{font-size:14px}
+
+/* Bottom row (Dashboard) */
+.bottom-row{display:grid;grid-template-columns:1fr 1.7fr;gap:10px;align-items:start}
+
+/* Crew */
+.crew-item{padding:12px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
+.crew-item:last-child{border-bottom:none}
+.crew-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+.crew-name{font-size:13px;font-weight:500;color:var(--color-text-primary)}
+.crew-sub{font-size:11px;color:var(--color-text-secondary);margin-top:1px}
+.crew-flights{font-size:11px;color:var(--color-text-secondary);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:999px;padding:3px 10px;white-space:nowrap}
+.crew-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.crew-tag{font-size:11px;padding:2px 8px;border-radius:999px;border:0.5px solid var(--color-border-tertiary);color:var(--color-text-secondary);background:var(--color-background-secondary)}
+
+/* Flight items (Dashboard) */
+.flight-item{padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;gap:10px}
+.flight-item:last-child{border-bottom:none}
+.flight-time{font-size:12px;color:var(--color-text-secondary);min-width:36px;font-variant-numeric:tabular-nums}
+.flight-pilot{font-size:12px;font-weight:500;color:var(--color-text-primary);min-width:52px}
+.flight-status{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:500}
+.s-ok{background:var(--color-background-success);color:var(--color-text-success)}
+.s-loss{background:var(--color-background-danger);color:var(--color-text-danger)}
+.flight-drone{font-size:12px;color:var(--color-text-secondary)}
+.flight-target{font-size:12px;color:var(--color-text-secondary);margin-left:auto;display:flex;align-items:center;gap:4px}
+.flight-target i{font-size:12px;color:var(--color-text-danger)}
+
+/* Day labels (Dashboard) */
+.day-label{padding:8px 16px;font-size:11px;font-weight:500;color:var(--color-text-secondary);letter-spacing:0.04em;text-transform:uppercase;background:var(--color-background-secondary);border-bottom:0.5px solid var(--color-border-tertiary);display:flex;justify-content:space-between;align-items:center}
+.day-count{font-size:11px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:999px;padding:2px 8px}
+
+/* Page header (Inventory) */
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.page-title{font-size:15px;font-weight:500;color:var(--color-text-primary);display:flex;align-items:center;gap:8px}
+.page-title i{font-size:16px;color:var(--color-text-secondary)}
+
+/* Two columns (Inventory) */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* Stock rows */
+.stock-row{display:flex;justify-content:space-between;align-items:center;padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
+.stock-row:last-child{border-bottom:none}
+.stock-name{font-size:13px;color:var(--color-text-primary)}
+.stock-count{font-size:13px;font-weight:500;color:var(--color-text-primary);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:2px 10px;min-width:32px;text-align:center}
+
+/* Off-stock rows */
+.offstock-row{display:flex;justify-content:space-between;align-items:center;padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
+.offstock-row:last-child{border-bottom:none}
+.offstock-name{font-size:13px;color:var(--color-text-primary)}
+.offstock-count{font-size:13px;font-weight:500;color:var(--color-text-secondary);min-width:20px;text-align:right}
+.badge-warn{font-size:11px;font-weight:500;color:var(--color-text-warning);background:var(--color-background-warning);border:0.5px solid var(--color-border-warning);border-radius:999px;padding:2px 9px}
+.badge-danger{font-size:11px;font-weight:500;color:var(--color-text-danger);background:var(--color-background-danger);border:0.5px solid var(--color-border-danger);border-radius:999px;padding:2px 9px}
+
+/* Crew rows (Inventory squads) */
+.crew-header-row{background:var(--color-background-secondary);padding:8px 16px;display:flex;align-items:center;gap:10px;border-bottom:0.5px solid var(--color-border-tertiary)}
+.crew-abbr{font-size:11px;font-weight:500;color:var(--color-text-secondary);background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:2px 7px}
+.crew-pname{font-size:13px;font-weight:500;color:var(--color-text-primary)}
+.crew-status-badge{margin-left:auto;font-size:11px;font-weight:500;color:var(--color-text-success);background:var(--color-background-success);border:0.5px solid var(--color-border-success);border-radius:999px;padding:2px 9px}
+
+/* Drone subrows (Inventory squads) */
+.drone-subrow{display:flex;align-items:center;padding:7px 16px 7px 40px;border-bottom:0.5px solid var(--color-border-tertiary);gap:10px}
+.drone-subrow:last-child{border-bottom:none}
+.drone-label{font-size:11px;color:var(--color-text-secondary);letter-spacing:0.02em;min-width:36px}
+.drone-qty{font-size:13px;font-weight:500;color:var(--color-text-primary);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:2px 10px;min-width:32px;text-align:center}
+
+/* Action buttons */
+.actions-row{display:flex;gap:8px;padding:12px 16px;border-top:0.5px solid var(--color-border-tertiary)}
+.btn-action{font-size:12px;font-weight:500;color:var(--color-text-secondary);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:inherit}
+.btn-action i{font-size:14px}
+.btn-action:hover{color:var(--color-text-primary);background:var(--color-background-primary)}
+.btn-action-info{font-size:12px;font-weight:500;color:var(--color-text-info);background:var(--color-background-info);border:0.5px solid var(--color-border-info);border-radius:var(--border-radius-md);padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:inherit}
+.btn-action-info i{font-size:14px}
+
+/* Changes log */
+.changes-card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);overflow:hidden}
+.change-row{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
+.change-row:last-child{border-bottom:none}
+.change-badge-in{font-size:11px;font-weight:500;color:var(--color-text-success);background:var(--color-background-success);border:0.5px solid var(--color-border-success);border-radius:999px;padding:2px 9px;white-space:nowrap}
+.change-detail{font-size:13px;color:var(--color-text-primary)}
+.change-detail span{font-weight:500}
+.change-time{font-size:11px;color:var(--color-text-secondary);margin-left:auto;white-space:nowrap}
+
+/* Status dots */
+.status-dot-ok{width:8px;height:8px;background:#3B6D11;border-radius:50%;flex-shrink:0}
+.status-dot-warn{width:8px;height:8px;background:#BA7517;border-radius:50%;flex-shrink:0}
+
+/* Responsive */
+@media(max-width:640px){
+  .stats-row{grid-template-columns:1fr}
+  .bottom-row{grid-template-columns:1fr}
+  .two-col{grid-template-columns:1fr}
 }

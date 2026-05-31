@@ -100,7 +100,7 @@ checkNet();
 function showPage(id,btn){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   if(id==='flights')renderFlights();
   if(id==='dashboard')renderDashboard();
@@ -147,7 +147,7 @@ function switchRole(r){
   if(r!=='admin'){
     const adminPage=document.getElementById('page-admin');
     if(adminPage.classList.contains('active')){
-      showPage('dashboard',document.querySelector('.nav button'));
+      showPage('dashboard',document.querySelector('#nav button'));
     }
   }
   try{localStorage.setItem('role',r);}catch(e){}
@@ -464,7 +464,7 @@ function renderDashboard(){
   document.getElementById('st-total').textContent=totalAll;
   document.getElementById('st-total-detail').innerHTML=
     Object.entries(byName).filter(([,q])=>q!==0).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
-      `<div class="stat-row"><span>${n}</span><span style="color:${q<0?'var(--red)':'var(--text)'}">${q}</span></div>`
+      `<div class="stat-row"><span>${n}</span><span style="${q<0?'color:var(--color-text-danger)':''}">${q}</span></div>`
     ).join('');
 
   document.getElementById('st-stock').textContent=totalStock;
@@ -473,7 +473,7 @@ function renderDashboard(){
       ? Object.entries(stockByName).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
           `<div class="stat-row"><span>${n}</span><span>${q}</span></div>`
         ).join('')
-      :'<span style="color:var(--muted)">склад пуст</span>';
+      :'<span style="color:var(--color-text-secondary)">склад пуст</span>';
 
   // --- Вылеты ---
   const fAll=state.flights;
@@ -485,33 +485,34 @@ function renderDashboard(){
   const pct=(a,b)=>b?Math.round(a/b*100)+'%':'—';
 
   document.getElementById('st-flights').textContent=fToday.length;
-  document.getElementById('st-flights-detail').innerHTML=`
-    <span style="color:var(--text2)">Сегодня: <b style="color:var(--green)">${fToday.length}</b>${fToday.length?` · выполнено <b>${pct(doneToday,fToday.length)}</b>`:''}${lossToday?` · <b style="color:var(--red)">потерь: ${lossToday}</b>`:''}</span><br>
-    <span style="color:var(--text2)">Неделя: <b style="color:var(--green)">${fWeek.length}</b> · потерь: <b style="color:${fWeek.filter(x=>x.returned==='no').length?'var(--red)':'var(--green)'}">${fWeek.filter(x=>x.returned==='no').length}</b></span><br>
-    <span style="color:var(--text2)">Месяц: <b style="color:var(--green)">${fMonth.length}</b> · всего в базе: <b>${fAll.length}</b></span>`;
+  const lossWeek=fWeek.filter(x=>x.returned==='no').length;
+  document.getElementById('st-flights-detail').innerHTML=
+    `<div class="stat-row"><span>Сегодня — выполнено ${pct(doneToday,fToday.length)}</span>${lossToday?`<span class="tag-danger" style="font-size:11px;color:var(--color-text-danger);font-weight:500">потеря: ${lossToday}</span>`:''}</div>`+
+    `<div class="stat-row"><span>За неделю: ${fWeek.length}</span>${lossWeek?`<span class="tag-danger" style="font-size:11px;color:var(--color-text-danger);font-weight:500">потери: ${lossWeek}</span>`:''}</div>`+
+    `<div class="stat-row"><span>За месяц: ${fMonth.length}</span><span style="font-size:11px;color:var(--color-text-secondary)">база: ${fAll.length}</span></div>`;
 
   // --- Расчёты ---
   document.getElementById('dashSquads').innerHTML=state.squads.map(sq=>{
     const sqFlightsToday=fToday.filter(x=>x.pilot===sq.pilot);
     const sqFlightsWeek=fWeek.filter(x=>x.pilot===sq.pilot);
+    const sqLossWeek=sqFlightsWeek.filter(x=>x.returned==='no').length;
     const lastFlight=[...fAll].filter(x=>x.pilot===sq.pilot).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
-    const hasNegative=sq.drones.some(d=>d.qty<0);
-    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-        <div class="avatar">${sq.pilot.slice(0,2).toUpperCase()}</div>
-        <div style="flex:1">
-          <div style="font-weight:700;font-size:13px;color:var(--green)">Пилот ${sq.pilot}</div>
-          <div style="font-size:10px;color:var(--muted)">Последний выход: ${lastFlight?lastFlight.date+' '+lastFlight.time:'нет данных'}</div>
+    const drones=sq.drones.filter(d=>d.qty!==0);
+    return `<div class="crew-item">
+      <div class="crew-header">
+        <div>
+          <div class="crew-name">Пилот ${sq.pilot}</div>
+          <div class="crew-sub">Последний вылет: ${lastFlight?lastFlight.date+' '+lastFlight.time:'нет данных'}</div>
         </div>
-        <span class="tag ${sqFlightsToday.length?'tag-ok':'tag-gray'}">${sqFlightsToday.length?sqFlightsToday.length+' вылетов сегодня':'нет вылетов'}</span>
-        ${hasNegative?'<span class="tag tag-danger">⚠ расхождение</span>':''}
+        <div class="crew-flights">${sqFlightsToday.length?sqFlightsToday.length+' сегодня':'нет вылетов'}</div>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">
-        ${sq.drones.filter(d=>d.qty!==0).map(d=>`<span class="tag ${d.qty<0?'tag-danger':'tag-info'}" style="font-size:11px">${d.name}: <b>${d.qty}</b></span>`).join('')}${sq.drones.every(d=>d.qty===0)?'<span style="font-size:11px;color:var(--muted)">нет дронов</span>':''}
+      <div class="crew-tags">
+        ${drones.map(d=>`<div class="crew-tag">${d.name} × ${d.qty}</div>`).join('')}
+        ${drones.length===0?'<div class="crew-tag" style="color:var(--color-text-secondary)">нет дронов</div>':''}
       </div>
-      <div style="font-size:10px;color:var(--muted)">За неделю: ${sqFlightsWeek.length} вылетов · потерь: ${sqFlightsWeek.filter(x=>x.returned==='no').length}</div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px">За неделю: ${sqFlightsWeek.length} вылетов${sqLossWeek?` · <span style="color:var(--color-text-danger)">потери: ${sqLossWeek}</span>`:''}</div>
     </div>`;
-  }).join('')||'<div style="color:var(--muted);padding:8px">Нет расчётов</div>';
+  }).join('')||'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет расчётов</div>';
 
   // --- Вылеты сегодня / вчера ---
   const sortDesc=(a,b)=>(b.date+b.time).localeCompare(a.date+a.time);
@@ -519,30 +520,28 @@ function renderDashboard(){
   const yesterdayFlights=[...fAll].filter(x=>x.date===yest).sort(sortDesc);
 
   const flightRow=x=>`
-    <div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
-      <span style="font-size:10px;color:var(--muted);min-width:38px">${x.time}</span>
-      <span style="font-weight:700;color:var(--green);min-width:60px">${x.pilot}</span>
-      <span class="tag ${x.returned==='no'?'tag-danger':'tag-ok'}" style="font-size:10px">${x.returned==='no'?'потеря':'вылет'}</span>
-      <span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅':'❌'}</span>
-      <span style="font-size:11px;color:var(--text2)">${x.drone||'—'}</span>
-      ${x.target?`<span style="font-size:10px;color:var(--muted)">📍${x.target}</span>`:''}
-      ${x.returned==='no'?`<span style="font-size:10px;color:var(--red)">борт потерян</span>`:''}
+    <div class="flight-item">
+      <div class="flight-time">${x.time}</div>
+      <div class="flight-pilot">${x.pilot}</div>
+      <div class="flight-status ${x.returned==='no'?'s-loss':'s-ok'}">${x.returned==='no'?'потеря':'вылет'}</div>
+      <div class="flight-drone">${x.drone||'—'}</div>
+      <div class="flight-target"><i class="ti ti-map-pin"></i> ${x.target||'—'}${x.returned==='no'?' · <span style="font-size:11px;color:var(--color-text-danger)">борт потерян</span>':''}</div>
     </div>`;
 
   let html='';
   if(todayFlights.length){
-    html+=`<div style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;padding:4px 0;margin-top:4px">Сегодня — ${todayFlights.length} вылетов</div>`;
+    html+=`<div class="day-label">Сегодня <span class="day-count">${todayFlights.length} вылетов</span></div>`;
     html+=todayFlights.map(flightRow).join('');
   }
   if(yesterdayFlights.length){
-    html+=`<div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:1px;text-transform:uppercase;padding:4px 0;margin-top:8px;border-top:1px solid var(--border2)">Вчера — ${yesterdayFlights.length} вылетов</div>`;
+    html+=`<div class="day-label">Вчера <span class="day-count">${yesterdayFlights.length} вылетов</span></div>`;
     html+=yesterdayFlights.slice(0,8).map(flightRow).join('');
-    if(yesterdayFlights.length>8)html+=`<div style="font-size:10px;color:var(--muted);padding:4px 0">... ещё ${yesterdayFlights.length-8}</div>`;
+    if(yesterdayFlights.length>8)html+=`<div style="font-size:11px;color:var(--color-text-secondary);padding:8px 16px">... ещё ${yesterdayFlights.length-8}</div>`;
   }
   if(!todayFlights.length&&!yesterdayFlights.length){
     const last=[...fAll].sort(sortDesc).slice(0,5);
-    html='<div style="font-size:10px;color:var(--muted);padding:4px 0">Вылетов сегодня и вчера нет</div>';
-    if(last.length)html+=`<div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:1px;padding:8px 0 4px;border-top:1px solid var(--border2)">Последние вылеты</div>`+last.map(flightRow).join('');
+    html='<div style="font-size:11px;color:var(--color-text-secondary);padding:12px 16px">Вылетов сегодня и вчера нет</div>';
+    if(last.length)html+=`<div class="day-label">Последние вылеты <span class="day-count">${last.length}</span></div>`+last.map(flightRow).join('');
   }
   document.getElementById('dashRecent').innerHTML=html;
 }
@@ -551,29 +550,28 @@ function renderDashboard(){
 function renderInventory(){
   const bg=state.stock.filter(d=>d.status==='bg');
   const nbg=state.stock.filter(d=>d.status!=='bg'&&d.qty!==0);
-  document.getElementById('stockListBG').innerHTML=bg.length?bg.map(d=>`
-    <div class="drone-row"><div class="drone-name">${d.name}</div><div class="qty">${d.qty}</div></div>`).join(''):'<div style="color:var(--muted);padding:8px">Пусто</div>';
-  document.getElementById('stockListNBG').innerHTML=nbg.length?nbg.map(d=>`
-    <div class="drone-row"><div class="drone-name">${d.name}</div><span class="tag tag-warn">не БГ</span><div class="qty">${d.qty}</div></div>`).join(''):'<div style="color:var(--muted);padding:8px">Нет</div>';
+  document.getElementById('stockListBG').innerHTML=bg.length?bg.map(d=>
+    `<div class="stock-row"><div class="stock-name">${d.name}</div><div class="stock-count">${d.qty}</div></div>`
+  ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Пусто</div>';
+  document.getElementById('stockListNBG').innerHTML=nbg.length?nbg.map(d=>
+    `<div class="offstock-row"><div class="offstock-name">${d.name}</div><div style="display:flex;align-items:center;gap:8px"><div class="${d.status==='loss'?'badge-danger':'badge-warn'}">${d.status==='loss'?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
+  ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет</div>';
 
-  document.getElementById('squadTable').innerHTML=state.squads.map(sq=>`
-    <tr style="background:var(--green-dim)">
-      <td colspan="4" style="padding:8px 8px 4px;border-bottom:none">
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="width:30px;height:30px;border:1px solid var(--border2);background:var(--card);color:var(--green);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;flex-shrink:0">${sq.pilot.slice(0,2).toUpperCase()}</div>
-          <span style="font-weight:700;font-size:13px;color:var(--green)">Пилот ${sq.pilot}</span>
-          <span class="tag tag-ok" style="margin-left:auto">БГ</span>
-        </div>
-      </td>
-    </tr>
-    ${sq.drones.filter(d=>d.qty!==0).map((d,i)=>`
-      <tr>
-        <td style="padding-left:48px;color:var(--muted);font-size:11px">${i===0?'БПЛА':''}</td>
-        <td>${d.name}</td>
-        <td><span class="qty" style="${d.qty<0?'border-color:var(--red);color:var(--red)':''}">${d.qty}</span>${d.qty<0?'<span style="font-size:10px;color:var(--red);margin-left:4px">⚠ расхождение</span>':''}</td>
-        <td></td>
-      </tr>`).join('')}${sq.drones.filter(d=>d.qty!==0).length===0?'<tr><td colspan="4" style="padding-left:48px;color:var(--muted);font-size:11px">нет дронов</td></tr>':''}    
-  `).join('');
+  document.getElementById('squadTable').innerHTML=state.squads.map(sq=>{
+    const drones=sq.drones.filter(d=>d.qty!==0);
+    const abbr=sq.pilot.slice(0,2).toUpperCase();
+    return `<div class="crew-header-row">
+        <div class="crew-abbr">${abbr}</div>
+        <div class="crew-pname">Пилот ${sq.pilot}</div>
+        <div class="crew-status-badge">БГ</div>
+      </div>
+      ${drones.map((d,i)=>`<div class="drone-subrow">
+        <div class="drone-label">${i===0?'БПЛА':''}</div>
+        <div class="drone-name" style="${d.qty<0?'color:var(--color-text-danger)':''}">${d.name}${d.qty<0?' ⚠':''}</div>
+        <div class="drone-qty" style="${d.qty<0?'color:var(--color-text-danger);border-color:var(--color-border-danger)':''}">${d.qty}</div>
+      </div>`).join('')}
+      ${drones.length===0?`<div class="drone-subrow"><div class="drone-label"></div><div class="drone-name" style="color:var(--color-text-secondary)">нет дронов</div></div>`:''}`;
+  }).join('');
   renderTransfersLog();
 }
 
@@ -737,51 +735,33 @@ function saveExchange(){
 
 function renderTransfersLog(){
   if(!state.transfers||!state.transfers.length){
-    document.getElementById('transfersLog').innerHTML='<div style="color:var(--muted);font-size:12px">Нет операций</div>';
+    document.getElementById('transfersLog').innerHTML='<div style="color:var(--color-text-secondary);font-size:12px;padding:12px 16px">Нет операций</div>';
     return;
   }
   document.getElementById('transfersLog').innerHTML=state.transfers.slice(0,30).map(op=>{
     if(op.type==='loss'){
-      return `<div style="padding:8px 0;border-bottom:0.5px solid var(--border);font-size:12px">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span class="tag tag-danger">✈ Потеря</span>
-          <span style="font-weight:600">${op.drone}</span>
-          <span>пилот: ${op.pilot}</span>
-          <span style="color:var(--muted)">${op.date} ${op.time||''}</span>
-        </div>
+      return `<div class="change-row">
+        <div class="badge-danger">Потеря</div>
+        <div class="change-detail"><span>${op.drone}</span> · пилот: ${op.pilot}</div>
+        <div class="change-time">${op.date} ${op.time||''}</div>
       </div>`;
     } else if(op.type==='arrival'){
-      return `<div style="padding:8px 0;border-bottom:0.5px solid var(--border);font-size:12px">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span class="tag tag-ok">📦 Поступление</span>
-          <span style="font-weight:600">${op.drone} × ${op.qty}</span>
-          <span style="color:var(--muted)">${op.date} ${op.time||''}</span>
-          ${op.note?`<span style="color:var(--muted);font-size:11px">· ${op.note}</span>`:''}
-        </div>
+      return `<div class="change-row">
+        <div class="change-badge-in">Поступление</div>
+        <div class="change-detail"><span>${op.drone} × ${op.qty}</span>${op.note?` · ${op.note}`:''}</div>
+        <div class="change-time">${op.date} ${op.time||''}</div>
       </div>`;
     } else if(op.type==='exchange'){
-      return `<div style="padding:8px 0;border-bottom:0.5px solid var(--border);font-size:12px">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
-          <span class="tag" style="background:#ede9fe;color:#5b21b6">⇄ Обмен</span>
-          <span style="font-weight:600">${op.unit}</span>
-          <span style="color:var(--muted)">${op.date} ${op.time||''}</span>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span class="tag tag-danger">Отдали: ${op.give} × ${op.giveQty}</span>
-          <span style="color:var(--muted)">→</span>
-          <span class="tag tag-ok">Получили: ${op.get} × ${op.getQty}</span>
-          ${op.note?`<span style="color:var(--muted);font-size:11px">· ${op.note}</span>`:''}
-        </div>
+      return `<div class="change-row">
+        <div class="badge-warn">Обмен</div>
+        <div class="change-detail"><span>${op.unit}</span> · отдали: ${op.give} × ${op.giveQty} → получили: ${op.get} × ${op.getQty}${op.note?` · ${op.note}`:''}</div>
+        <div class="change-time">${op.date} ${op.time||''}</div>
       </div>`;
     } else {
-      return `<div style="padding:8px 0;border-bottom:0.5px solid var(--border);font-size:12px">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span class="tag tag-info">Передача</span>
-          <span>${op.from} → ${op.to}</span>
-          <span style="font-weight:600">${op.drone} × ${op.qty}</span>
-          <span style="color:var(--muted)">${op.date} ${op.time||''}</span>
-          ${op.note?`<span style="color:var(--muted);font-size:11px">· ${op.note}</span>`:''}
-        </div>
+      return `<div class="change-row">
+        <div class="change-badge-in">Передача</div>
+        <div class="change-detail">${op.from} → ${op.to} · <span>${op.drone} × ${op.qty}</span>${op.note?` · ${op.note}`:''}</div>
+        <div class="change-time">${op.date} ${op.time||''}</div>
       </div>`;
     }
   }).join('');
@@ -1684,36 +1664,39 @@ function applyTheme(name){
 }
 
 function applyFontSize(sz){
-  const base=parseInt(sz)||14;
-  // Устанавливаем CSS переменную — все размеры масштабируются относительно неё
+  const base=parseInt(sz)||16;
   document.documentElement.style.setProperty('--base',base+'px');
   document.documentElement.style.fontSize=base+'px';
   document.body.style.fontSize=base+'px';
-  // Принудительно обновляем элементы с жёстко заданным font-size через scale
-  const scale=base/14; // 14px — базовый размер
+  // Явные размеры для каждого уровня (S=12, M=16, L=20, XL=24)
+  const tbl={
+    section: {12:11, 16:12, 20:13, 24:14}, // .section-title, .page-title, .card-title
+    content: {12:13, 16:14, 20:15, 24:16}, // пилоты, борта, время, данные таблиц
+    stat:    {12:28, 16:32, 20:36, 24:40}, // большие цифры статистики
+    label:   {12:11, 16:12, 20:12, 24:13}, // подписи, метки, th, теги
+  };
+  const ss=tbl.section[base]||12;
+  const sc=tbl.content[base]||14;
+  const st=tbl.stat[base]||32;
+  const sl=tbl.label[base]||12;
   const styleId='fontScaleStyle';
   let styleEl=document.getElementById(styleId);
   if(!styleEl){styleEl=document.createElement('style');styleEl.id=styleId;document.head.appendChild(styleEl);}
   styleEl.textContent=`
-    body, input, select, textarea, button { font-size: ${base}px !important; }
+    body, input, select, textarea, button { font-size: ${sc}px !important; }
     .adm-flight-table, .adm-flight-table input, .adm-flight-table select, .adm-flight-table td, .adm-flight-table th { font-size: 12px !important; }
-    .card-title { font-size: ${Math.round(10*scale)}px !important; }
-    .stat { font-size: ${Math.round(30*scale)}px !important; }
-    .stat-sub, label { font-size: ${Math.round(10*scale)}px !important; }
-    th { font-size: ${Math.round(10*scale)}px !important; }
-    td { font-size: ${base}px !important; }
-    .tag { font-size: ${Math.round(11*scale)}px !important; }
-    .nav button { font-size: ${Math.round(11*scale)}px !important; }
-    .section-title { font-size: ${Math.round(15*scale)}px !important; }
-    .flight-pilot { font-size: ${base}px !important; }
-    .flight-time, .flight-cell { font-size: ${base}px !important; }
-    .report-block .rb-head { font-size: ${Math.round(13*scale)}px !important; }
-    .report-block .rb-line { font-size: ${base}px !important; }
-    .dp-day { font-size: ${base}px !important; }
-    .dp-nav-label { font-size: ${Math.round(12*scale)}px !important; }
-    .notice { font-size: ${base}px !important; }
-    .qty { font-size: ${Math.round(13*scale)}px !important; }
-    .drone-name { font-size: ${base}px !important; }
+    .section-title, .page-title, .card-title { font-size: ${ss}px !important; }
+    .stat, .stat-num { font-size: ${st}px !important; }
+    .stat-sub, .stat-meta, .day-label, .crew-sub, .crew-flights, label, th { font-size: ${sl}px !important; }
+    .tag { font-size: ${sl}px !important; }
+    td, .flight-pilot, .flight-time, .flight-cell, .drone-name, .crew-name, .stock-name, .offstock-name, .change-detail { font-size: ${sc}px !important; }
+    .report-block .rb-head, .report-block .rb-line { font-size: ${sc}px !important; }
+    .dp-day { font-size: ${sc}px !important; }
+    .dp-nav-label { font-size: ${sl}px !important; }
+    .notice { font-size: ${sc}px !important; }
+    .qty { font-size: ${sc}px !important; }
+    .topbar, .topbar * { font-size: 14px !important; }
+    .nav-tab, .nav-tab * { font-size: 20px !important; }
   `;
   try{localStorage.setItem('fontSize',sz);}catch(e){}
 }
@@ -3297,7 +3280,7 @@ fillDataLists();
 // Восстановить тему, размер и роль
 try{
   const savedTheme=localStorage.getItem('theme')||'terminal';
-  const savedSize=localStorage.getItem('fontSize')||'14';
+  const savedSize=localStorage.getItem('fontSize')||'16';
   const savedRole=localStorage.getItem('role')||'cmd';
   document.getElementById('themeSwitch').value=savedTheme;
   document.getElementById('fontSizeSwitch').value=savedSize;
@@ -3308,7 +3291,7 @@ try{
   const optExists=[...roleSel.options].some(o=>o.value===savedRole);
   roleSel.value=optExists?savedRole:'cmd';
   switchRole(roleSel.value);
-}catch(e){applyTheme('terminal');applyFontSize('14');switchRole('cmd');}
+}catch(e){applyTheme('terminal');applyFontSize('16');switchRole('cmd');}
 // ВАЖНО: cfgLoad до initAuth — нужен URL для синхронизации
 cfgLoad();
 renderSettingsStatus();

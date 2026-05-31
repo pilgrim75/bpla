@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>БПЛА Учёт</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <style id="themeStyle"></style>
 </head>
 <body>
@@ -23,70 +24,75 @@
 
 <div class="app">
 <div class="topbar">
-  <div class="logo">АСУ БПЛА <span>// ЖУРНАЛ ВЫЛЕТОВ v0.9</span></div>
+  <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
+  <div class="version">v0.9</div>
   <select id="roleSwitch" style="width:auto;padding:4px 10px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
     <option value="tech">ТЕХНИК</option>
   </select>
-  <div class="role-badge" id="roleBadge"><b>Командир</b></div>
-  <button id="logoutBtn" onclick="logout()" style="display:none;padding:3px 10px;font-size:10px;background:#1a0000;border:1px solid #7a0000;color:var(--red);cursor:pointer;font-family:inherit;letter-spacing:1px">Выход</button>
-  <div class="sync-indicator" id="syncIndicator">● локально</div>
-  <select id="themeSwitch" onchange="applyTheme(this.value)" title="Цветовая схема" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
-    <option value="terminal">Терминал</option>
-    <option value="wb">Серый</option>
-    <option value="bw">Чёрный на белом</option>
-    <option value="field">Полевой планшет</option>
-  </select>
-  <select id="fontSizeSwitch" onchange="applyFontSize(this.value)" title="Размер шрифта" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
-    <option value="12">Шрифт: S</option>
-    <option value="14" selected>Шрифт: M</option>
-    <option value="16">Шрифт: L</option>
-    <option value="18">Шрифт: XL</option>
-  </select>
+  <div class="topbar-right">
+    <div class="role-badge" id="roleBadge"><div class="role-dot"></div><b>Командир</b></div>
+    <div class="sync-indicator" id="syncIndicator">● локально</div>
+    <select id="themeSwitch" onchange="applyTheme(this.value)" title="Цветовая схема" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
+      <option value="terminal">Терминал</option>
+      <option value="wb">Серый</option>
+      <option value="bw">Чёрный на белом</option>
+      <option value="field">Полевой планшет</option>
+    </select>
+    <select id="fontSizeSwitch" onchange="applyFontSize(this.value)" title="Размер шрифта" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
+      <option value="12">Шрифт: S</option>
+      <option value="16" selected>Шрифт: M</option>
+      <option value="20">Шрифт: L</option>
+      <option value="24">Шрифт: XL</option>
+    </select>
+    <button id="logoutBtn" onclick="logout()" style="display:none;padding:3px 10px;font-size:10px;background:#1a0000;border:1px solid #7a0000;color:var(--red);cursor:pointer;font-family:inherit;letter-spacing:1px">Выход</button>
+  </div>
 </div>
 <div id="netBar"></div>
 
-<div class="nav" id="nav">
-  <button class="active" onclick="showPage('dashboard',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Обзор</button>
-  <button onclick="showPage('inventory',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Склад</button>
-  <button onclick="showPage('flights',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>Вылеты</button>
-  <button onclick="showPage('report',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Отчёты</button>
-  <button onclick="showPage('import',this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Импорт</button>
-  <button id="adminNavBtn" onclick="showPage('admin',this)" style="display:none;color:#fca5a5"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Администратор</button>
-  <button onclick="showPage('settings',this)" style="margin-left:auto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Настройки</button>
+<div class="navbar" id="nav">
+  <button class="nav-tab active" onclick="showPage('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Обзор</button>
+  <button class="nav-tab" onclick="showPage('inventory',this)"><i class="ti ti-building-warehouse"></i>Склад</button>
+  <button class="nav-tab" onclick="showPage('flights',this)"><i class="ti ti-plane-departure"></i>Вылеты</button>
+  <button class="nav-tab" onclick="showPage('report',this)"><i class="ti ti-chart-bar"></i>Отчёты</button>
+  <button class="nav-tab" onclick="showPage('import',this)"><i class="ti ti-file-import"></i>Импорт</button>
+  <button class="nav-tab" id="adminNavBtn" onclick="showPage('admin',this)" style="display:none"><i class="ti ti-shield"></i>Администратор</button>
+  <button class="nav-tab" onclick="showPage('settings',this)" style="margin-left:auto"><i class="ti ti-settings"></i>Настройки</button>
 </div>
 
 <div class="main">
 
 <!-- DASHBOARD -->
 <div class="page active" id="page-dashboard">
-  <!-- Строка 1: статистика -->
-  <div class="grid3" style="margin-bottom:8px">
-    <div class="card">
-      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Всего БПЛА на учёте</div>
-      <div class="stat" id="st-total">—</div>
-      <div id="st-total-detail" style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6"></div>
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label"><i class="ti ti-drone"></i> Всего БПЛА на учёте</div>
+      <div class="stat-num" id="st-total">—</div>
+      <div class="stat-list" id="st-total-detail"></div>
     </div>
-    <div class="card">
-      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>На складе БГ</div>
-      <div class="stat" id="st-stock">—</div>
-      <div id="st-stock-detail" style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6"></div>
+    <div class="stat-card">
+      <div class="stat-label"><i class="ti ti-building-warehouse"></i> На складе БГ</div>
+      <div class="stat-num" id="st-stock">—</div>
+      <div class="stat-list" id="st-stock-detail"></div>
     </div>
-    <div class="card">
-      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>Вылеты</div>
-      <div class="stat" id="st-flights">—</div>
-      <div id="st-flights-detail" style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6"></div>
+    <div class="stat-card">
+      <div class="stat-label"><i class="ti ti-plane-tilt"></i> Вылеты</div>
+      <div class="stat-num" id="st-flights">—</div>
+      <div class="stat-meta" id="st-flights-detail"></div>
     </div>
   </div>
-  <!-- Строка 2: расчёты + вылеты -->
-  <div class="grid2">
-    <div class="card">
-      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>Расчёты</div>
+  <div class="bottom-row">
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title"><i class="ti ti-users"></i> Расчёты</div>
+      </div>
       <div id="dashSquads"></div>
     </div>
-    <div class="card">
-      <div class="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:middle"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Вылеты сегодня / вчера</div>
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title"><i class="ti ti-list"></i> Вылеты сегодня / вчера</div>
+      </div>
       <div id="dashRecent"></div>
     </div>
   </div>
@@ -94,15 +100,10 @@
 
 <!-- INVENTORY -->
 <div class="page" id="page-inventory">
-  <div class="section-head">
-    <div class="section-title">Складской учёт</div>
-    <button class="btn btn-primary btn-sm" id="addDroneBtn" onclick="toggleAddDrone()">+ Добавить БПЛА</button>
-  </div>
-
-
   <!-- Глобальный умный список БПЛА — подключается ко всем полям -->
   <datalist id="dl-drones-smart"></datalist>
 
+  <!-- форма добавления -->
   <div class="card" id="addDroneCard" style="display:none;margin-bottom:12px">
     <div style="font-size:13px;font-weight:700;margin-bottom:12px">Добавить БПЛА на склад</div>
     <div class="form-row cols3">
@@ -120,102 +121,109 @@
     </div>
   </div>
 
-  <div class="gap12">
-    <div class="grid2">
-      <div class="card">
-        <div class="card-title">✅ Склад (БГ)</div>
-        <div id="stockListBG"></div>
+  <div class="page-header">
+    <div class="page-title"><i class="ti ti-building-warehouse"></i> Складской учёт</div>
+    <button class="btn btn-primary" id="addDroneBtn" onclick="toggleAddDrone()"><i class="ti ti-plus"></i> Добавить БПЛА</button>
+  </div>
+
+  <div class="two-col">
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title"><div class="status-dot-ok"></div> Склад (БГ)</div>
       </div>
-      <div class="card">
-        <div class="card-title">⛔ Не БГ / Ремонт / Списан</div>
-        <div id="stockListNBG"></div>
+      <div id="stockListBG"></div>
+    </div>
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title"><div class="status-dot-warn"></div> Не БГ / Ремонт / Списан</div>
+      </div>
+      <div id="stockListNBG"></div>
+    </div>
+  </div>
+
+  <!-- Расчёты -->
+  <div class="section-card">
+    <div class="section-header">
+      <div class="section-title"><i class="ti ti-users"></i> Расчёты — выданные борта</div>
+      <button id="squadEditBtn" class="btn-action" onclick="toggleSquadEditor()" style="display:none;padding:4px 10px;font-size:11px"><i class="ti ti-edit"></i> Редактировать</button>
+    </div>
+    <div id="squadTable"></div>
+    <div id="squadEditor" style="display:none;padding:14px;border-top:0.5px solid var(--color-border-tertiary)">
+      <div style="font-size:12px;font-weight:700;margin-bottom:10px;color:var(--muted)">РЕДАКТОР РАСЧЁТОВ</div>
+      <div id="squadEditorList"></div>
+      <div style="margin-top:12px;padding-top:12px;border-top:0.5px dashed var(--border)">
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px">Добавить расчёт</div>
+        <div class="form-row cols2">
+          <div><label>Имя пилота</label><input id="sq-newPilot" placeholder="Иванов"></div>
+          <div><label>БПЛА через запятую</label><input id="sq-newDrones" list="dl-drones-smart" placeholder="Гамаюн13, КИРМ" autocomplete="off"></div>
+        </div>
+        <button class="btn btn-success btn-sm" onclick="squadAddPilot()">Добавить расчёт</button>
       </div>
     </div>
+    <div class="actions-row" id="transferBtnArea">
+      <button class="btn-action" onclick="openTransferForm()"><i class="ti ti-transfer"></i> Передача внутри</button>
+      <button class="btn-action-info" onclick="openExchangeForm()"><i class="ti ti-arrows-exchange"></i> Обмен с другим подразделением</button>
+    </div>
+  </div>
 
-    <!-- РЕДАКТОР РАСЧЁТОВ -->
-    <div class="card">
-      <div class="section-head" style="margin-bottom:10px">
-        <div class="card-title" style="margin:0">Расчёты</div>
-        <button id="squadEditBtn" class="btn btn-primary btn-sm" onclick="toggleSquadEditor()">Редактировать</button>
+  <!-- форма передачи -->
+  <div class="card" id="transferCard" style="display:none">
+    <div style="font-size:13px;font-weight:700;margin-bottom:12px">Передача БПЛА внутри подразделения</div>
+    <div class="form-row cols2">
+      <div><label>От кого</label>
+        <select id="transFrom"><option value="склад">Склад</option></select>
       </div>
-      <table>
-        <thead><tr><th>Пилот</th><th>БПЛА</th><th>Кол-во</th><th>Статус</th></tr></thead>
-        <tbody id="squadTable"></tbody>
-      </table>
-
-      <div id="squadEditor" style="display:none;margin-top:14px;border-top:0.5px solid var(--border);padding-top:14px">
-        <div style="font-size:12px;font-weight:700;margin-bottom:10px;color:var(--muted)">РЕДАКТОР РАСЧЁТОВ</div>
-        <div id="squadEditorList"></div>
-        <div style="margin-top:12px;padding-top:12px;border-top:0.5px dashed var(--border)">
-          <div style="font-size:12px;font-weight:600;margin-bottom:8px">Добавить расчёт</div>
-          <div class="form-row cols2">
-            <div><label>Имя пилота</label><input id="sq-newPilot" placeholder="Иванов"></div>
-            <div><label>БПЛА через запятую</label><input id="sq-newDrones" list="dl-drones-smart" placeholder="Гамаюн13, КИРМ" autocomplete="off"></div>
-          </div>
-          <button class="btn btn-success btn-sm" onclick="squadAddPilot()">Добавить расчёт</button>
-        </div>
-      </div>
-
-      <div style="margin-top:12px" id="transferBtnArea">
-        <button class="btn btn-primary btn-sm" onclick="openTransferForm()">Передача внутри</button>
-        <button class="btn btn-sm" style="margin-left:6px;background:#1e3a5f;color:#a78bfa" onclick="openExchangeForm()">⇄ Обмен с другим подразделением</button>
+      <div><label>Кому</label>
+        <select id="transTo"><option value="склад">На склад</option></select>
       </div>
     </div>
+    <div class="form-row cols2">
+      <div><label>БПЛА</label><input id="transDrone" list="dl-drones-smart" placeholder="Гамаюн13" autocomplete="off"></div>
+      <div><label>Количество</label><input type="number" id="transQty" value="1" min="1"></div>
+    </div>
+    <div style="margin-bottom:10px"><label>Примечание</label><input id="transNote" placeholder="Задание командира / причина"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-success" onclick="saveTransfer()">Оформить</button>
+      <button class="btn btn-sm" onclick="document.getElementById('transferCard').style.display='none'">Отмена</button>
+    </div>
+  </div>
 
-    <div class="card" id="transferCard" style="display:none">
-      <div style="font-size:13px;font-weight:700;margin-bottom:12px">Передача БПЛА внутри подразделения</div>
-      <div class="form-row cols2">
-        <div><label>От кого</label>
-          <select id="transFrom"><option value="склад">Склад</option></select>
-        </div>
-        <div><label>Кому</label>
-          <select id="transTo"><option value="склад">На склад</option></select>
-        </div>
+  <!-- форма обмена -->
+  <div class="card" id="exchangeCard" style="display:none">
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">⇄ Обмен с другим подразделением</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Списывает отданный борт со склада, приходует полученный</div>
+    <div class="form-row cols2">
+      <div><label>Дата операции</label><input type="date" id="exDate"></div>
+      <div><label>Подразделение</label><input id="exUnit" placeholder="Рота разведки / 3-й батальон"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:8px;align-items:end;margin-bottom:10px">
+      <div>
+        <label>Отдали (списать со склада)</label>
+        <input id="exGive" list="dl-drones-smart" placeholder="Гамаюн13т" autocomplete="off">
+        <input type="number" id="exGiveQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">
       </div>
-      <div class="form-row cols2">
-        <div><label>БПЛА</label><input id="transDrone" list="dl-drones-smart" placeholder="Гамаюн13" autocomplete="off"></div>
-        <div><label>Количество</label><input type="number" id="transQty" value="1" min="1"></div>
-      </div>
-      <div style="margin-bottom:10px"><label>Примечание</label><input id="transNote" placeholder="Задание командира / причина"></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-success" onclick="saveTransfer()">Оформить</button>
-        <button class="btn btn-sm" onclick="document.getElementById('transferCard').style.display='none'">Отмена</button>
+      <div style="text-align:center;font-size:18px;padding-bottom:8px;color:var(--muted)">⇄</div>
+      <div>
+        <label>Получили (оприходовать на склад)</label>
+        <input id="exGet" list="dl-drones-smart" placeholder="Гамаюн13д" autocomplete="off">
+        <input type="number" id="exGetQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">
       </div>
     </div>
-
-    <div class="card" id="exchangeCard" style="display:none">
-      <div style="font-size:13px;font-weight:700;margin-bottom:4px">⇄ Обмен с другим подразделением</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Списывает отданный борт со склада, приходует полученный</div>
-      <div class="form-row cols2">
-        <div><label>Дата операции</label><input type="date" id="exDate"></div>
-        <div><label>Подразделение</label><input id="exUnit" placeholder="Рота разведки / 3-й батальон"></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:8px;align-items:end;margin-bottom:10px">
-        <div>
-          <label>Отдали (списать со склада)</label>
-          <input id="exGive" list="dl-drones-smart" placeholder="Гамаюн13т" autocomplete="off">
-          <input type="number" id="exGiveQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">
-        </div>
-        <div style="text-align:center;font-size:18px;padding-bottom:8px;color:var(--muted)">⇄</div>
-        <div>
-          <label>Получили (оприходовать на склад)</label>
-          <input id="exGet" list="dl-drones-smart" placeholder="Гамаюн13д" autocomplete="off">
-          <input type="number" id="exGetQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">
-        </div>
-      </div>
-      <div style="margin-bottom:10px"><label>Примечание</label><input id="exNote" placeholder="Причина обмена, состояние борта..."></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-success" onclick="saveExchange()">Оформить обмен</button>
-        <button class="btn btn-sm" onclick="document.getElementById('exchangeCard').style.display='none'">Отмена</button>
-      </div>
+    <div style="margin-bottom:10px"><label>Примечание</label><input id="exNote" placeholder="Причина обмена, состояние борта..."></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-success" onclick="saveExchange()">Оформить обмен</button>
+      <button class="btn btn-sm" onclick="document.getElementById('exchangeCard').style.display='none'">Отмена</button>
     </div>
+  </div>
 
-    <div class="card" id="transfersLogCard">
-      <div class="card-title">Изменения</div>
-      <div id="transfersLog"><div style="color:var(--muted);font-size:12px">Нет операций</div></div>
+  <!-- лог изменений -->
+  <div class="section-card" id="transfersLogCard">
+    <div class="section-header">
+      <div class="section-title"><i class="ti ti-history"></i> Изменения</div>
     </div>
+    <div id="transfersLog"><div style="color:var(--muted);font-size:12px;padding:12px 16px">Нет операций</div></div>
+  </div>
 
-  </div><!-- gap12 -->
 </div><!-- page-inventory -->
 
 <!-- FLIGHTS -->
