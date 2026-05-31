@@ -447,6 +447,7 @@
         <button class="btn btn-primary" onclick="adminExportJSON()">📥 Экспорт в файл .json</button>
         <button class="btn btn-primary" onclick="document.getElementById('importJSONInput').click()">📤 Загрузить из файла .json</button>
         <input type="file" id="importJSONInput" accept=".json" style="display:none" onchange="adminImportJSON(this)">
+        <button class="btn btn-sm" style="color:var(--amber);border-color:var(--amber)" onclick="adminCleanOrphanLosses()" title="Удалить записи о потерях без соответствующего вылета">🧹 Очистить журнал потерь</button>
       </div>
       <div id="saveStatus" style="font-size:12px;color:var(--muted)">Данные хранятся в localStorage. Для переноса на другое устройство — экспортируйте в файл.</div>
     </div>
