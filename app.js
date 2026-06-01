@@ -1334,6 +1334,7 @@ function fillReportFilters(){
 }
 
 function buildReport(){
+  window._reportText=null;
   fillReportFilters();
   const type=document.getElementById('repType').value;
   const from=document.getElementById('repFrom').value;
