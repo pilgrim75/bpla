@@ -1645,8 +1645,11 @@ function printReport(){
     .rb-line{padding:2px 0;font-size:13px}
     div[style*="font-weight:700"]{margin-top:10px;margin-bottom:4px;font-weight:700}
     @media print{body{padding:10px}}
-  </style></head><body>${content}<script>window.onload=function(){window.print();window.close();}<\/script></body></html>`);
+  </style></head><body>${content}</body></html>`);
   win.document.close();
+  win.focus();
+  win.onafterprint = function(){ win.close(); };
+  win.print();
 }
 
 function applyTheme(name){
