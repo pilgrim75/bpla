@@ -77,6 +77,35 @@ function loadLocal(){
 }
 loadLocal();
 
+function migrateSquadsToTransfers(){
+  if(localStorage.getItem('_transfers_migrated_v1'))return;
+  const existing=new Set(
+    (state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад').map(t=>t.to+'||'+t.drone)
+  );
+  const toAdd=[];
+  (state.squads||[]).forEach(sq=>{
+    (sq.drones||[]).forEach(d=>{
+      if(d.qty>0&&d.name&&!existing.has(sq.pilot+'||'+d.name)){
+        toAdd.push({
+          id:Date.now()+'_'+Math.random().toString(36).slice(2)+'_mig',
+          type:'transfer',
+          date:'2000-01-01',time:'00:00',
+          from:'склад',to:sq.pilot,
+          drone:d.name,qty:d.qty,
+          note:'начальные данные'
+        });
+      }
+    });
+  });
+  if(toAdd.length){
+    if(!state.transfers)state.transfers=[];
+    state.transfers.push(...toAdd);
+    saveLocal();
+  }
+  localStorage.setItem('_transfers_migrated_v1','1');
+}
+migrateSquadsToTransfers();
+
 // ============ NETWORK ============
 function checkNet(){
   const bar=document.getElementById('netBar');
@@ -314,12 +343,32 @@ function renderAdminSquads(){
     </table>`:'<div style="color:var(--muted);padding:8px">Нет расчётов</div>';
 }
 
+function _logAdminTransfer(pilot,drone,delta,note){
+  if(!pilot||!drone||delta===0)return;
+  if(!state.transfers)state.transfers=[];
+  state.transfers.unshift({
+    id:Date.now()+'_'+Math.random().toString(36).slice(2),
+    type:'transfer',
+    date:new Date().toISOString().slice(0,10),
+    time:new Date().toTimeString().slice(0,5),
+    from:delta>0?'склад':pilot,
+    to:delta>0?pilot:'склад',
+    drone,qty:Math.abs(delta),
+    note:note||'адм'
+  });
+}
+
 function adminEditSquadPilot(si,val){
   if(state.squads[si])state.squads[si].pilot=val;
   saveLocal();
 }
 function adminEditSquadDrone(si,di,field,val){
-  if(state.squads[si]&&state.squads[si].drones[di])state.squads[si].drones[di][field]=val;
+  const sq=state.squads[si];const d=sq&&sq.drones[di];
+  if(d){
+    if(field==='qty'){const delta=(parseInt(val)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'адм');}
+    else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'адм');
+    d[field]=val;
+  }
   saveLocal();
 }
 function adminDeleteSquad(si){
@@ -334,6 +383,7 @@ function adminAddSquad(){
   const ds=document.getElementById('adm-newPilotDrones').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!p)return;
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
+  ds.forEach(n=>_logAdminTransfer(p,n,1,'адм: новый расчёт'));
   saveLocal();
   renderAdminSquads();
   renderDashboard();
@@ -935,7 +985,15 @@ function squadCleanZeros(si){
   renderInventory();
 }
 function squadEditPilot(si,val){state.squads[si].pilot=val;saveLocal();renderInventory();}
-function squadEditDrone(si,di,field,val){state.squads[si].drones[di][field]=val;saveLocal();renderInventory();}
+function squadEditDrone(si,di,field,val){
+  const sq=state.squads[si];const d=sq&&sq.drones[di];
+  if(d){
+    if(field==='qty'){const delta=(parseInt(val)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'инв');}
+    else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'инв');
+    d[field]=val;
+  }
+  saveLocal();renderInventory();
+}
 function squadDeleteDrone(si,di){
   state.squads[si].drones.splice(di,1);
   saveLocal();renderSquadEditor();renderInventory();
@@ -954,6 +1012,7 @@ function squadAddPilot(){
   const ds=document.getElementById('sq-newDrones').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!p){alert('Укажите имя пилота');return;}
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
+  ds.forEach(n=>_logAdminTransfer(p,n,1,'инв: новый расчёт'));
   saveLocal();
   renderSquadEditor();
   renderInventory();
@@ -1436,19 +1495,54 @@ function buildReport(){
     let f=getFlights();
     const byPilot={};
     f.forEach(x=>{if(!byPilot[x.pilot])byPilot[x.pilot]=[];byPilot[x.pilot].push(x);});
-    out.innerHTML=Object.entries(byPilot).map(([p,fs])=>`
-      <div class="report-block">
-        <div class="rb-head">Пилот: ${p} — ${fs.length} вылетов</div>
-        ${fs.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map((x,i)=>`
-          <div class="rb-line">${i+1}. ${x.date} ${x.time} · ${x.target||'—'} · ${x.drone||'—'} · ${x.result==='yes'?'✅':'❌'} · ${x.returned==='yes'?'борт вернул':'борт потерян'}${x.note?' · '+x.note:''}</div>`).join('')}
-      </div>`).join('')||'<div style="color:var(--muted);padding:16px">Нет данных за период</div>';
+    const entries=Object.entries(byPilot);
+    if(!entries.length){
+      out.innerHTML='<div style="color:var(--muted);padding:16px">Нет данных за период</div>';
+    } else {
+      const wTarget=Math.max(...f.map(x=>(x.target||'—').length),1);
+      const wDrone=Math.max(...f.map(x=>(x.drone||'—').length),1);
+      const fmtLine=(x,i)=>{
+        const tgt=(x.target||'—').padEnd(wTarget);
+        const drn=(x.drone||'—').padEnd(wDrone);
+        const res=x.result==='yes'?'✅':'❌';
+        const ret=x.returned==='yes'?'борт вернул':'борт потерян';
+        const note=x.note?' · '+x.note:'';
+        return `${i+1}. ${x.date} ${x.time} · ${tgt} · ${drn} · ${res} · ${ret}${note}`;
+      };
+      const textLines=[];
+      entries.forEach(([p,fs])=>{
+        fs.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+        textLines.push(`Пилот: ${p} — ${fs.length} вылетов`);
+        fs.forEach((x,i)=>textLines.push(fmtLine(x,i)));
+        textLines.push('');
+      });
+      window._reportText=textLines.join('\n').trimEnd();
+      out.innerHTML=entries.map(([p,fs])=>`
+        <div class="report-block">
+          <div class="rb-head">Пилот: ${esc(p)} — ${fs.length} вылетов</div>
+          ${fs.map((x,i)=>`<div class="rb-line" style="font-family:'Courier New',monospace;white-space:pre">${esc(fmtLine(x,i))}</div>`).join('')}
+        </div>`).join('');
+    }
 
   } else if(type==='losses'){
     let f=getFlights().filter(x=>x.returned==='no');
-    out.innerHTML=`<div class="report-block">
-      <div class="rb-head">Потери БПЛА — ${f.length} борт(ов)</div>
-      ${f.map(x=>`<div class="rb-line">${x.date} ${x.time} · Пилот: ${x.pilot} · ${x.drone} · ${x.note||'причина не указана'}</div>`).join('')||'<div class="rb-line">Потерь нет</div>'}
-    </div>`;
+    if(!f.length){
+      window._reportText='Потери БПЛА — 0 борт(ов)\nПотерь нет';
+      out.innerHTML=`<div class="report-block"><div class="rb-head">Потери БПЛА — 0 борт(ов)</div><div class="rb-line">Потерь нет</div></div>`;
+    } else {
+      const wPilot=Math.max(...f.map(x=>(x.pilot||'—').length),1);
+      const wDrone=Math.max(...f.map(x=>(x.drone||'—').length),1);
+      const fmtLine=x=>{
+        const plt=(x.pilot||'—').padEnd(wPilot);
+        const drn=(x.drone||'—').padEnd(wDrone);
+        return `${x.date} ${x.time} · Пилот: ${plt} · ${drn} · ${x.note||'причина не указана'}`;
+      };
+      window._reportText=[`Потери БПЛА — ${f.length} борт(ов)`,...f.map(fmtLine)].join('\n');
+      out.innerHTML=`<div class="report-block">
+        <div class="rb-head">Потери БПЛА — ${f.length} борт(ов)</div>
+        ${f.map(x=>`<div class="rb-line" style="font-family:'Courier New',monospace;white-space:pre">${esc(fmtLine(x))}</div>`).join('')}
+      </div>`;
+    }
 
   } else if(type==='summary'){
     let f=getFlights();
@@ -1499,6 +1593,43 @@ function buildReport(){
     </div>`;
   } else if(type==='detailed'){
     buildDetailedReport(getFlights(),filterLabel,out);
+  } else if(type==='issued'){
+    let transList=(state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад');
+    if(from) transList=transList.filter(t=>t.date>=from);
+    if(to)   transList=transList.filter(t=>t.date<=to);
+    if(filterPilot) transList=transList.filter(t=>t.to===filterPilot);
+    if(filterDrone) transList=transList.filter(t=>(t.drone||'').toLowerCase()===filterDrone.toLowerCase());
+    const agg=new Map();
+    transList.forEach(t=>{
+      const key=t.to+'||'+t.drone;
+      if(!agg.has(key)) agg.set(key,{pilot:t.to,drone:t.drone,qty:0});
+      agg.get(key).qty+=(t.qty||1);
+    });
+    const rows=[...agg.values()];
+    const hasFilter=from||to||filterPilot||filterDrone;
+    if(!rows.length){
+      const msg=hasFilter?'Нет данных за выбранный период':'Нет данных';
+      window._reportText='Выдано бортов\n'+msg;
+      out.innerHTML=`<div class="report-block"><div class="rb-head">Выдано бортов</div><div class="rb-line">${msg}</div></div>`;
+    } else {
+      const wPilot=Math.max(...rows.map(r=>r.pilot.length),'Пилот'.length);
+      const wDrone=Math.max(...rows.map(r=>r.drone.length),'Борт'.length);
+      const wQty=Math.max(...rows.map(r=>String(r.qty).length),'Количество'.length);
+      const hdr=`${'Пилот'.padEnd(wPilot)} · ${'Борт'.padEnd(wDrone)} · Количество`;
+      const sep='─'.repeat(wPilot+wDrone+wQty+6);
+      const fmtRow=r=>`${r.pilot.padEnd(wPilot)} · ${r.drone.padEnd(wDrone)} · ${r.qty}`;
+      const totalQty=rows.reduce((s,r)=>s+r.qty,0);
+      const uniqueDrones=[...new Set(rows.map(r=>r.drone))].length;
+      window._reportText=['Выдано бортов',hdr,sep,...rows.map(fmtRow),'',`Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов`].join('\n');
+      const mono="font-family:'Courier New',monospace;white-space:pre";
+      out.innerHTML=`<div class="report-block">
+        <div class="rb-head">Выдано бортов</div>
+        <div class="rb-line" style="${mono}">${esc(hdr)}</div>
+        <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
+        ${rows.map(r=>`<div class="rb-line" style="${mono}">${esc(fmtRow(r))}</div>`).join('')}
+        <div class="rb-line" style="margin-top:8px;font-weight:700">Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов</div>
+      </div>`;
+    }
   }
 }
 
