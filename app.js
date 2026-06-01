@@ -1555,42 +1555,47 @@ function buildReport(){
       else byPilot[x.pilot].returned++;
     });
     const rows=Object.entries(byPilot);
-    out.innerHTML=`<div class="report-block">
-      <div class="rb-head">Сводка по расчётам</div>
-      <table style="width:100%;border-collapse:collapse;font-family:inherit;font-size:12px;margin-top:8px">
-        <thead>
-          <tr style="border-bottom:1px solid var(--border2)">
-            <th style="text-align:left;padding:5px 10px 5px 0;color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Пилот</th>
-            <th style="text-align:center;padding:5px 10px;color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Вылетов</th>
-            <th style="text-align:center;padding:5px 10px;color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Выполнено</th>
-            <th style="text-align:center;padding:5px 10px;color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Не выполнено</th>
-            <th style="text-align:center;padding:5px 10px;color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Борт вернул</th>
-            <th style="text-align:center;padding:5px 10px;color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Потерь</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(([p,s])=>`
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:6px 10px 6px 0;color:var(--text);font-weight:700">${p}</td>
-            <td style="text-align:center;padding:6px 10px;color:var(--text)">${s.total}</td>
-            <td style="text-align:center;padding:6px 10px;color:var(--green2)">${s.done}</td>
-            <td style="text-align:center;padding:6px 10px;color:${s.total-s.done>0?'var(--red)':'var(--text)'}">${s.total-s.done}</td>
-            <td style="text-align:center;padding:6px 10px;color:var(--text)">${s.returned}</td>
-            <td style="text-align:center;padding:6px 10px;color:${s.lost>0?'var(--red)':'var(--text)'}">${s.lost}</td>
-          </tr>`).join('')}
-        </tbody>
-        <tfoot>
-          <tr style="border-top:1px solid var(--border2)">
-            <td style="padding:6px 10px 4px 0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:1px">Итого</td>
-            <td style="text-align:center;padding:6px 10px;color:var(--text);font-weight:700">${rows.reduce((s,[,v])=>s+v.total,0)}</td>
-            <td style="text-align:center;padding:6px 10px;color:var(--green2);font-weight:700">${rows.reduce((s,[,v])=>s+v.done,0)}</td>
-            <td style="text-align:center;padding:6px 10px;font-weight:700;color:${rows.reduce((s,[,v])=>s+(v.total-v.done),0)>0?'var(--red)':'var(--text)'}">${rows.reduce((s,[,v])=>s+(v.total-v.done),0)}</td>
-            <td style="text-align:center;padding:6px 10px;font-weight:700;color:var(--text)">${rows.reduce((s,[,v])=>s+v.returned,0)}</td>
-            <td style="text-align:center;padding:6px 10px;font-weight:700;color:${rows.reduce((s,[,v])=>s+v.lost,0)>0?'var(--red)':'var(--text)'}">${rows.reduce((s,[,v])=>s+v.lost,0)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>`;
+    if(!rows.length){
+      out.innerHTML=`<div class="report-block"><div class="rb-head">Сводка по расчётам</div><div class="rb-line">Нет данных</div></div>`;
+    } else {
+      const mono="font-family:'Courier New',monospace;white-space:pre";
+      const hdrCols=['Пилот','Вылетов','Выполнено','Не выполнено','Борт вернул','Потерь'];
+      const dataRows=rows.map(([p,s])=>[p,s.total,s.done,s.total-s.done,s.returned,s.lost]);
+      const totRow=['Итого',
+        rows.reduce((s,[,v])=>s+v.total,0),
+        rows.reduce((s,[,v])=>s+v.done,0),
+        rows.reduce((s,[,v])=>s+(v.total-v.done),0),
+        rows.reduce((s,[,v])=>s+v.returned,0),
+        rows.reduce((s,[,v])=>s+v.lost,0)
+      ];
+      const allForW=[...dataRows,totRow];
+      const widths=hdrCols.map((h,i)=>Math.max(h.length,...allForW.map(r=>String(r[i]).length)));
+      const last=widths.length-1;
+      const pad=(val,i)=>i<last?String(val).padEnd(widths[i]):String(val);
+      const mkCell=(val,i,color,bold)=>{
+        const s=pad(val,i);
+        const style=(bold?'font-weight:700;':'')+(color?'color:'+color+';':'');
+        if(style)return `<span style="${style}">${esc(s)}</span>`;
+        return esc(s);
+      };
+      const hdr=hdrCols.map((h,i)=>pad(h,i)).join(' · ');
+      const sep='─'.repeat(hdr.length);
+      const mkDataRow=([p,s])=>{
+        const v=[p,s.total,s.done,s.total-s.done,s.returned,s.lost];
+        return [mkCell(v[0],0,'',false),mkCell(v[1],1,'',false),mkCell(v[2],2,'var(--green2)',false),
+          mkCell(v[3],3,v[3]>0?'var(--red)':'',false),mkCell(v[4],4,'',false),mkCell(v[5],5,v[5]>0?'var(--red)':'',false)].join(' · ');
+      };
+      const mkTotRow=r=>[mkCell(r[0],0,'',true),mkCell(r[1],1,'',true),mkCell(r[2],2,'var(--green2)',true),
+        mkCell(r[3],3,r[3]>0?'var(--red)':'',true),mkCell(r[4],4,'',true),mkCell(r[5],5,r[5]>0?'var(--red)':'',true)].join(' · ');
+      out.innerHTML=`<div class="report-block">
+        <div class="rb-head">Сводка по расчётам</div>
+        <div class="rb-line" style="${mono}">${esc(hdr)}</div>
+        <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
+        ${rows.map(r=>`<div class="rb-line" style="${mono}">${mkDataRow(r)}</div>`).join('')}
+        <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
+        <div class="rb-line" style="${mono}">${mkTotRow(totRow)}</div>
+      </div>`;
+    }
   } else if(type==='detailed'){
     buildDetailedReport(getFlights(),filterLabel,out);
   } else if(type==='issued'){
@@ -1641,11 +1646,8 @@ function isDelivery(ammo){
 
 function buildDetailedReport(f,filterLabel,out){
   f=f.filter(x=>x.pilot&&x.pilot!=='[ПЕРЕДАЧА]');
-
-  // Собираем уникальных пилотов из вылетов (с учётом фильтра)
   const pilotNames=[...new Set(f.map(x=>x.pilot))].filter(Boolean);
 
-  // Статистика по каждому пилоту
   function stats(flights){
     const total=flights.length;
     const done=flights.filter(x=>x.result==='yes').length;
@@ -1660,98 +1662,68 @@ function buildDetailedReport(f,filterLabel,out){
       pct};
   }
 
-  const pilotStats=pilotNames.map(p=>({
-    name:p,
-    s:stats(f.filter(x=>x.pilot===p))
-  }));
+  const pilotStats=pilotNames.map(p=>({name:p,s:stats(f.filter(x=>x.pilot===p))}));
   const totalS=stats(f);
-  const {pct}=totalS;
-
-  const thStyle=`style="padding:8px 10px;border:1px solid var(--border2);color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;text-align:center;background:var(--bg2)"`;
-  const th1Style=`style="padding:8px 10px;border:1px solid var(--border2);color:var(--green3);font-size:10px;letter-spacing:1px;text-transform:uppercase;text-align:left;background:var(--bg2)"`;
-  const tdStyle=(val,bold,color)=>`style="padding:7px 10px;border:1px solid var(--border);text-align:center;${bold?'font-weight:700;':''}${color?'color:'+color+';':''}"`;
-  const td1Style=`style="padding:7px 10px;border:1px solid var(--border);text-align:left"`;
-  const trHead=`style="background:var(--bg2)"`;
-  const trSection=`style="background:var(--green-dim)"`;
-
-  const col=(s,val,pctVal,bold,isRed)=>{
-    const color=isRed&&val>0?'var(--red)':bold?'var(--green)':'';
-    return `<td ${tdStyle(val,bold,color)}>${val}${pctVal!==undefined?' '+s.pct(val,pctVal):''}`;
-  };
-  const colT=(val,pctVal,bold,isRed)=>col(totalS,val,pctVal,bold,isRed);
-
   const period=filterLabel||'за всё время';
 
+  if(!pilotStats.length){
+    out.innerHTML=`<div class="report-block"><div class="rb-head">Подробный отчёт по расчётам · ${esc(period)}</div><div class="rb-line">Нет данных</div></div>`;
+    return;
+  }
+
+  const allStats=[...pilotStats.map(p=>p.s),totalS];
+  const colHdrs=['Показатель',...pilotStats.map((p,i)=>`Расчёт ${i+1} (${p.name})`),'Итого'];
+
+  // null = пустая строка-разделитель между секциями
+  const metricDefs=[
+    {label:'Всего вылетов',section:true,fn:s=>String(s.total)},
+    {label:'Задача выполнена',fn:s=>`${s.done} ${s.pct(s.done,s.total)}`},
+    {label:'Задача не выполнена',fn:s=>`${s.notDone} ${s.pct(s.notDone,s.total)}`,red:s=>s.notDone>0},
+    {label:'Борт вернулся',fn:s=>`${s.ret} ${s.pct(s.ret,s.total)}`},
+    {label:'Борт потерян',fn:s=>`${s.lost} ${s.pct(s.lost,s.total)}`,red:s=>s.lost>0},
+    null,
+    {label:'Минирование (всего)',section:true,fn:s=>String(s.mining.total)},
+    {label:'— удачных',fn:s=>`${s.mining.done} ${s.pct(s.mining.done,s.mining.total)}`},
+    {label:'— неудачных',fn:s=>`${s.mining.notDone} ${s.pct(s.mining.notDone,s.mining.total)}`,red:s=>s.mining.notDone>0},
+    null,
+    {label:'Доставка (всего)',section:true,fn:s=>String(s.delivery.total)},
+    {label:'— удачных',fn:s=>`${s.delivery.done} ${s.pct(s.delivery.done,s.delivery.total)}`},
+    {label:'— неудачных',fn:s=>`${s.delivery.notDone} ${s.pct(s.delivery.notDone,s.delivery.total)}`,red:s=>s.delivery.notDone>0},
+  ];
+
+  const textRows=metricDefs.filter(Boolean).map(m=>[m.label,...allStats.map(s=>m.fn(s))]);
+  const widths=colHdrs.map((h,i)=>Math.max(h.length,...textRows.map(r=>r[i].length)));
+  const last=widths.length-1;
+  const pad=(val,i)=>i<last?String(val).padEnd(widths[i]):String(val);
+  const mono="font-family:'Courier New',monospace;white-space:pre";
+  const hdr=colHdrs.map((h,i)=>pad(h,i)).join(' · ');
+  const sep='─'.repeat(hdr.length);
+
+  const mkCell=(val,i,color,bold)=>{
+    const s=pad(val,i);
+    const style=(bold?'font-weight:700;':'')+(color?'color:'+color+';':'');
+    if(style)return `<span style="${style}">${esc(s)}</span>`;
+    return esc(s);
+  };
+
+  const renderRow=m=>{
+    if(!m)return `<div class="rb-line" style="${mono}"> </div>`;
+    const parts=[
+      mkCell(m.label,0,m.section?'var(--green)':'',!!m.section),
+      ...allStats.map((s,si)=>{
+        const val=m.fn(s);
+        const isRed=m.red&&m.red(s);
+        return mkCell(val,si+1,isRed?'var(--red)':m.section?'var(--green)':'',!!m.section);
+      })
+    ];
+    return `<div class="rb-line" style="${mono}">${parts.join(' · ')}</div>`;
+  };
+
   out.innerHTML=`<div class="report-block" style="overflow-x:auto">
-    <div class="rb-head">Подробный отчёт по расчётам · ${period}</div>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:10px;min-width:500px">
-      <thead>
-        <tr ${trHead}>
-          <th ${th1Style}>Показатель</th>
-          ${pilotStats.map((p,i)=>`<th ${thStyle}>Расчёт ${i+1}<br><span style="color:var(--text)">(${p.name})</span></th>`).join('')}
-          <th ${thStyle}>ИТОГО</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr ${trSection}>
-          <td ${td1Style} style="font-weight:700;color:var(--green)">Всего вылетов</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,true,'var(--green)')}>${p.s.total}</td>`).join('')}
-          <td ${tdStyle(0,true,'var(--green)')}>${totalS.total}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>Задача выполнена</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,false,'')}>${p.s.done} ${p.s.pct(p.s.done,p.s.total)}</td>`).join('')}
-          <td ${tdStyle(0,false,'')}>${totalS.done} ${pct(totalS.done,totalS.total)}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>Задача не выполнена</td>
-          ${pilotStats.map(p=>`<td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${p.s.notDone>0?'color:var(--red)':''}">${p.s.notDone} ${p.s.pct(p.s.notDone,p.s.total)}</td>`).join('')}
-          <td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${totalS.notDone>0?'color:var(--red)':''}">${totalS.notDone} ${pct(totalS.notDone,totalS.total)}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>Борт вернулся</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,false,'')}>${p.s.ret} ${p.s.pct(p.s.ret,p.s.total)}</td>`).join('')}
-          <td ${tdStyle(0,false,'')}>${totalS.ret} ${pct(totalS.ret,totalS.total)}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>Борт потерян</td>
-          ${pilotStats.map(p=>`<td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${p.s.lost>0?'color:var(--red)':''}">${p.s.lost} ${p.s.pct(p.s.lost,p.s.total)}</td>`).join('')}
-          <td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${totalS.lost>0?'color:var(--red)':''}">${totalS.lost} ${pct(totalS.lost,totalS.total)}</td>
-        </tr>
-
-        <tr ${trSection}>
-          <td ${td1Style} style="font-weight:700;color:var(--green)">Минирование (всего)</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,true,'var(--green)')}>${p.s.mining.total}</td>`).join('')}
-          <td ${tdStyle(0,true,'var(--green)')}>${totalS.mining.total}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>— удачных</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,false,'')}>${p.s.mining.done} ${p.s.pct(p.s.mining.done,p.s.mining.total)}</td>`).join('')}
-          <td ${tdStyle(0,false,'')}>${totalS.mining.done} ${pct(totalS.mining.done,totalS.mining.total)}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>— неудачных</td>
-          ${pilotStats.map(p=>`<td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${p.s.mining.notDone>0?'color:var(--red)':''}">${p.s.mining.notDone} ${p.s.pct(p.s.mining.notDone,p.s.mining.total)}</td>`).join('')}
-          <td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${totalS.mining.notDone>0?'color:var(--red)':''}">${totalS.mining.notDone} ${pct(totalS.mining.notDone,totalS.mining.total)}</td>
-        </tr>
-
-        <tr ${trSection}>
-          <td ${td1Style} style="font-weight:700;color:var(--green)">Доставка (всего)</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,true,'var(--green)')}>${p.s.delivery.total}</td>`).join('')}
-          <td ${tdStyle(0,true,'var(--green)')}>${totalS.delivery.total}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>— удачных</td>
-          ${pilotStats.map(p=>`<td ${tdStyle(0,false,'')}>${p.s.delivery.done} ${p.s.pct(p.s.delivery.done,p.s.delivery.total)}</td>`).join('')}
-          <td ${tdStyle(0,false,'')}>${totalS.delivery.done} ${pct(totalS.delivery.done,totalS.delivery.total)}</td>
-        </tr>
-        <tr>
-          <td ${td1Style}>— неудачных</td>
-          ${pilotStats.map(p=>`<td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${p.s.delivery.notDone>0?'color:var(--red)':''}">${p.s.delivery.notDone} ${p.s.pct(p.s.delivery.notDone,p.s.delivery.total)}</td>`).join('')}
-          <td style="padding:7px 10px;border:1px solid var(--border);text-align:center;${totalS.delivery.notDone>0?'color:var(--red)':''}">${totalS.delivery.notDone} ${pct(totalS.delivery.notDone,totalS.delivery.total)}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="rb-head">Подробный отчёт по расчётам · ${esc(period)}</div>
+    <div class="rb-line" style="${mono}">${esc(hdr)}</div>
+    <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
+    ${metricDefs.map(renderRow).join('\n    ')}
   </div>`;
 }
 
