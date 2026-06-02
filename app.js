@@ -5,6 +5,41 @@ const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Г�
 
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+// ============ UTILS ============
+// Уникальный id. prefix помечает источник: 'f' вылет, 't' transfer, 'a' actlog и т.п.
+function genId(prefix){return Date.now()+'_'+(prefix?prefix+'_':'')+Math.random().toString(36).slice(2);}
+// Текущая дата ISO (YYYY-MM-DD) и время (HH:MM) — локальные
+function todayISO(){return new Date().toISOString().slice(0,10);}
+function nowHM(){return new Date().toTimeString().slice(0,5);}
+
+// Статус-сообщение в элемент с цветом из дизайн-системы.
+// kind: 'ok'|'err'|'warn'|'muted' (по умолчанию muted)
+const STATUS_COLORS={ok:'var(--green2)',err:'var(--red)',warn:'var(--amber)',muted:'var(--muted)'};
+function setStatus(elId,text,kind){
+  const el=typeof elId==='string'?document.getElementById(elId):elId;
+  if(!el)return;
+  el.textContent=text;
+  el.style.color=STATUS_COLORS[kind]||STATUS_COLORS.muted;
+}
+
+// Единая проверка роли пилота (формы: 'pilot', 'pilot_0', 'pilot1' и т.п.)
+function isPilotRole(role){return !!role&&role.startsWith('pilot');}
+
+// Затемнённый модальный оверлей. Возвращает контейнер (.appendChild уже сделан).
+function modalOverlay(innerHTML){
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=innerHTML;
+  document.body.appendChild(ov);
+  return ov;
+}
+
+// Конструктор записи перемещения с дефолтами id/date/time.
+// type: 'transfer'|'arrival'|'loss'|'exchange'
+function makeTransfer(type,fields){
+  return {id:genId('t'),type,date:todayISO(),time:nowHM(),...fields};
+}
+
 function rebuildRoleSelector(){
   const sel=document.getElementById('roleSwitch');
   const cur=sel.value;
@@ -48,7 +83,6 @@ let state = {
     {date:'2026-05-23',time:'16:56',pilot:'Рама',target:'47 Каралл',ammo:'Пом2',drone:'Гамаюн13',result:'yes',returned:'yes',note:''},
     {date:'2026-05-23',time:'17:48',pilot:'Никита',target:'900 Янтарь',ammo:'Пом2',drone:'КИРМ',result:'yes',returned:'yes',note:''},
   ],
-  offlineQueue: [],
   transfers: []
 };
 
@@ -86,14 +120,13 @@ function migrateSquadsToTransfers(){
   (state.squads||[]).forEach(sq=>{
     (sq.drones||[]).forEach(d=>{
       if(d.qty>0&&d.name&&!existing.has(sq.pilot+'||'+d.name)){
-        toAdd.push({
-          id:Date.now()+'_'+Math.random().toString(36).slice(2)+'_mig',
-          type:'transfer',
+        toAdd.push(makeTransfer('transfer',{
+          id:genId('mig'),
           date:'2000-01-01',time:'00:00',
           from:'склад',to:sq.pilot,
           drone:d.name,qty:d.qty,
           note:'начальные данные'
-        });
+        }));
       }
     });
   });
@@ -112,7 +145,6 @@ function checkNet(){
   const ind=document.getElementById('syncIndicator');
   if(navigator.onLine){
     bar.innerHTML='';
-    state.offlineQueue=[];
     ind.className='sync-indicator saved';
     ind.textContent='● онлайн';
   } else {
@@ -190,7 +222,6 @@ function switchRole(r){
       if(isPilot) qp.value=pilotName;
       else qp.value=''; // сбрасываем для командира/техника/админа
     }
-    if(typeof autoFillFlightNum==='function')autoFillFlightNum();
     const seBtn=document.getElementById('squadEditBtn');
     if(seBtn)seBtn.style.display=(r==='admin')?'':'none';
   },0);
@@ -311,18 +342,12 @@ function adminAddStock(){
   const ex=state.stock.find(d=>d.name.toLowerCase()===n.toLowerCase()&&d.status===s);
   if(ex){ex.qty+=q;}
   else{state.stock.push({name:n,qty:q,status:s});}
-  const op={
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
-    type:'arrival',
-    date:new Date().toISOString().slice(0,10),
-    time:new Date().toTimeString().slice(0,5),
-    drone:n,qty:q,note:'статус: '+s
-  };
+  const op=makeTransfer('arrival',{drone:n,qty:q,note:'статус: '+s});
   if(!state.transfers)state.transfers=[];
   state.transfers.unshift(op);
   saveLocal();
   syncAddTransfer(op);
-  syncStockAndSquads();
+  syncPushStockSquads();
   logAction('stock','add','Поступление (адм): '+n+' ×'+q+' ('+s+')');
   renderAdminStock();
   renderDashboard();
@@ -346,16 +371,12 @@ function renderAdminSquads(){
 function _logAdminTransfer(pilot,drone,delta,note){
   if(!pilot||!drone||delta===0)return;
   if(!state.transfers)state.transfers=[];
-  state.transfers.unshift({
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
-    type:'transfer',
-    date:new Date().toISOString().slice(0,10),
-    time:new Date().toTimeString().slice(0,5),
+  state.transfers.unshift(makeTransfer('transfer',{
     from:delta>0?'склад':pilot,
     to:delta>0?pilot:'склад',
     drone,qty:Math.abs(delta),
     note:note||'адм'
-  });
+  }));
 }
 
 function adminEditSquadPilot(si,val){
@@ -393,21 +414,17 @@ function adminAddSquad(){
 
 function adminManualSave(){
   saveLocal();
-  const el=document.getElementById('saveStatus');
-  el.textContent='✓ Сохранено в браузер — '+new Date().toLocaleString('ru');
-  el.style.color='#166534';
+  setStatus('saveStatus','✓ Сохранено в браузер — '+new Date().toLocaleString('ru'),'ok');
 }
 
 function adminExportJSON(){
   const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
-  a.download='bpla_backup_'+new Date().toISOString().slice(0,10)+'.json';
+  a.download='bpla_backup_'+todayISO()+'.json';
   a.click();
   URL.revokeObjectURL(a.href);
-  const el=document.getElementById('saveStatus');
-  el.textContent='✓ Файл скачан — '+a.download;
-  el.style.color='#166534';
+  setStatus('saveStatus','✓ Файл скачан — '+a.download,'ok');
 }
 
 function adminImportJSON(input){
@@ -425,9 +442,7 @@ function adminImportJSON(input){
       renderAdminFlights();
       renderAdminStock();
       renderAdminSquads();
-      const el=document.getElementById('saveStatus');
-      el.textContent='✓ Данные загружены из файла: '+file.name;
-      el.style.color='#166534';
+      setStatus('saveStatus','✓ Данные загружены из файла: '+file.name,'ok');
     }catch(err){
       alert('Ошибка загрузки файла: '+err.message);
     }
@@ -442,9 +457,7 @@ function adminClearFlights(){
   saveLocal();
   renderAdminFlights();
   renderDashboard();
-  const el=document.getElementById('saveStatus');
-  el.textContent='Все вылеты удалены — '+new Date().toLocaleString('ru');
-  el.style.color='#dc2626';
+  setStatus('saveStatus','Все вылеты удалены — '+new Date().toLocaleString('ru'),'err');
 }
 
 function adminResetAll(){
@@ -459,8 +472,7 @@ function adminResetAll(){
 function adminCleanOrphanLosses(){
   const losses=(state.transfers||[]).filter(t=>t.type==='loss');
   if(!losses.length){
-    const el=document.getElementById('saveStatus');
-    if(el){el.textContent='Записей о потерях в журнале нет';el.style.color='var(--muted)';}
+    setStatus('saveStatus','Записей о потерях в журнале нет','muted');
     return;
   }
   // Строим ключи вылетов с потерей: pilot+drone+date (без времени — допуск на редактирование)
@@ -478,16 +490,14 @@ function adminCleanOrphanLosses(){
   const removed=before-(state.transfers||[]).length;
   saveLocal();
   if(removed>0){
-    syncStockAndSquads();
+    syncPushStockSquads();
     renderInventory();
   }
-  const el=document.getElementById('saveStatus');
-  if(el){
-    el.textContent=removed>0
+  setStatus('saveStatus',
+    removed>0
       ?`✓ Удалено ${removed} осирот. ${removed===1?'запись':'записей'} о потерях — ${new Date().toLocaleString('ru')}`
-      :'✓ Осиротевших записей не найдено — журнал чистый';
-    el.style.color=removed>0?'#166534':'var(--muted)';
-  }
+      :'✓ Осиротевших записей не найдено — журнал чистый',
+    removed>0?'ok':'muted');
 }
 
 // ============ DASHBOARD ============
@@ -637,18 +647,12 @@ function addDrone(){
   const ex=state.stock.find(d=>d.name.toLowerCase()===n.toLowerCase()&&d.status==='bg');
   if(ex){ex.qty+=q;}
   else{state.stock.push({name:n,qty:q,status:'bg'});}
-  const op={
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
-    type:'arrival',
-    date:new Date().toISOString().slice(0,10),
-    time:new Date().toTimeString().slice(0,5),
-    drone:n,qty:q,note:''
-  };
+  const op=makeTransfer('arrival',{drone:n,qty:q,note:''});
   if(!state.transfers)state.transfers=[];
   state.transfers.unshift(op);
   saveLocal();
   syncAddTransfer(op);
-  syncStockAndSquads();
+  syncPushStockSquads();
   renderInventory();
   toggleAddDrone();
   document.getElementById('newDroneName').value='';
@@ -664,7 +668,7 @@ function openTransferForm(){
 function openExchangeForm(){
   document.getElementById('exchangeCard').style.display='block';
   document.getElementById('transferCard').style.display='none';
-  document.getElementById('exDate').value=new Date().toISOString().slice(0,10);
+  document.getElementById('exDate').value=todayISO();
 }
 
 function saveTransfer(){
@@ -716,17 +720,11 @@ function saveTransfer(){
   }
 
   if(!state.transfers)state.transfers=[];
-  const op={
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
-    type:'transfer',
-    date:new Date().toISOString().slice(0,10),
-    time:new Date().toTimeString().slice(0,5),
-    from,to,drone,qty,note
-  };
+  const op=makeTransfer('transfer',{from,to,drone,qty,note});
   state.transfers.unshift(op);
   saveLocal();
   syncAddTransfer(op);
-  setTimeout(()=>syncStockAndSquads(),300);
+  setTimeout(()=>syncPushStockSquads(),300);
   renderInventory();
   renderDashboard();
   document.getElementById('transferCard').style.display='none';
@@ -736,7 +734,7 @@ function saveTransfer(){
 }
 
 function saveExchange(){
-  const date=document.getElementById('exDate').value||new Date().toISOString().slice(0,10);
+  const date=document.getElementById('exDate').value||todayISO();
   const unit=document.getElementById('exUnit').value.trim();
   const give=document.getElementById('exGive').value.trim();
   const giveQty=parseInt(document.getElementById('exGiveQty').value)||1;
@@ -761,20 +759,11 @@ function saveExchange(){
 
   // Записать в историю
   if(!state.transfers)state.transfers=[];
-  const exOp={
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
-    type:'exchange',
-    date,
-    time:new Date().toTimeString().slice(0,5),
-    unit,
-    give,giveQty,
-    get,getQty,
-    note
-  };
+  const exOp=makeTransfer('exchange',{date,unit,give,giveQty,get,getQty,note});
   state.transfers.unshift(exOp);
   saveLocal();
   syncAddTransfer(exOp);
-  syncStockAndSquads();
+  syncPushStockSquads();
   renderInventory();
   renderDashboard();
   document.getElementById('exchangeCard').style.display='none';
@@ -980,7 +969,7 @@ function renderSquadEditor(){
 function squadCleanZeros(si){
   state.squads[si].drones=state.squads[si].drones.filter(d=>d.qty!==0);
   saveLocal();
-  syncStockAndSquads();
+  syncPushStockSquads();
   renderSquadEditor();
   renderInventory();
 }
@@ -1043,14 +1032,13 @@ function writeDroneLoss(pilot, drone, date, time, flightId){
 
   // Логируем в историю перемещений
   if(!state.transfers)state.transfers=[];
-  const lossOp={
-    id:Date.now()+'_loss_'+Math.random().toString(36).slice(2),
-    type:'loss',
+  const lossOp=makeTransfer('loss',{
+    id:genId('loss'),
     flightId:flightId||null,
-    date:date||new Date().toISOString().slice(0,10),
-    time:time||new Date().toTimeString().slice(0,5),
+    date:date||todayISO(),
+    time:time||nowHM(),
     pilot,drone,qty:1,note:''
-  };
+  });
   state.transfers.unshift(lossOp);
   syncAddTransfer(lossOp);
 }
@@ -1059,10 +1047,9 @@ function writeDroneLoss(pilot, drone, date, time, flightId){
 // ============ API KEY ============
 function saveApiKey(val){
   try{localStorage.setItem('anthropicKey',val);}catch(e){}
-  const st=document.getElementById('apiKeyStatus');
-  if(val.startsWith('sk-ant')){st.textContent='✓ ключ сохранён';st.style.color='#166534';}
-  else if(val){st.textContent='⚠ ключ должен начинаться с sk-ant-';st.style.color='#dc2626';}
-  else{st.textContent='';} 
+  if(val.startsWith('sk-ant'))setStatus('apiKeyStatus','✓ ключ сохранён','ok');
+  else if(val)setStatus('apiKeyStatus','⚠ ключ должен начинаться с sk-ant-','err');
+  else setStatus('apiKeyStatus','','muted');
 }
 function loadApiKey(){
   try{
@@ -1079,12 +1066,10 @@ async function parseMessages(){
   const apiKey=(document.getElementById('apiKeyInput').value||'').trim();
   const st=document.getElementById('parseStatus');
   if(!apiKey||!apiKey.startsWith('sk-ant')){
-    st.textContent='Укажите API-ключ Anthropic выше (начинается с sk-ant-...)';
-    st.style.color='#dc2626';
+    setStatus(st,'Укажите API-ключ Anthropic выше (начинается с sk-ant-...)','err');
     return;
   }
-  st.textContent='Распознаю...';
-  st.style.color='var(--muted)';
+  setStatus(st,'Распознаю...','muted');
   document.getElementById('parsedCards').innerHTML='';
   // Подготавливаем строки ДО запроса — передаём парсеру с номерами
   const srcLines=raw.split('\n').map(l=>l.trim());
@@ -1137,12 +1122,10 @@ async function parseMessages(){
       }
       delete item._line;
     });
-    st.textContent=`Распознано: ${parsed.length} вылет(ов). Проверьте и сохраните.`;
-    st.style.color='var(--green2)';
+    setStatus(st,`Распознано: ${parsed.length} вылет(ов). Проверьте и сохраните.`,'ok');
     renderParsedCards(parsed);
   }catch(e){
-    st.textContent='Ошибка: '+e.message;
-    st.style.color='#dc2626';
+    setStatus(st,'Ошибка: '+e.message,'err');
   }
 }
 
@@ -1193,13 +1176,6 @@ function levenshtein(a,b){
   return dp[m][n];
 }
 
-function getKnownDrones(){
-  const names=new Set();
-  state.stock.forEach(d=>{if(d.name)names.add(d.name);});
-  state.squads.forEach(sq=>sq.drones.forEach(d=>{if(d.name)names.add(d.name);}));
-  return [...names];
-}
-
 function getKnownPilots(){
   return state.squads.map(sq=>sq.pilot).filter(Boolean);
 }
@@ -1230,21 +1206,18 @@ function showFuzzySelectDialog(fieldLabel,inputName,options,cfg={}){
   const showManual=cfg.showManual!==false;
   const cancelLabel=cfg.cancelLabel||'Пропустить';
   return new Promise(resolve=>{
-    const ov=document.createElement('div');
-    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
     const optBtns=options.map((name,idx)=>
       `<button class="btn btn-success btn-sm" id="fuz-opt-${idx}">${esc(name)}</button>`
     ).join('');
-    ov.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
-      <div style="font-size:13px;font-weight:700;color:#dc2626;margin-bottom:10px">${esc(fieldLabel)} не найден</div>
+    const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
+      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:10px">${esc(fieldLabel)} не найден</div>
       <div style="font-size:12px;color:var(--text);margin-bottom:12px">«<b>${esc(inputName)}</b>» отсутствует. Выберите:</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${optBtns}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px">
         ${showManual?'<button class="btn btn-sm" id="fuz-manual">Ввести вручную</button>':''}
         <button class="btn btn-sm" id="fuz-skip" style="color:var(--muted)">${esc(cancelLabel)}</button>
       </div>
-    </div>`;
-    document.body.appendChild(ov);
+    </div>`);
     options.forEach((name,idx)=>{
       ov.querySelector(`#fuz-opt-${idx}`).onclick=()=>{ov.remove();resolve(name);};
     });
@@ -1253,7 +1226,8 @@ function showFuzzySelectDialog(fieldLabel,inputName,options,cfg={}){
   });
 }
 
-function showImportBlockError(cardIndex,label,inputName,srcText){
+// Показывает блокирующую ошибку на карточке импорта (innerHTML — уже экранирован вызывающим)
+function showCardError(cardIndex,html){
   const card=document.getElementById(`pcard-${cardIndex}`);
   if(!card)return;
   const existing=card.querySelector('.import-block-err');
@@ -1261,9 +1235,14 @@ function showImportBlockError(cardIndex,label,inputName,srcText){
   const err=document.createElement('div');
   err.className='import-block-err';
   err.style.cssText='background:#3f1212;border:1px solid #dc2626;border-radius:6px;padding:8px 12px;font-size:11px;color:#fca5a5;margin-top:8px';
-  err.innerHTML=`⛔ ${esc(label)} «<b>${esc(inputName)}</b>» не найден в базе. Отредактируйте поле вручную и попробуйте снова.`
-    +(srcText?`<div style="margin-top:4px;color:var(--muted);font-family:monospace;white-space:pre-wrap">${esc(srcText)}</div>`:'');
+  err.innerHTML=html;
   card.appendChild(err);
+}
+
+function showImportBlockError(cardIndex,label,inputName,srcText){
+  showCardError(cardIndex,
+    `⛔ ${esc(label)} «<b>${esc(inputName)}</b>» не найден в базе. Отредактируйте поле вручную и попробуйте снова.`
+    +(srcText?`<div style="margin-top:4px;color:var(--muted);font-family:monospace;white-space:pre-wrap">${esc(srcText)}</div>`:''));
 }
 
 // Возвращает существующий вылет или null
@@ -1273,20 +1252,36 @@ function findFlightDuplicate(date,time,pilot){
   )||null;
 }
 
+// Проверяет дубль и при необходимости показывает диалог.
+// Возвращает true если можно сохранять, false если пользователь отменил.
+async function confirmDuplicateOrAbort(date,time,pilot){
+  if(!findFlightDuplicate(date,time,pilot))return true;
+  const choice=await showDuplicateDialog(date,time,pilot);
+  return choice!=='cancel';
+}
+
+// Списывает борт как потерю — РОВНО ОДИН РАЗ за вылет. Флаг _lossWritten
+// фиксирует, что списание уже выполнено, чтобы повторные вызовы (например при
+// редактировании или приёме того же вылета из облака) не вычитали борт снова.
+function applyLossIfNeeded(f){
+  if(f.returned==='no'&&f.drone&&!f._lossWritten){
+    writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);
+    f._lossWritten=true;
+    setTimeout(()=>syncPushStockSquads(),500);
+  }
+}
+
 // Диалог подтверждения дубликата. Возвращает: 'save'|'cancel'
 function showDuplicateDialog(date,time,pilot){
   return new Promise(resolve=>{
-    const ov=document.createElement('div');
-    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
-    ov.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:380px;width:92%;box-shadow:0 8px 32px #0008">
+    const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:380px;width:92%;box-shadow:0 8px 32px #0008">
       <div style="font-size:13px;font-weight:700;color:var(--amber,#f59e0b);margin-bottom:10px">⚠ Вылет уже существует</div>
       <div style="font-size:12px;color:var(--text);margin-bottom:16px"><b>${esc(date)} ${esc(time)}</b> · пилот <b>${esc(pilot)}</b><br>Добавить повторно?</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-sm" id="dup-add" style="color:#dc2626;border-color:#dc2626">Всё равно добавить</button>
+        <button class="btn btn-sm" id="dup-add" style="color:var(--red);border-color:var(--red)">Всё равно добавить</button>
         <button class="btn btn-success btn-sm" id="dup-cancel">Отмена</button>
       </div>
-    </div>`;
-    document.body.appendChild(ov);
+    </div>`);
     ov.querySelector('#dup-add').onclick=()=>{ov.remove();resolve('save');};
     ov.querySelector('#dup-cancel').onclick=()=>{ov.remove();resolve('cancel');};
   });
@@ -1297,6 +1292,7 @@ async function confirmParsed(i){
   const pilotInput=document.getElementById(`p${i}-pilot`);
   const srcEl=document.getElementById(`psrc-${i}`);
   const srcText=srcEl?srcEl.textContent.trim():'';
+  const hideThisCard=()=>{const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';};
 
   // Шаг 1: пилот — при несовпадении показываем всех пилотов из базы
   const pilotName=(pilotInput.value||'').trim();
@@ -1305,7 +1301,7 @@ async function confirmParsed(i){
     const exactPilot=knownPilots.some(n=>n.toLowerCase()===pilotName.toLowerCase());
     if(!exactPilot){
       const chosen=await showFuzzySelectDialog('Пилот',pilotName,knownPilots,{showManual:false,cancelLabel:'Отмена'});
-      if(chosen===null){const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';return;}
+      if(chosen===null){hideThisCard();return;}
       pilotInput.value=chosen;
     }
   }
@@ -1323,7 +1319,7 @@ async function confirmParsed(i){
       const candidates=findClosestCandidates(droneName,pilotDrones);
       if(!candidates.length){showImportBlockError(i,'Борт',droneName,srcText);return;}
       const chosen=await showFuzzySelectDialog('Борт',droneName,candidates.map(c=>c.name));
-      if(chosen===null){const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';return;}
+      if(chosen===null){hideThisCard();return;}
       if(chosen==='manual'){droneInput.focus();droneInput.select();return;}
       droneInput.value=chosen;
     }
@@ -1343,18 +1339,17 @@ async function confirmParsed(i){
     note:document.getElementById(`p${i}-note`).value,
   };
 
-  if(findFlightDuplicate(f.date,f.time,f.pilot)){
-    const choice=await showDuplicateDialog(f.date,f.time,f.pilot);
-    if(choice==='cancel'){
-      const card=document.getElementById(`pcard-${i}`);
-      if(card)card.style.display='none';
-      return;
-    }
+  // Потеря обязана указывать борт — он будет списан
+  if(f.returned==='no'&&!(f.drone||'').trim()){
+    showCardError(i,'⛔ Укажите борт — он будет списан как потеря');
+    droneInput.focus();
+    return;
   }
 
-  f.id=f.id||Date.now()+'_'+Math.random().toString(36).slice(2);
-  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);setTimeout(()=>syncStockAndSquads(),500);}
-  if(!navigator.onLine)state.offlineQueue.push(f);
+  if(!await confirmDuplicateOrAbort(f.date,f.time,f.pilot)){hideThisCard();return;}
+
+  f.id=f.id||genId('f');
+  applyLossIfNeeded(f);
   state.flights.unshift(f);
   saveLocal();
   checkNet();
@@ -1392,6 +1387,17 @@ function fillReportFilters(){
   if(curDrone)[...droneSel.options].forEach(o=>{if(o.value===curDrone)o.selected=true;});
 }
 
+// Базовая фильтрация вылетов по периоду/пилоту/борту — общая для отчётов
+function reportFilterFlights(from,to,filterPilot,filterDrone){
+  let f=[...state.flights];
+  if(from)f=f.filter(x=>x.date>=from);
+  if(to)f=f.filter(x=>x.date<=to);
+  if(filterPilot)f=f.filter(x=>x.pilot===filterPilot);
+  if(filterDrone)f=f.filter(x=>x.drone===filterDrone);
+  return f;
+}
+
+// Точка входа: читает фильтры и диспетчеризует по типу отчёта
 function buildReport(){
   window._reportText=null;
   fillReportFilters();
@@ -1401,17 +1407,7 @@ function buildReport(){
   const filterPilot=document.getElementById('repPilot').value;
   const filterDrone=document.getElementById('repDrone').value;
   const out=document.getElementById('reportOutput');
-
-  // Базовая фильтрация вылетов — применяется везде кроме складского
-  function getFlights(){
-    let f=[...state.flights];
-    if(from)f=f.filter(x=>x.date>=from);
-    if(to)f=f.filter(x=>x.date<=to);
-    if(filterPilot)f=f.filter(x=>x.pilot===filterPilot);
-    if(filterDrone)f=f.filter(x=>x.drone===filterDrone);
-    return f;
-  }
-
+  const f=reportFilterFlights(from,to,filterPilot,filterDrone);
   // Подпись активных фильтров
   const filterLabel=[
     filterPilot?`пилот: ${filterPilot}`:'',
@@ -1419,14 +1415,22 @@ function buildReport(){
     from||to?`${from||'...'} — ${to||'...'}`:'',
   ].filter(Boolean).join(' · ');
 
-  if(type==='stock'){
+  if(type==='stock') reportStock(out);
+  else if(type==='flights') reportFlights(out,f);
+  else if(type==='losses') reportLosses(out,f);
+  else if(type==='summary') reportSummary(out,f);
+  else if(type==='detailed') buildDetailedReport(f,filterLabel,out);
+  else if(type==='issued') reportIssued(out,from,to,filterPilot,filterDrone);
+}
+
+function reportStock(out){
     const stockBG=state.stock.filter(d=>d.status==='bg');
     const stockNBG=state.stock.filter(d=>d.status!=='bg');
 
     // Перемещения за последние 24 часа
     const now=Date.now();
     const day=24*60*60*1000;
-    const todayStr=new Date().toISOString().slice(0,10);
+    const todayStr=todayISO();
     const recentTransfers=(state.transfers||[]).filter(op=>{
       const dt=new Date(op.date+'T'+(op.time||'00:00'));
       return (now-dt.getTime())<=day;
@@ -1491,8 +1495,9 @@ function buildReport(){
       +movementsBlock
       +'</div>';
 
-  } else if(type==='flights'){
-    let f=getFlights();
+}
+
+function reportFlights(out,f){
     const byPilot={};
     f.forEach(x=>{if(!byPilot[x.pilot])byPilot[x.pilot]=[];byPilot[x.pilot].push(x);});
     const entries=Object.entries(byPilot);
@@ -1524,8 +1529,10 @@ function buildReport(){
         </div>`).join('');
     }
 
-  } else if(type==='losses'){
-    let f=getFlights().filter(x=>x.returned==='no');
+}
+
+function reportLosses(out,f){
+    f=f.filter(x=>x.returned==='no');
     if(!f.length){
       window._reportText='Потери БПЛА — 0 борт(ов)\nПотерь нет';
       out.innerHTML=`<div class="report-block"><div class="rb-head">Потери БПЛА — 0 борт(ов)</div><div class="rb-line">Потерь нет</div></div>`;
@@ -1544,8 +1551,9 @@ function buildReport(){
       </div>`;
     }
 
-  } else if(type==='summary'){
-    let f=getFlights();
+}
+
+function reportSummary(out,f){
     const byPilot={};
     f.forEach(x=>{
       if(!byPilot[x.pilot])byPilot[x.pilot]={total:0,done:0,lost:0,returned:0};
@@ -1596,9 +1604,9 @@ function buildReport(){
         <div class="rb-line" style="${mono}">${mkTotRow(totRow)}</div>
       </div>`;
     }
-  } else if(type==='detailed'){
-    buildDetailedReport(getFlights(),filterLabel,out);
-  } else if(type==='issued'){
+}
+
+function reportIssued(out,from,to,filterPilot,filterDrone){
     let transList=(state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад');
     if(from) transList=transList.filter(t=>t.date>=from);
     if(to)   transList=transList.filter(t=>t.date<=to);
@@ -1635,7 +1643,6 @@ function buildReport(){
         <div class="rb-line" style="margin-top:8px;font-weight:700">Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов</div>
       </div>`;
     }
-  }
 }
 
 function isDelivery(ammo){
@@ -1847,7 +1854,7 @@ function applyFontSize(sz){
     document.getElementById('dp-month-label').textContent=MONTHS_RU[curMonth-1];
     document.getElementById('dp-year-label').textContent=curYear+' г.';
     const sel=parseVal(currentInput?.value);
-    const todayISO=new Date().toISOString().slice(0,10);
+    const todayStr=todayISO();
     const firstDow=(new Date(curYear,curMonth-1,1).getDay()+6)%7; // 0=Пн
     const daysInMonth=new Date(curYear,curMonth,0).getDate();
     const daysInPrev=new Date(curYear,curMonth-1,0).getDate();
@@ -1857,7 +1864,7 @@ function applyFontSize(sz){
     // Текущий месяц
     for(let d=1;d<=daysInMonth;d++){
       const iso=toISO(curYear,curMonth,d);
-      cells.push({d,cur:true,today:iso===todayISO,selected:sel&&iso===toISO(sel.y,sel.m,sel.d)});
+      cells.push({d,cur:true,today:iso===todayStr,selected:sel&&iso===toISO(sel.y,sel.m,sel.d)});
     }
     // Следующий месяц
     let next=1;
@@ -1930,11 +1937,6 @@ function applyFontSize(sz){
 let authToken='';
 let authUser={login:'',role:''};
 
-async function sha256(str){
-  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-}
-
 function showLoginScreen(){
   const ls=document.getElementById('loginScreen');
   if(ls)ls.style.display='flex';
@@ -1946,26 +1948,14 @@ function hideLoginScreen(){
   document.querySelector('.app').style.display='flex';
 }
 
-async function doLogin(){
-  const login=document.getElementById('loginInput').value.trim();
-  const pass=document.getElementById('passwordInput').value;
-  const err=document.getElementById('loginError');
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
-  if(!url){err.textContent='URL сервера не настроен';return;}
-  if(!login||!pass){err.textContent='Введите логин и пароль';return;}
-  err.textContent='Проверяю...';
-  // Ищем пользователя через readAll и сверяем хэш локально
-  try{
-    const r=await fetch(url+'?action=read&token=__login__');
-    const d=await r.json();
-    // read без токена вернёт ошибку — используем специальный эндпоинт
-    // Получаем хэш пароля локально и ищем токен
-    err.textContent='Используйте ссылку от администратора';
-  }catch(e){err.textContent='Ошибка: '+e.message;}
+// Вход логином/паролем не реализован — авторизация только по ссылке от
+// администратора (см. authByToken). Кнопка/Enter формы показывают подсказку.
+function doLogin(){
+  setStatus('loginError','Вход только по ссылке от администратора','muted');
 }
 
 async function authByToken(token){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const {url}=syncGetCfg();
   if(!url||!token)return false;
   try{
     const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
@@ -2024,7 +2014,7 @@ async function initAuth(){
       applyRoleFromAuth();
       hideLoginScreen();
       logAction('auth','login','Вход по ссылке: '+(urlUser||''));
-      if(cfg.url)await syncFromCloudSilent();
+      if(cfg.url)await syncPullOnLogin();
       return;
     } else {
       showLoginError('Ссылка недействительна или устарела');
@@ -2133,7 +2123,7 @@ function nuRoleChange(){
 }
 
 async function createUser(){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const {url}=syncGetCfg();
   if(!url){alert('URL не настроен');return;}
   if(!authToken){alert('Нет прав администратора');return;}
   const login=document.getElementById('nu-login').value.trim();
@@ -2181,8 +2171,7 @@ async function createUser(){
 
     // Генерируем ссылку
     const base=window.location.origin+window.location.pathname;
-    const serverUrl=cfg.url||localStorage.getItem('cfg_url')||'';
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(serverUrl);
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(url);
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     document.getElementById('nu-login').value='';
@@ -2201,7 +2190,7 @@ function copyUserLink(){
 }
 
 async function loadUsersList(){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const {url}=syncGetCfg();
   if(!url||!authToken)return;
   try{
     const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
@@ -2226,7 +2215,7 @@ async function loadUsersList(){
 }
 
 async function regenerateToken(login){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const {url,key}=syncGetCfg();
   if(!url||!authToken)return;
   try{
     // Отправляем запрос на смену токена
@@ -2243,9 +2232,7 @@ async function regenerateToken(login){
       return;
     }
     const base=window.location.origin+window.location.pathname;
-    const encKey=cfg.key;
-    const serverUrl=cfg.url||'';
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(serverUrl);
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(key)+'&s='+encodeURIComponent(url);
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
     showSyncToast('✓ Новая ссылка сгенерирована');
@@ -2254,7 +2241,7 @@ async function regenerateToken(login){
 }
 
 async function toggleUser(login,active){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
+  const {url}=syncGetCfg();
   if(!url||!authToken)return;
   try{
     await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
@@ -2516,8 +2503,7 @@ function ammoNormalize(){
 }
 
 async function ammoSaveToCloud(){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
-  const token=authToken||localStorage.getItem('auth_token')||'';
+  const {url,token}=syncGetCfg();
   if(!url||!token){alert('Нет подключения к облаку');return;}
   const st=document.getElementById('ammo-status');
   st.textContent='Сохраняю...';
@@ -2539,8 +2525,7 @@ function initQuickForm(){
   if(!qp)return;
   // state.role — текущая роль в переключателе, authUser.role — роль учётной записи
   const role=state.role||authUser.role||'';
-  const isPilot=role==='pilot'||role==='pilot1'||role==='pilot2'||role==='pilot3';
-  if(isPilot){
+  if(isPilotRole(role)){
     if(qpWrap)qpWrap.style.display='none';
     // Для локальной учётки берём имя из переключателя расчётов
     const pilotName=authUser.login&&authUser.login!=='local'&&authUser.login!=='admin'
@@ -2552,20 +2537,14 @@ function initQuickForm(){
     if(authUser.login&&authUser.login!=='local'&&authUser.login!=='admin')
       qp.value=authUser.login;
   }
-  autoFillFlightNum();
-}
-
-function autoFillFlightNum(){
-  // Нумерация вычисляется в saveQuickFlight при записи — здесь ничего не делаем
 }
 
 async function saveQuickFlight(){
   const pilot=(document.getElementById('qf-pilot').value||'').trim();
   // Автонумерация: считаем вылеты пилота за сегодня
-  const today2=new Date().toISOString().slice(0,10);
-  const todayPilotFlights=state.flights.filter(f=>f.pilot===pilot&&f.date===today2);
-  const maxNum2=todayPilotFlights.reduce((m,f)=>Math.max(m,f.flightnum||0),0);
-  const num=maxNum2+1;
+  const date=todayISO();
+  const todayPilotFlights=state.flights.filter(f=>f.pilot===pilot&&f.date===date);
+  const num=todayPilotFlights.reduce((m,f)=>Math.max(m,f.flightnum||0),0)+1;
   const target=(document.getElementById('qf-target').value||'').trim();
   const ammoRaw=(document.getElementById('qf-ammo').value||'').trim();
   const drone=(document.getElementById('qf-drone').value||'').trim();
@@ -2573,19 +2552,16 @@ async function saveQuickFlight(){
   const returned=document.getElementById('qf-returned').value==='yes';
   const note=(document.getElementById('qf-note').value||'').trim();
   if(!pilot){alert('Укажите пилота');return;}
+  // Потеря обязана указывать борт — он будет списан
+  if(!returned&&!drone){setStatus('qf-status','Укажите борт — он будет списан как потеря','err');return;}
   if(!drone){alert('Укажите БПЛА');return;}
   const ammo=ammoNormalizeName(ammoRaw)||ammoRaw;
-  const now=new Date();
-  const date=now.toISOString().slice(0,10);
-  const time=now.toTimeString().slice(0,5);
+  const time=nowHM();
 
-  if(findFlightDuplicate(date,time,pilot)){
-    const choice=await showDuplicateDialog(date,time,pilot);
-    if(choice==='cancel')return;
-  }
+  if(!await confirmDuplicateOrAbort(date,time,pilot))return;
 
   const f={
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
+    id:genId('f'),
     _savedTs:Date.now(),
     _submittedBy:authUser.login||'',
     date,time,pilot,
@@ -2595,7 +2571,7 @@ async function saveQuickFlight(){
     returned:returned?'yes':'no',
     note
   };
-  if(f.returned==='no'&&f.drone){writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);setTimeout(()=>syncStockAndSquads(),500);}
+  applyLossIfNeeded(f);
   state.flights.unshift(f);
   saveLocal();
   renderFlights();renderDashboard();
@@ -2605,12 +2581,9 @@ async function saveQuickFlight(){
   document.getElementById('qf-note').value='';
   document.getElementById('qf-result').value='yes';
   document.getElementById('qf-returned').value='yes';
-  autoFillFlightNum();
-  const st=document.getElementById('qf-status');
-  st.textContent='✓ Вылет #'+f.flightnum+' записан — '+f.time;
-  st.style.color='var(--green2)';
+  setStatus('qf-status','✓ Вылет #'+f.flightnum+' записан — '+f.time,'ok');
   logAction('flight','add','Вылет #'+f.flightnum+' '+pilot+' '+drone+(f.returned==='no'?' [потеря]':''));
-  setTimeout(()=>{if(st)st.textContent='';},3000);
+  setTimeout(()=>{const st=document.getElementById('qf-status');if(st)st.textContent='';},3000);
 }
 
 // ============ ACTIVITY LOG ============
@@ -2618,10 +2591,10 @@ let actLog=[];
 
 function logAction(type, action, details){
   const entry={
-    id:Date.now()+'_'+Math.random().toString(36).slice(2),
+    id:genId('a'),
     ts:Date.now(),
-    date:new Date().toISOString().slice(0,10),
-    time:new Date().toTimeString().slice(0,5),
+    date:todayISO(),
+    time:nowHM(),
     user:authUser.login||'unknown',
     role:authUser.role||'',
     type,action,details
@@ -2641,9 +2614,7 @@ function actLogLoad(){
 }
 
 async function loadActLogFromCloud(){
-  const url=cfg.url||localStorage.getItem('cfg_url')||'';
-  const key=cfg.key||localStorage.getItem('cfg_key')||'';
-  const token=authToken||localStorage.getItem('auth_token')||'';
+  const {url,key,token}=syncGetCfg();
   if(!url||!token)return;
   try{
     const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
@@ -2696,7 +2667,7 @@ function actlogClearFilters(){
 // ============ ПРАВА ДОСТУПА ============
 function applyRoleRestrictions(){
   const role=state.role||authUser.role||'';
-  const isPilot=role.startsWith('pilot')||role==='pilot';
+  const isPilot=isPilotRole(role);
   const isTech=role==='tech';
   const isCmd=role==='cmd';
   const isAdmin=role==='admin';
@@ -2775,6 +2746,79 @@ function updateEncryptBadge(){
   if(el)el.style.display=cfg.key?'block':'none';
   const rb=document.getElementById('cfg-reencrypt-block');
   if(rb)rb.style.display=(cfg.key&&state.role==='admin')?'block':'none';
+}
+
+// Смена ключа шифрования: читает все зашифрованные листы старым ключом,
+// перешифровывает новым и перезаписывает облако. Шифруются только листы данных
+// (flights/stock/squads/transfers/actlog); users и ammo_catalog ключом не шифруются.
+async function cfgReencrypt(){
+  const STAT='cfg-reencrypt-status';
+  const btn=document.getElementById('cfg-reencrypt-btn');
+  const oldKey=cfg.key||localStorage.getItem('cfg_key')||'';
+  const newKey=(document.getElementById('cfg-newkey').value||'').trim();
+  const newKey2=(document.getElementById('cfg-newkey2').value||'').trim();
+  const {url,token}=syncGetCfg();
+  const isAdmin=state.role==='admin'||authUser.role==='admin';
+
+  if(!isAdmin){setStatus(STAT,'Только администратор может менять ключ','err');return;}
+  if(!url||!token){setStatus(STAT,'Нет подключения к облаку или прав','err');return;}
+  if(!newKey){setStatus(STAT,'Введите новый ключ','err');return;}
+  if(newKey!==newKey2){setStatus(STAT,'Новый ключ и подтверждение не совпадают','err');return;}
+  if(newKey===oldKey){setStatus(STAT,'Новый ключ совпадает со старым','err');return;}
+  if(!confirm('Сменить ключ и перешифровать ВСЕ данные в облаке?\nПосле этого все пользователи должны будут ввести новый ключ.'))return;
+
+  const sheets=['flights','stock','squads','transfers','actlog'];
+  if(btn)btn.disabled=true;
+  try{
+    // 1. Читаем сырые строки всех листов
+    setStatus(STAT,'Загрузка из облака...','muted');
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+
+    // 2. Расшифровываем каждый лист старым ключом + 3. перешифровываем новым
+    const data={};
+    let totalRaw=0, totalOk=0;
+    for(const sheet of sheets){
+      const rows=d[sheet]||[];
+      totalRaw+=rows.length;
+      const objs=await syncDecryptRows(rows,oldKey);
+      // Защита от затирания: если строки есть, но ни одна не расшифровалась —
+      // старый ключ неверный, прерываем (иначе перезапишем лист пустым).
+      if(rows.length&&!objs.length){
+        throw new Error(`Лист «${sheet}»: не удалось расшифровать ни одной записи — проверьте текущий ключ`);
+      }
+      totalOk+=objs.length;
+      data[sheet]=await Promise.all(objs.map(o=>syncEncrypt(o,newKey)));
+      setStatus(STAT,`Перешифровано: ${sheet} (${objs.length})`,'muted');
+    }
+
+    // 4. Записываем всё обратно в облако
+    setStatus(STAT,'Отправка в облако...','muted');
+    const res=await syncPost(url,JSON.stringify({action:'write',token,data}));
+    if(!res.ok)throw new Error(res.error||'ошибка записи');
+
+    // 5. Сохраняем новый ключ локально
+    cfg.key=newKey;
+    try{localStorage.setItem('cfg_key',newKey);}catch(e){}
+    const kField=document.getElementById('cfg-key');
+    if(kField)kField.value=newKey;
+    const nuke=document.getElementById('nu-enckey');
+    if(nuke)nuke.value=newKey;
+    document.getElementById('cfg-newkey').value='';
+    document.getElementById('cfg-newkey2').value='';
+    updateEncryptBadge();
+    logAction('settings','reencrypt',`Ключ шифрования изменён, перешифровано ${totalOk} записей`);
+
+    // 6. Результат
+    const tail=res.unverified?' (запись не подтверждена — проверьте синхронизацию)':'';
+    setStatus(STAT,`✓ Готово: перешифровано ${totalOk} из ${totalRaw} записей${tail}`,'ok');
+    showSyncToast('✓ Ключ изменён, данные перешифрованы');
+  }catch(e){
+    setStatus(STAT,'Ошибка: '+e.message+' — ключ НЕ изменён','err');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
 }
 
 async function cfgTestConnection(){
@@ -2952,7 +2996,7 @@ let _lastStockTs = Date.now(); // Инициализируем текущим в
 
 // Добавить вылет — append + сразу в облако
 async function syncAddFlight(flight){
-  if(!flight.id) flight.id = Date.now()+'_f_'+Math.random().toString(36).slice(2);
+  if(!flight.id) flight.id = genId('f');
   state.flights.unshift(flight);
   saveLocal();
   const {url,key,token} = syncGetCfg();
@@ -3035,7 +3079,7 @@ function syncEditFlight(idx, field, val){
 
 // Добавить transfer/arrival/loss — только отправляет в облако, не добавляет локально
 async function syncAddTransfer(op){
-  if(!op.id) op.id = Date.now()+'_t_'+Math.random().toString(36).slice(2);
+  if(!op.id) op.id = genId('t');
   const {url,key,token} = syncGetCfg();
   if(!url||!token){ pendingQueue.add({type:'transfer',data:op}); return; }
   const enc = await syncEncrypt(op, key);
@@ -3189,7 +3233,6 @@ async function syncPullOnLogin(){
     // Отправляем накопленное
     setTimeout(()=>syncFlushQueue(), 1000);
   }
-  state.offlineQueue = [];
   saveLocal();
   syncIndicator('ok');
   syncRenderAll();
@@ -3213,7 +3256,6 @@ async function syncFromCloud(){
   state.stock     = loaded.stock;
   state.squads    = loaded.squads;
   state.transfers = loaded.transfers;
-  state.offlineQueue = [];
   pendingQueue.clear();
   saveLocal();
   syncIndicator('ok');
@@ -3255,9 +3297,11 @@ async function pollCloud(){
       if(!state.flights.some(f=>f.id===obj.id)){
         state.flights.unshift(obj);
         changed = true;
-        // Списываем дрон если потеря
-        if(obj.returned==='no' && obj.drone){
+        // Списываем дрон если потеря — но только если списание ещё не зафиксировано
+        // на устройстве-источнике (флаг приходит вместе с вылетом).
+        if(obj.returned==='no' && obj.drone && !obj._lossWritten){
           writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id);
+          obj._lossWritten=true;
           setTimeout(()=>syncPushStockSquads(), 500);
         }
       }
@@ -3344,18 +3388,14 @@ function startPolling(){
   }, 5*60*1000);
 }
 
-// ============================================================
-// СОВМЕСТИМОСТЬ — старые имена которые используются в UI
-// ============================================================
-function syncFromCloudSilent(){ return syncPullOnLogin(); }
-function syncStockAndSquads(){ return syncPushStockSquads(); }
+// Отправка в облако по имени листа. actlog шлём напрямую, остальное — как transfer.
 function appendToCloud(sheet, obj){
   if(sheet==='actlog'){
     // Журнал действий — отправляем отдельно напрямую
     const {url,key,token}=syncGetCfg();
     if(!url||!token)return;
     (async()=>{
-      const enc=await syncEncrypt({...obj,id:obj.id||Date.now()+'_a'},key);
+      const enc=await syncEncrypt({...obj,id:obj.id||genId('a')},key);
       const body=JSON.stringify({action:'append_one',token,sheet:'actlog',row:enc});
       await syncPost(url,body);
     })();
@@ -3364,10 +3404,6 @@ function appendToCloud(sheet, obj){
   // transfers, flights и т.д.
   return syncAddTransfer(obj);
 }
-function saveLocalOnly(){
-  try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){}
-}
-
 rebuildRoleSelector();
 renderDashboard();
 renderInventory();

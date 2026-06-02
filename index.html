@@ -568,7 +568,8 @@
         <div><label>Новый ключ</label><input id="cfg-newkey" type="password" placeholder="Новый секретный ключ" autocomplete="off"></div>
         <div><label>Подтвердите новый ключ</label><input id="cfg-newkey2" type="password" placeholder="Повторите ключ" autocomplete="off"></div>
       </div>
-      <button class="btn btn-danger btn-sm" onclick="cfgReencrypt()">Сменить ключ и перешифровать все данные</button>
+      <button class="btn btn-danger btn-sm" id="cfg-reencrypt-btn" onclick="cfgReencrypt()">Сменить ключ и перешифровать все данные</button>
+      <div id="cfg-reencrypt-status" style="font-size:11px;margin-top:6px"></div>
       <div style="font-size:10px;color:var(--muted);margin-top:6px">После смены ключа все пользователи должны ввести новый ключ в своих настройках</div>
     </div>
   </div>
