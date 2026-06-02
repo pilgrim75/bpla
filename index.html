@@ -35,6 +35,7 @@
   <div class="topbar-right">
     <div class="role-badge" id="roleBadge"><div class="role-dot"></div><b>Командир</b></div>
     <div class="sync-indicator" id="syncIndicator">● локально</div>
+    <div class="queue-indicator" id="queueIndicator" style="display:none" title="Несинхронизированные изменения ждут отправки"></div>
     <select id="themeSwitch" onchange="applyTheme(this.value)" title="Цветовая схема" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
       <option value="terminal">Терминал</option>
       <option value="wb">Серый</option>
@@ -231,11 +232,14 @@
 <div class="page" id="page-flights">
   <div class="section-head">
     <div class="section-title">Журнал вылетов</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-      <input style="width:130px" type="date" id="filterDate" onchange="renderFlights()">
-      <select style="width:120px" id="filterPilot" onchange="renderFlights()">
-        <option value="">Все пилоты</option>
-      </select>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end">
+      <div><label>С даты</label><input style="width:130px" type="date" id="filterFrom" onchange="renderFlights()"></div>
+      <div><label>По дату</label><input style="width:130px" type="date" id="filterTo" onchange="renderFlights()"></div>
+      <div><label>Пилот</label>
+        <select style="width:120px" id="filterPilot" onchange="renderFlights()">
+          <option value="">Все пилоты</option>
+        </select>
+      </div>
     </div>
   </div>
 
@@ -329,9 +333,18 @@
         </select>
       </div>
       <div><label>Тип БПЛА (все если не выбран)</label>
-        <select id="repDrone" onchange="buildReport()">
-          <option value="">Все борты</option>
-        </select>
+        <div class="ms-wrap" id="repDroneWrap">
+          <div class="ms-field" id="repDroneField" onclick="toggleDronePanel(event)">
+            <span id="repDroneLabel">Все борты</span>
+            <i class="ti ti-chevron-down ms-caret"></i>
+          </div>
+          <div class="ms-panel" id="repDronePanel">
+            <div class="ms-list" id="repDroneList"></div>
+            <div class="ms-foot">
+              <button type="button" class="btn btn-sm" onclick="resetDroneFilter(event)">Сбросить</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">

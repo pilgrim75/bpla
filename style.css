@@ -95,6 +95,10 @@ body{
 }
 .sync-indicator.syncing{border-color:var(--amber);color:var(--amber)}
 .sync-indicator.saved{border-color:var(--accent3);color:var(--accent2)}
+.queue-indicator{
+  font-size:11px;padding:3px 10px;border:1px solid var(--amber);
+  color:var(--amber);border-radius:var(--radius);background:var(--bg3);white-space:nowrap;
+}
 
 /* ============ NAV ============ */
 .nav{
@@ -299,6 +303,39 @@ label{
 .qp-item:last-child{border-bottom:none}
 .qp-item:hover{background:var(--accent-dim);color:var(--accent)}
 
+/* ============ MULTISELECT (Тип БПЛА) ============ */
+.ms-wrap{position:relative;width:100%}
+.ms-field{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  border:1px solid var(--border2);padding:6px 10px;font-size:13px;min-height:32px;
+  color:var(--input-color);background:var(--input-bg);
+  border-radius:var(--radius);cursor:pointer;box-sizing:border-box;
+}
+.ms-field:hover{border-color:var(--accent2)}
+.ms-field.open{border-color:var(--accent)}
+.ms-field>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ms-caret{flex-shrink:0;color:var(--muted);transition:transform .15s}
+.ms-field.open .ms-caret{transform:rotate(180deg)}
+.ms-panel{
+  position:absolute;z-index:9998;left:0;right:0;top:calc(100% + 4px);
+  background:var(--card2);border:1px solid var(--border2);
+  box-shadow:0 8px 24px rgba(0,0,0,.4);border-radius:var(--radius);
+  display:none;overflow:hidden;
+}
+.ms-panel.open{display:block}
+.ms-panel.up{top:auto;bottom:calc(100% + 4px)}
+.ms-list{max-height:220px;overflow-y:auto}
+.ms-item{
+  display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:13px;
+  cursor:pointer;color:var(--text);border-bottom:1px solid var(--border);margin:0;
+  text-transform:none;letter-spacing:normal;font-weight:400;
+}
+.ms-item:last-child{border-bottom:none}
+.ms-item:hover{background:var(--accent-dim)}
+.ms-item input[type=checkbox]{width:auto;margin:0;cursor:pointer;flex-shrink:0}
+.ms-empty{padding:10px 12px;font-size:12px;color:var(--muted)}
+.ms-foot{padding:8px;border-top:1px solid var(--border2);display:flex;justify-content:flex-end}
+
 /* ============ DATE PICKER ============ */
 .dp-wrap{position:relative;display:inline-block;width:100%}
 .dp-input{cursor:pointer;caret-color:transparent}
@@ -349,7 +386,7 @@ label{
 
 /* ============ PRINT ============ */
 @media print{
-  .topbar,.nav,.navbar,.section-head .btn,.btn,.adm-tab,#syncIndicator,#netBar{display:none!important}
+  .topbar,.nav,.navbar,.section-head .btn,.btn,.adm-tab,#syncIndicator,#queueIndicator,#netBar{display:none!important}
   .main{padding:0}.page{display:block!important}.page:not(.active){display:none!important}
   body{background:#fff!important;color:#000!important}
   .report-block{border-left:2px solid #000;background:#fff!important}
