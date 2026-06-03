@@ -26,7 +26,7 @@
 <div class="app">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
-  <div class="version">v0.11</div>
+  <div class="version">v0.12</div>
   <select id="roleSwitch" style="width:auto;padding:4px 10px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -404,6 +404,7 @@
     <button class="adm-tab" onclick="showAdminTab('squads',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Расчёты</button>
     <button class="adm-tab" onclick="showAdminTab('ammo',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Боеприпасы</button>
     <button class="adm-tab" onclick="showAdminTab('actlog',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Журнал действий</button>
+    <button class="adm-tab" onclick="showAdminTab('geo',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Карта/Гео</button>
     <button class="adm-tab" onclick="showAdminTab('data',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Данные</button>
   </div>
 
@@ -458,6 +459,24 @@
         </div>
         <button class="btn btn-success btn-sm" onclick="adminAddSquad()">Добавить расчёт</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ВКЛАДКА: КАРТА/ГЕО -->
+  <div class="adm-panel" id="adm-geo" style="display:none">
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Карта / Геоданные</div>
+      <div class="notice" style="margin-bottom:10px">Данные точек хранятся <b>только в этом браузере</b> (localStorage) и никогда не отправляются в облако. Формат — AlpineQuest <code>.ldk</code>.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <button class="btn btn-primary" onclick="document.getElementById('ldkInput').click()">📂 Загрузить .ldk</button>
+        <input type="file" id="ldkInput" accept=".ldk" style="display:none" onchange="geoImportLDK(this)">
+        <button class="btn btn-sm" onclick="geoRecalcAllMissing()">Пересчитать вылеты без дистанций</button>
+        <button class="btn btn-sm" onclick="geoRecalcAllForce()">Пересчитать незаблокированные</button>
+        <button class="btn btn-sm" style="color:var(--amber);border-color:var(--amber)" onclick="geoRecalcAllResetLocks()">Сбросить все блокировки и пересчитать</button>
+        <button class="btn btn-sm" style="color:var(--red);border-color:var(--red)" onclick="geoClearDB()">Очистить геоданные</button>
+        <span id="geo-status" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div id="geo-stats"></div>
     </div>
   </div>
 
@@ -644,6 +663,10 @@
 </div><!-- main -->
 </div><!-- app -->
 
+<script src="sync.js"></script>
+<script src="geo.js"></script>
+<script src="parser.js"></script>
+<script src="reports.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

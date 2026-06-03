@@ -246,6 +246,7 @@ function showAdminTab(tab,btn){
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
   if(tab==='ammo')renderAmmoList();
+  if(tab==='geo')renderGeoTab();
   if(tab==='actlog'){loadActLogFromCloud().then(()=>renderActLog());};
 }
 
@@ -293,7 +294,7 @@ function renderAdminFlights(){
         <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select style="width:80px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
         <td><input style="width:100%;min-width:120px" value="${x.note||''}" onchange="adminEditFlight(${i},'note',this.value)"></td>
-        <td><button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
+        <td style="white-space:nowrap">${x.geo_locked?'<span title="Дистанция зафиксирована (🔒). Защищена от пересчёта">🔒</span> ':''}<button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
       </tr>`).join('')}
       </tbody>
     </table>`:'<div style="color:var(--muted);padding:12px">Нет вылетов</div>';
@@ -363,10 +364,11 @@ function adminAddStock(){
 function renderAdminSquads(){
   document.getElementById('adminSquadList').innerHTML=state.squads.length?`
     <table>
-      <thead><tr><th>Пилот</th><th>БПЛА</th><th>Кол-во</th><th>Действие</th></tr></thead>
+      <thead><tr><th>Пилот</th><th>Точка старта</th><th>БПЛА</th><th>Кол-во</th><th>Действие</th></tr></thead>
       <tbody>${state.squads.flatMap((sq,si)=>sq.drones.map((d,di)=>`<tr>
-        <td>${di===0?`<input style="width:90px" value="${sq.pilot}" onchange="adminEditSquadPilot(${si},this.value)">`:'&nbsp;'}</td>
-        <td><input style="width:90px" value="${d.name}" onchange="adminEditSquadDrone(${si},${di},'name',this.value)"></td>
+        <td>${di===0?`<input style="width:90px" value="${esc(sq.pilot)}" onchange="adminEditSquadPilot(${si},this.value)">`:'&nbsp;'}</td>
+        <td>${di===0?`<input style="width:110px" value="${esc(sq.start_point||'')}" placeholder="45 вишня" onchange="squadEditStartPoint(${si},this.value)" autocomplete="off"><br><button id="geo-rc-btn-adm-${si}" class="btn btn-sm" style="margin-top:4px;font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing(${si},'geo-rc-prog-adm-${si}','geo-rc-btn-adm-${si}')">Пересчитать вылеты без дистанций</button><span id="geo-rc-prog-adm-${si}" style="font-size:10px;color:var(--muted)"></span>`:'&nbsp;'}</td>
+        <td><input style="width:90px" value="${esc(d.name)}" onchange="adminEditSquadDrone(${si},${di},'name',this.value)"></td>
         <td><input style="width:55px" type="number" min="0" value="${d.qty}" onchange="adminEditSquadDrone(${si},${di},'qty',parseInt(this.value)||0)"></td>
         <td>${di===0?`<button class="btn btn-danger btn-sm" onclick="adminDeleteSquad(${si})">Удалить расчёт</button>`:'&nbsp;'}</td>
       </tr>`)).join('')}
@@ -965,6 +967,12 @@ function renderSquadEditor(){
         <button class="btn btn-sm btn-primary" onclick="squadCleanZeros(${si})">Удалить нули</button>
         <button class="btn btn-danger btn-sm" onclick="squadDeletePilot(${si})">Удалить расчёт</button>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <label style="margin:0;white-space:nowrap;text-transform:none;letter-spacing:normal;font-size:11px;color:var(--muted)">Точка старта:</label>
+        <input style="flex:1;min-width:120px" value="${esc(sq.start_point||'')}" placeholder="напр. 45 вишня" onchange="squadEditStartPoint(${si},this.value)" autocomplete="off">
+        <button id="geo-rc-btn-inv-${si}" class="btn btn-sm" style="font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing(${si},'geo-rc-prog-inv-${si}','geo-rc-btn-inv-${si}')">Пересчитать вылеты без дистанций</button>
+        <span id="geo-rc-prog-inv-${si}" style="font-size:10px;color:var(--muted)"></span>
+      </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">БПЛА расчёта:</div>
       ${sq.drones.map((d,di)=>`
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px${d.qty===0?';opacity:0.5':''}">
@@ -984,6 +992,105 @@ function squadCleanZeros(si){
   renderInventory();
 }
 function squadEditPilot(si,val){state.squads[si].pilot=val;saveLocal();renderInventory();}
+// Сколько вылетов пилота без посчитанной дистанции
+function geoPilotMissingCount(pilot){
+  const lo=(pilot||'').toLowerCase();
+  return (state.flights||[]).filter(f=>(f.pilot||'').toLowerCase()===lo && (f.range_km==null||f.distance_km==null)).length;
+}
+// Показывать ли кнопку пересчёта: есть точка старта И есть вылеты без дистанций
+function geoStartBtnShow(sq){ return !!(sq && sq.start_point && geoPilotMissingCount(sq.pilot)>0); }
+// Обновить видимость кнопок пересчёта расчёта (обе карточки)
+function geoUpdateRecalcBtn(si){
+  const sq=state.squads[si];
+  const show=geoStartBtnShow(sq);
+  ['geo-rc-btn-adm-'+si,'geo-rc-btn-inv-'+si].forEach(id=>{
+    const b=document.getElementById(id);
+    if(b) b.style.display=show?'':'none';
+  });
+}
+
+function squadEditStartPoint(si,val){
+  const sq=state.squads[si];
+  if(!sq)return;
+  sq.start_point=(val||'').trim();
+  saveLocal();
+  syncPushStockSquads();        // start_point синхронизируется как обычные данные squads
+  // Старые вылеты НЕ пересчитываются — новая точка применяется только к новым вылетам.
+  // Для существующих есть кнопка «Пересчитать вылеты без дистанций».
+  geoUpdateRecalcBtn(si);
+}
+
+// Пересчёт вылетов конкретного пилота без дистанций (force=false), прогресс inline
+function geoRecalcPilotMissing(si, progId, btnId){
+  const sq=state.squads[si];
+  if(!sq) return;
+  const prog=progId?document.getElementById(progId):null;
+  const btn=btnId?document.getElementById(btnId):null;
+  if(!sq.start_point){ if(prog) prog.textContent=' — нет точки старта'; return; }
+  // Уже всё посчитано — нечего делать
+  if(geoPilotMissingCount(sq.pilot)===0){
+    if(prog) prog.textContent=' Все вылеты уже имеют дистанции';
+    if(btn) btn.style.display='none';
+    return;
+  }
+  geoRecomputeFlights({
+    force:false, pilot:sq.pilot,
+    onProgress:(done,tot)=>{ if(prog) prog.textContent=' Пересчёт: '+done+'/'+tot+'...'; },
+    onDone:(changed)=>{
+      const left=geoPilotMissingCount(sq.pilot);
+      if(left===0){
+        if(prog) prog.textContent=' ✓ Все вылеты посчитаны';
+        if(btn) btn.style.display='none';
+      } else {
+        // часть не удалось посчитать (нет точки в гео) — кнопку оставляем
+        if(prog) prog.textContent=' ✓ Пересчитано: '+changed+', без координат: '+left;
+      }
+      if(document.getElementById('page-report')?.classList.contains('active')) buildReport();
+    }
+  });
+}
+
+// Общий пересчёт всех пилотов без дистанций (из вкладки Карта/Гео)
+function geoRecalcAllMissing(){
+  geoRecomputeFlights({
+    force:false,
+    onProgress:(done,tot)=>setStatus('geo-status', tot?'Пересчёт: '+done+'/'+tot+'...':'Нет вылетов без дистанций','muted'),
+    onDone:(changed)=>{
+      setStatus('geo-status','✓ Пересчитано вылетов: '+changed,'ok');
+      renderFlights();
+      if(document.getElementById('page-report')?.classList.contains('active')) buildReport();
+    }
+  });
+}
+
+// Пересчёт всех НЕзаблокированных вылетов (зафиксированные 🔒 не трогаются)
+function geoRecalcAllForce(){
+  geoRecomputeFlights({
+    force:true, includeLocked:false,
+    onProgress:(done,tot)=>setStatus('geo-status', tot?'Пересчёт: '+done+'/'+tot+'...':'Нет незаблокированных вылетов','muted'),
+    onDone:(changed)=>{
+      setStatus('geo-status','✓ Пересчитано незаблокированных: '+changed,'ok');
+      renderFlights(); renderAdminFlights();
+      if(document.getElementById('page-report')?.classList.contains('active')) buildReport();
+    }
+  });
+}
+
+// Сбросить ВСЕ блокировки и пересчитать всё (перезапись зафиксированных) — двойное подтверждение
+function geoRecalcAllResetLocks(){
+  if(!confirm('Сбросить блокировки и пересчитать ВСЕ вылеты? Зафиксированные (🔒) дистанции будут перезаписаны.')) return;
+  if(!confirm('Точно перезаписать даже вручную зафиксированные дистанции? Действие необратимо.')) return;
+  (state.flights||[]).forEach(f=>{ delete f.geo_locked; });
+  geoRecomputeFlights({
+    force:true, includeLocked:true,
+    onProgress:(done,tot)=>setStatus('geo-status', tot?'Пересчёт: '+done+'/'+tot+'...':'Нет вылетов','muted'),
+    onDone:(changed)=>{
+      setStatus('geo-status','✓ Блокировки сброшены, пересчитано: '+changed,'ok');
+      renderFlights(); renderAdminFlights();
+      if(document.getElementById('page-report')?.classList.contains('active')) buildReport();
+    }
+  });
+}
 function squadEditDrone(si,di,field,val){
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
@@ -1054,816 +1161,6 @@ function writeDroneLoss(pilot, drone, date, time, flightId){
 }
 
 
-// ============ API KEY ============
-function saveApiKey(val){
-  try{localStorage.setItem('anthropicKey',val);}catch(e){}
-  if(val.startsWith('sk-ant'))setStatus('apiKeyStatus','✓ ключ сохранён','ok');
-  else if(val)setStatus('apiKeyStatus','⚠ ключ должен начинаться с sk-ant-','err');
-  else setStatus('apiKeyStatus','','muted');
-}
-function loadApiKey(){
-  try{
-    const k=localStorage.getItem('anthropicKey')||'';
-    const inp=document.getElementById('apiKeyInput');
-    if(inp&&k){inp.value=k;saveApiKey(k);}
-  }catch(e){}
-}
-
-// ============ IMPORT / PARSE ============
-async function parseMessages(){
-  const raw=document.getElementById('rawMsg').value.trim();
-  if(!raw)return;
-  const apiKey=(document.getElementById('apiKeyInput').value||'').trim();
-  const st=document.getElementById('parseStatus');
-  if(!apiKey||!apiKey.startsWith('sk-ant')){
-    setStatus(st,'Укажите API-ключ Anthropic выше (начинается с sk-ant-...)','err');
-    return;
-  }
-  setStatus(st,'Распознаю...','muted');
-  document.getElementById('parsedCards').innerHTML='';
-  // Подготавливаем строки ДО запроса — передаём парсеру с номерами
-  const srcLines=raw.split('\n').map(l=>l.trim());
-  const srcNonEmpty=srcLines.filter(Boolean);
-  const numberedInput=srcLines.map((l,i)=>`[${i}] ${l}`).join('\n');
-  const ammoKnown=ammoCatalog.flatMap(a=>[a.name,...(a.aliases||[])]).filter(Boolean);
-  try{
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key':apiKey,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
-      body:JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:2000,
-        system:`Ты парсер военных сообщений о вылетах дронов ФПВ. Из входного текста извлеки КАЖДЫЙ вылет отдельно.
-Каждая строка входного текста помечена номером в квадратных скобках [N]. Используй этот номер как _line.
-Верни ТОЛЬКО валидный JSON-массив без лишнего текста, пример:
-[{"_line":0,"date":"2026-05-23","time":"08:34","pilot":"Рама","flightnum":1,"target":"305 Вишня","ammo":"пом2","drone":"Гамаюн13","result":"yes","returned":"yes","note":""},...]
-Правила:
-- _line: ТОЧНЫЙ номер строки [N] из которой взят этот вылет — обязателен и уникален для каждого вылета
-- время всегда в формате HH:MM с ведущим нулём (08:34, не 8:34)
-- flightnum: число вылета если упомянуто ("первый вылет"=1, "второй вылет"=2 и т.д.), иначе null
-- target: комбинация "ЧИСЛО + СЛОВО-ЦВЕТ" (янтарь, красный, синий, зелёный, белый, чёрный, жёлтый, фиолетовый, серый, оранжевый, розовый) — это ВСЕГДА точка/цель; пиши оба слова в target, не разбивай, не путай с позывным
-- ammo: если токен совпадает (точно или приблизительно) с одним из известных боеприпасов [${ammoKnown.length?ammoKnown.join(', '):'—'}] — это груз/боеприпас, пиши в ammo; НЕ путай с позывным или целью${ammoKnown.length?'':'; если список пуст — определяй по контексту'}
-- note: ТОЛЬКО дополнительные обстоятельства (перебили видео, потеря управления, спикировал и т.п.) — НЕ номер вылета, НЕ цель, НЕ боеприпас
-- returned: вернул/борт вернул = yes; не вернули/спикировал/перебили/потеря управления/борт остался/борт не вернул = no
-- result: на месте/выполнена = yes; не на месте/не выполнена = no
-- drone: нормализуй написание к ближайшему из словаря: ${DRONE_CATALOG.join(', ')}
-Верни ТОЛЬКО JSON-массив.`,
-        messages:[{role:'user',content:numberedInput}]
-      })
-    });
-    if(!resp.ok){
-      const err=await resp.json().catch(()=>({}));
-      throw new Error(`HTTP ${resp.status}: ${err.error?.message||resp.statusText}`);
-    }
-    const data=await resp.json();
-    const txt=data.content.map(i=>i.text||'').join('');
-    const parsed=JSON.parse(txt.replace(/```json|```/g,'').trim());
-    parsed.forEach((item,i)=>{
-      const lineIdx=typeof item._line==='number'?item._line:null;
-      if(lineIdx!==null&&srcLines[lineIdx]&&srcLines[lineIdx].trim()){
-        item._src=srcLines[lineIdx].trim();
-      } else {
-        item._src=srcNonEmpty[i]||'';
-      }
-      delete item._line;
-    });
-    setStatus(st,`Распознано: ${parsed.length} вылет(ов). Проверьте и сохраните.`,'ok');
-    renderParsedCards(parsed);
-  }catch(e){
-    setStatus(st,'Ошибка: '+e.message,'err');
-  }
-}
-
-function renderParsedCards(items){
-  document.getElementById('parsedCards').innerHTML=items.map((x,i)=>`
-    <div class="card" style="margin-bottom:8px" id="pcard-${i}">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:12px;font-weight:700;color:var(--muted)">Вылет ${x.flightnum||i+1} — ${x.pilot||'?'} · ${x.date||''} ${x.time||''}</div>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-success btn-sm" id="pbtn-save-${i}" onclick="confirmParsed(${i})">✓ Сохранить</button>
-          <button class="btn btn-sm" style="color:var(--muted)" onclick="hideCard(${i})">Скрыть</button>
-        </div>
-      </div>
-      ${x._src?`<div id="psrc-${i}" style="font-size:11px;color:var(--muted);background:var(--bg2);border:1px solid var(--border);padding:5px 8px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap">${x._src}</div>`:''}
-      <div class="form-row cols3">
-        <div><label>Дата</label><input id="p${i}-date" type="date" value="${x.date}"></div>
-        <div><label>Время</label><input id="p${i}-time" type="time" value="${x.time}"></div>
-        <div><label>Номер вылета</label><input id="p${i}-flightnum" type="number" min="1" value="${x.flightnum||''}"></div>
-      </div>
-      <div class="form-row cols3">
-        <div><label>Пилот</label><input id="p${i}-pilot" value="${x.pilot||''}"></div>
-        <div><label>Точка</label><input id="p${i}-target" value="${x.target||''}"></div>
-        <div><label>Боеприпас / груз</label><input id="p${i}-ammo" value="${x.ammo||''}"></div>
-      </div>
-      <div class="form-row cols3">
-        <div><label>БПЛА</label><input id="p${i}-drone" value="${x.drone||''}"></div>
-        <div><label>Задача</label>
-          <select id="p${i}-result"><option value="yes" ${x.result==='yes'?'selected':''}>Выполнена</option><option value="no" ${x.result==='no'?'selected':''}>Не выполнена</option></select>
-        </div>
-        <div><label>Борт</label>
-          <select id="p${i}-returned"><option value="yes" ${x.returned==='yes'?'selected':''}>Вернул</option><option value="no" ${x.returned==='no'?'selected':''}>Потерян</option></select>
-        </div>
-      </div>
-      <div><label>Примечание</label><input id="p${i}-note" value="${x.note||''}"></div>
-    </div>`).join('');
-}
-
-function hideCard(i){
-  const card=document.getElementById(`pcard-${i}`);
-  if(card)card.style.display='none';
-}
-
-function levenshtein(a,b){
-  const m=a.length,n=b.length;
-  const dp=Array.from({length:m+1},(_,i)=>Array.from({length:n+1},(_,j)=>i===0?j:j===0?i:0));
-  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)
-    dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
-  return dp[m][n];
-}
-
-function getKnownPilots(){
-  return state.squads.map(sq=>sq.pilot).filter(Boolean);
-}
-
-// Возвращает все кандидаты в пределах порога, отсортированные по расстоянию
-function findClosestCandidates(input,candidates){
-  if(!candidates.length)return[];
-  const lo=input.toLowerCase();
-  const threshold=Math.max(3,Math.floor(input.length/2));
-  return candidates
-    .map(name=>({name,dist:levenshtein(lo,name.toLowerCase())}))
-    .filter(r=>r.dist<=threshold)
-    .sort((a,b)=>a.dist-b.dist);
-}
-
-// Борты конкретного пилота с qty>0. Возвращает [] если пилот не в расчётах — НЕ падает на всю базу
-function getKnownDronesForPilot(pilotName){
-  const sq=state.squads.find(s=>s.pilot.toLowerCase()===pilotName.toLowerCase());
-  if(!sq)return[];
-  return sq.drones.filter(d=>d.qty>0).map(d=>d.name).filter(Boolean);
-}
-
-// Диалог выбора одного значения из нескольких кандидатов.
-// cfg.showManual — показывать кнопку "Ввести вручную" (default true)
-// cfg.cancelLabel — текст кнопки отмены (default 'Пропустить')
-// Возвращает: выбранное имя | 'manual' | null (отмена/пропустить)
-function showFuzzySelectDialog(fieldLabel,inputName,options,cfg={}){
-  const showManual=cfg.showManual!==false;
-  const cancelLabel=cfg.cancelLabel||'Пропустить';
-  return new Promise(resolve=>{
-    const optBtns=options.map((name,idx)=>
-      `<button class="btn btn-success btn-sm" id="fuz-opt-${idx}">${esc(name)}</button>`
-    ).join('');
-    const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
-      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:10px">${esc(fieldLabel)} не найден</div>
-      <div style="font-size:12px;color:var(--text);margin-bottom:12px">«<b>${esc(inputName)}</b>» отсутствует. Выберите:</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${optBtns}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px">
-        ${showManual?'<button class="btn btn-sm" id="fuz-manual">Ввести вручную</button>':''}
-        <button class="btn btn-sm" id="fuz-skip" style="color:var(--muted)">${esc(cancelLabel)}</button>
-      </div>
-    </div>`);
-    options.forEach((name,idx)=>{
-      ov.querySelector(`#fuz-opt-${idx}`).onclick=()=>{ov.remove();resolve(name);};
-    });
-    if(showManual)ov.querySelector('#fuz-manual').onclick=()=>{ov.remove();resolve('manual');};
-    ov.querySelector('#fuz-skip').onclick=()=>{ov.remove();resolve(null);};
-  });
-}
-
-// Показывает блокирующую ошибку на карточке импорта (innerHTML — уже экранирован вызывающим)
-function showCardError(cardIndex,html){
-  const card=document.getElementById(`pcard-${cardIndex}`);
-  if(!card)return;
-  const existing=card.querySelector('.import-block-err');
-  if(existing)existing.remove();
-  const err=document.createElement('div');
-  err.className='import-block-err';
-  err.style.cssText='background:#3f1212;border:1px solid #dc2626;border-radius:6px;padding:8px 12px;font-size:11px;color:#fca5a5;margin-top:8px';
-  err.innerHTML=html;
-  card.appendChild(err);
-}
-
-function showImportBlockError(cardIndex,label,inputName,srcText){
-  showCardError(cardIndex,
-    `⛔ ${esc(label)} «<b>${esc(inputName)}</b>» не найден в базе. Отредактируйте поле вручную и попробуйте снова.`
-    +(srcText?`<div style="margin-top:4px;color:var(--muted);font-family:monospace;white-space:pre-wrap">${esc(srcText)}</div>`:''));
-}
-
-// Возвращает существующий вылет или null
-function findFlightDuplicate(date,time,pilot){
-  return state.flights.find(f=>
-    f.date===date&&f.time===time&&f.pilot.toLowerCase()===pilot.toLowerCase()
-  )||null;
-}
-
-// Проверяет дубль и при необходимости показывает диалог.
-// Возвращает true если можно сохранять, false если пользователь отменил.
-async function confirmDuplicateOrAbort(date,time,pilot){
-  if(!findFlightDuplicate(date,time,pilot))return true;
-  const choice=await showDuplicateDialog(date,time,pilot);
-  return choice!=='cancel';
-}
-
-// Списывает борт как потерю — РОВНО ОДИН РАЗ за вылет. Флаг _lossWritten
-// фиксирует, что списание уже выполнено, чтобы повторные вызовы (например при
-// редактировании или приёме того же вылета из облака) не вычитали борт снова.
-function applyLossIfNeeded(f){
-  if(f.returned==='no'&&f.drone&&!f._lossWritten){
-    writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);
-    f._lossWritten=true;
-    setTimeout(()=>syncPushStockSquads(),500);
-  }
-}
-
-// Диалог подтверждения дубликата. Возвращает: 'save'|'cancel'
-function showDuplicateDialog(date,time,pilot){
-  return new Promise(resolve=>{
-    const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:380px;width:92%;box-shadow:0 8px 32px #0008">
-      <div style="font-size:13px;font-weight:700;color:var(--amber,#f59e0b);margin-bottom:10px">⚠ Вылет уже существует</div>
-      <div style="font-size:12px;color:var(--text);margin-bottom:16px"><b>${esc(date)} ${esc(time)}</b> · пилот <b>${esc(pilot)}</b><br>Добавить повторно?</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-sm" id="dup-add" style="color:var(--red);border-color:var(--red)">Всё равно добавить</button>
-        <button class="btn btn-success btn-sm" id="dup-cancel">Отмена</button>
-      </div>
-    </div>`);
-    ov.querySelector('#dup-add').onclick=()=>{ov.remove();resolve('save');};
-    ov.querySelector('#dup-cancel').onclick=()=>{ov.remove();resolve('cancel');};
-  });
-}
-
-async function confirmParsed(i){
-  const droneInput=document.getElementById(`p${i}-drone`);
-  const pilotInput=document.getElementById(`p${i}-pilot`);
-  const srcEl=document.getElementById(`psrc-${i}`);
-  const srcText=srcEl?srcEl.textContent.trim():'';
-  const hideThisCard=()=>{const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';};
-
-  // Шаг 1: пилот — при несовпадении показываем всех пилотов из базы
-  const pilotName=(pilotInput.value||'').trim();
-  const knownPilots=getKnownPilots();
-  if(pilotName&&knownPilots.length){
-    const exactPilot=knownPilots.some(n=>n.toLowerCase()===pilotName.toLowerCase());
-    if(!exactPilot){
-      const chosen=await showFuzzySelectDialog('Пилот',pilotName,knownPilots,{showManual:false,cancelLabel:'Отмена'});
-      if(chosen===null){hideThisCard();return;}
-      pilotInput.value=chosen;
-    }
-  }
-
-  // Шаг 2: борт — читаем имя ПОСЛЕ шага 1, проверяем только по списку подтверждённого пилота
-  const resolvedPilot=pilotInput.value.trim();
-  const droneName=(droneInput.value||'').trim();
-  const pilotDrones=getKnownDronesForPilot(resolvedPilot);
-  if(droneName&&pilotDrones.length){
-    const canonical=pilotDrones.find(n=>n.toLowerCase()===droneName.toLowerCase());
-    if(canonical){
-      // Точное совпадение — нормализуем регистр к каноническому из базы
-      droneInput.value=canonical;
-    }else{
-      const candidates=findClosestCandidates(droneName,pilotDrones);
-      if(!candidates.length){showImportBlockError(i,'Борт',droneName,srcText);return;}
-      const chosen=await showFuzzySelectDialog('Борт',droneName,candidates.map(c=>c.name));
-      if(chosen===null){hideThisCard();return;}
-      if(chosen==='manual'){droneInput.focus();droneInput.select();return;}
-      droneInput.value=chosen;
-    }
-  }
-
-  const fn=document.getElementById(`p${i}-flightnum`).value;
-  const f={
-    date:document.getElementById(`p${i}-date`).value,
-    time:document.getElementById(`p${i}-time`).value,
-    pilot:pilotInput.value,
-    target:document.getElementById(`p${i}-target`).value,
-    ammo:document.getElementById(`p${i}-ammo`).value,
-    drone:droneInput.value,
-    result:document.getElementById(`p${i}-result`).value,
-    returned:document.getElementById(`p${i}-returned`).value,
-    flightnum:fn?parseInt(fn):null,
-    note:document.getElementById(`p${i}-note`).value,
-  };
-
-  // Потеря обязана указывать борт — он будет списан
-  if(f.returned==='no'&&!(f.drone||'').trim()){
-    showCardError(i,'⛔ Укажите борт — он будет списан как потеря');
-    droneInput.focus();
-    return;
-  }
-
-  if(!await confirmDuplicateOrAbort(f.date,f.time,f.pilot)){hideThisCard();return;}
-
-  f.id=f.id||genId('f');
-  applyLossIfNeeded(f);
-  state.flights.unshift(f);
-  saveLocal();
-  checkNet();
-  renderDashboard();
-  renderInventory();
-  const card=document.getElementById(`pcard-${i}`);
-  const src=document.getElementById(`psrc-${i}`);
-  if(src)src.style.display='none';
-  card.style.background='var(--green-dim)';
-  card.style.border='1px solid var(--green3)';
-  const btn=card.querySelector(`#pbtn-save-${i}`);
-  btn.textContent='✓ Сохранено';btn.disabled=true;
-  card.style.pointerEvents='none';
-  setTimeout(()=>{card.style.display='none';},800);
-}
-
-function clearParse(){
-  document.getElementById('rawMsg').value='';
-  document.getElementById('parsedCards').innerHTML='';
-  document.getElementById('parseStatus').textContent='';
-}
-
-// ============ REPORT ============
-// Выбранные борты для фильтра отчётов (пусто = все)
-window._repSelectedDrones=window._repSelectedDrones||new Set();
-
-function fillReportFilters(){
-  const pilotSel=document.getElementById('repPilot');
-  if(pilotSel){
-    const curPilot=pilotSel.value;
-    const pilots=[...new Set(state.flights.map(x=>x.pilot).filter(Boolean))].sort();
-    pilotSel.innerHTML='<option value="">Все пилоты</option>'+pilots.map(p=>`<option value="${p}">${p}</option>`).join('');
-    if(curPilot)[...pilotSel.options].forEach(o=>{if(o.value===curPilot)o.selected=true;});
-  }
-  renderDroneFilter();
-}
-
-// Список бортов, реально использованных в выбранном периоде (вылеты + перемещения)
-function getReportDronesForPeriod(from,to){
-  const inRange=d=>(!from||d>=from)&&(!to||d<=to);
-  const set=new Set();
-  state.flights.forEach(x=>{if(x.drone&&inRange(x.date))set.add(x.drone);});
-  (state.transfers||[]).forEach(t=>{if(t.drone&&inRange(t.date))set.add(t.drone);});
-  return [...set].sort();
-}
-
-// Рендер панели чекбоксов по текущему периоду
-function renderDroneFilter(){
-  const list=document.getElementById('repDroneList');
-  if(!list)return;
-  const from=(document.getElementById('repFrom')||{}).value||'';
-  const to=(document.getElementById('repTo')||{}).value||'';
-  const drones=getReportDronesForPeriod(from,to);
-  // Снимаем выбор с бортов, которых нет в текущем периоде
-  const sel=window._repSelectedDrones;
-  [...sel].forEach(d=>{if(!drones.includes(d))sel.delete(d);});
-  if(!drones.length){
-    list.innerHTML='<div class="ms-empty">Нет вылетов за период</div>';
-  } else {
-    list.innerHTML=drones.map(d=>`<label class="ms-item"><input type="checkbox" value="${esc(d)}" ${sel.has(d)?'checked':''} onchange="onDroneCheck(this)"><span>${esc(d)}</span></label>`).join('');
-  }
-  updateDroneFieldLabel();
-}
-
-// Текст в поле "Тип БПЛА" по выбору
-function updateDroneFieldLabel(){
-  const lbl=document.getElementById('repDroneLabel');
-  if(!lbl)return;
-  const arr=[...window._repSelectedDrones].sort();
-  if(!arr.length)lbl.textContent='Все борты';
-  else if(arr.length<=2)lbl.textContent=arr.join(', ');
-  else lbl.textContent=`${arr[0]}, ${arr[1]} (+${arr.length-2})`;
-}
-
-function onDroneCheck(cb){
-  if(cb.checked)window._repSelectedDrones.add(cb.value);
-  else window._repSelectedDrones.delete(cb.value);
-  updateDroneFieldLabel();
-  refreshReportOutput();
-}
-
-function toggleDronePanel(e){
-  if(e)e.stopPropagation();
-  const panel=document.getElementById('repDronePanel');
-  const field=document.getElementById('repDroneField');
-  if(!panel)return;
-  if(panel.classList.contains('open')){closeDronePanel();return;}
-  panel.classList.remove('up');
-  panel.classList.add('open');field.classList.add('open');
-  // Выбираем направление: вверх, если снизу мало места, а сверху больше
-  const r=field.getBoundingClientRect();
-  const ph=panel.offsetHeight;
-  const spaceBelow=window.innerHeight-r.bottom;
-  const spaceAbove=r.top;
-  if(spaceBelow<ph+8&&spaceAbove>spaceBelow)panel.classList.add('up');
-}
-
-function closeDronePanel(){
-  const panel=document.getElementById('repDronePanel');
-  const field=document.getElementById('repDroneField');
-  if(panel)panel.classList.remove('open','up');
-  if(field)field.classList.remove('open');
-}
-
-function resetDroneFilter(e){
-  if(e)e.stopPropagation();
-  window._repSelectedDrones.clear();
-  document.querySelectorAll('#repDroneList input[type=checkbox]').forEach(cb=>{cb.checked=false;});
-  updateDroneFieldLabel();
-  refreshReportOutput();
-}
-
-// Закрытие панели бортов кликом вне
-document.addEventListener('click',e=>{
-  const wrap=document.getElementById('repDroneWrap');
-  const panel=document.getElementById('repDronePanel');
-  if(!panel||!panel.classList.contains('open'))return;
-  if(wrap&&wrap.contains(e.target))return;
-  closeDronePanel();
-});
-
-// Базовая фильтрация вылетов по периоду/пилоту/бортам — общая для отчётов
-function reportFilterFlights(from,to,filterPilot,filterDrones){
-  let f=[...state.flights];
-  if(from)f=f.filter(x=>x.date>=from);
-  if(to)f=f.filter(x=>x.date<=to);
-  if(filterPilot)f=f.filter(x=>x.pilot===filterPilot);
-  if(filterDrones&&filterDrones.length)f=f.filter(x=>filterDrones.includes(x.drone));
-  return f;
-}
-
-// Точка входа: обновляет фильтры и перестраивает отчёт
-function buildReport(){
-  fillReportFilters();
-  refreshReportOutput();
-}
-
-// Перестроение отчёта без переинициализации фильтров (для живого обновления при выборе борта)
-function refreshReportOutput(){
-  window._reportText=null;
-  const type=document.getElementById('repType').value;
-  const from=document.getElementById('repFrom').value;
-  const to=document.getElementById('repTo').value;
-  const filterPilot=document.getElementById('repPilot').value;
-  const filterDrones=[...window._repSelectedDrones];
-  const out=document.getElementById('reportOutput');
-  const f=reportFilterFlights(from,to,filterPilot,filterDrones);
-  // Подпись активных фильтров
-  const filterLabel=[
-    filterPilot?`пилот: ${filterPilot}`:'',
-    filterDrones.length?`борт: ${filterDrones.join(', ')}`:'',
-    from||to?`${from||'...'} — ${to||'...'}`:'',
-  ].filter(Boolean).join(' · ');
-
-  if(type==='stock') reportStock(out);
-  else if(type==='flights') reportFlights(out,f);
-  else if(type==='losses') reportLosses(out,f);
-  else if(type==='summary') reportSummary(out,f);
-  else if(type==='detailed') buildDetailedReport(f,filterLabel,out);
-  else if(type==='issued') reportIssued(out,from,to,filterPilot,filterDrones);
-}
-
-function reportStock(out){
-    const stockBG=state.stock.filter(d=>d.status==='bg');
-    const stockNBG=state.stock.filter(d=>d.status!=='bg');
-
-    // Перемещения за последние 24 часа
-    const now=Date.now();
-    const day=24*60*60*1000;
-    const todayStr=todayISO();
-    const recentTransfers=(state.transfers||[]).filter(op=>{
-      const dt=new Date(op.date+'T'+(op.time||'00:00'));
-      return (now-dt.getTime())<=day;
-    }).sort((a,b)=>{
-      const ta=a.date+(a.time||'00:00');
-      const tb=b.date+(b.time||'00:00');
-      return tb.localeCompare(ta);
-    });
-    // Префикс даты: если запись вчерашняя — пишем "Вчера HH:MM", если сегодняшняя — просто HH:MM
-    const datePrefix=op=>{
-      if(!op.date)return '';
-      if(op.date<todayStr)return 'Вчера '+(op.time||'');
-      return op.time||'';
-    };
-    // Формируем строки перемещений — потери не дедуплицируем, остальные по уникальному тексту
-    const moveFmt=op=>{
-      const prefix=datePrefix(op);
-      const pfx=prefix?'('+prefix+') ':'';
-      if(op.type==='loss') return pfx+'✈ Потеря: '+op.drone+' — пилот '+op.pilot;
-      if(op.type==='exchange') return pfx+'⇄ Обмен с '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт., получили '+op.get+' — '+op.getQty+' шт.'+(op.note?' ('+op.note+')':'');
-      if(op.type==='arrival') return pfx+'📦 Поступление: '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
-      return pfx+'→ '+op.from+' → '+op.to+': '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
-    };
-    // Дедупликация только для не-потерь (передачи могут задваиваться технически)
-    const seenNonLoss=new Set();
-    const seenLoss=new Set();
-    const moveItems=recentTransfers.filter(op=>{
-      if(op.type==='loss'){
-        // Дедуплицируем потери по ключу пилот+борт+дата+время
-        const lk=(op.pilot||'')+'|'+(op.drone||'')+'|'+(op.date||'')+'|'+(op.time||'');
-        if(seenLoss.has(lk))return false;
-        seenLoss.add(lk);
-        return true;
-      }
-      const k=moveFmt(op);
-      if(seenNonLoss.has(k))return false;
-      seenNonLoss.add(k);
-      return true;
-    });
-    const moveKeys=moveItems.map(moveFmt);
-    const moveIsRed=(_,i)=>moveItems[i]&&moveItems[i].type==='loss';
-
-    // Текст для копирования
-    window._reportText=[
-      'ФПВ ИСР',
-      ...state.squads.flatMap(sq=>['','✅ Пилот '+sq.pilot,...sq.drones.filter(d=>d.qty!==0).map(d=>d.name+' — '+d.qty+' шт.')]),
-      '','✅ Склад:',...stockBG.filter(d=>d.qty>0).map(d=>d.name+' — '+d.qty+' шт.'),
-      ...(stockNBG.length?['','Не БГ:',...stockNBG.map(d=>d.name+' — '+d.qty+' шт.')]:[]),
-      ...(moveKeys.length?['','Изменения (последние 24ч):',...moveKeys]:[]),
-    ].join('\n');
-
-    const movementsBlock=moveKeys.length
-      ?'<div style="margin:10px 0 4px;font-weight:700">Изменения (последние 24ч):</div>'
-        +moveKeys.map((k,i)=>'<div class="rb-line"'+(moveIsRed(k,i)?' style="color:var(--red)"':'')+'>'+k+'</div>').join('')
-      :'<div style="color:var(--muted);font-size:11px;margin-top:8px">Изменений за последние 24ч нет</div>';
-    out.innerHTML='<div class="report-block">'
-      +'<div class="rb-head">ФПВ ИСР</div>'
-      +state.squads.map(sq=>'<div style="margin:8px 0 4px;font-weight:700">✅ Пилот '+sq.pilot+'</div>'+sq.drones.filter(d=>d.qty!==0).map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')).join('')
-      +'<div style="margin:10px 0 4px;font-weight:700">✅ Склад:</div>'
-      +stockBG.filter(d=>d.qty>0).map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')
-      +(stockNBG.length?'<div style="margin:10px 0 4px;font-weight:700">Не БГ:</div>'+stockNBG.map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join(''):'')
-      +movementsBlock
-      +'</div>';
-
-}
-
-function reportFlights(out,f){
-    const byPilot={};
-    f.forEach(x=>{if(!byPilot[x.pilot])byPilot[x.pilot]=[];byPilot[x.pilot].push(x);});
-    const entries=Object.entries(byPilot);
-    if(!entries.length){
-      out.innerHTML='<div style="color:var(--muted);padding:16px">Нет данных за период</div>';
-    } else {
-      const wTarget=Math.max(...f.map(x=>(x.target||'—').length),1);
-      const wDrone=Math.max(...f.map(x=>(x.drone||'—').length),1);
-      const fmtLine=(x,i)=>{
-        const tgt=(x.target||'—').padEnd(wTarget);
-        const drn=(x.drone||'—').padEnd(wDrone);
-        const res=x.result==='yes'?'✅':'❌';
-        const ret=x.returned==='yes'?'борт вернул':'борт потерян';
-        const note=x.note?' · '+x.note:'';
-        return `${i+1}. ${x.date} ${x.time} · ${tgt} · ${drn} · ${res} · ${ret}${note}`;
-      };
-      const textLines=[];
-      entries.forEach(([p,fs])=>{
-        fs.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
-        textLines.push(`Пилот: ${p} — ${fs.length} вылетов`);
-        fs.forEach((x,i)=>textLines.push(fmtLine(x,i)));
-        textLines.push('');
-      });
-      window._reportText=textLines.join('\n').trimEnd();
-      out.innerHTML=entries.map(([p,fs])=>`
-        <div class="report-block">
-          <div class="rb-head">Пилот: ${esc(p)} — ${fs.length} вылетов</div>
-          ${fs.map((x,i)=>`<div class="rb-line" style="font-family:'Courier New',monospace;white-space:pre">${esc(fmtLine(x,i))}</div>`).join('')}
-        </div>`).join('');
-    }
-
-}
-
-function reportLosses(out,f){
-    f=f.filter(x=>x.returned==='no');
-    if(!f.length){
-      window._reportText='Потери БПЛА — 0 борт(ов)\nПотерь нет';
-      out.innerHTML=`<div class="report-block"><div class="rb-head">Потери БПЛА — 0 борт(ов)</div><div class="rb-line">Потерь нет</div></div>`;
-    } else {
-      const wPilot=Math.max(...f.map(x=>(x.pilot||'—').length),1);
-      const wDrone=Math.max(...f.map(x=>(x.drone||'—').length),1);
-      const fmtLine=x=>{
-        const plt=(x.pilot||'—').padEnd(wPilot);
-        const drn=(x.drone||'—').padEnd(wDrone);
-        return `${x.date} ${x.time} · Пилот: ${plt} · ${drn} · ${x.note||'причина не указана'}`;
-      };
-      window._reportText=[`Потери БПЛА — ${f.length} борт(ов)`,...f.map(fmtLine)].join('\n');
-      out.innerHTML=`<div class="report-block">
-        <div class="rb-head">Потери БПЛА — ${f.length} борт(ов)</div>
-        ${f.map(x=>`<div class="rb-line" style="font-family:'Courier New',monospace;white-space:pre">${esc(fmtLine(x))}</div>`).join('')}
-      </div>`;
-    }
-
-}
-
-function reportSummary(out,f){
-    const byPilot={};
-    f.forEach(x=>{
-      if(!byPilot[x.pilot])byPilot[x.pilot]={total:0,done:0,lost:0,returned:0};
-      byPilot[x.pilot].total++;
-      if(x.result==='yes')byPilot[x.pilot].done++;
-      if(x.returned==='no')byPilot[x.pilot].lost++;
-      else byPilot[x.pilot].returned++;
-    });
-    const rows=Object.entries(byPilot);
-    if(!rows.length){
-      out.innerHTML=`<div class="report-block"><div class="rb-head">Сводка по расчётам</div><div class="rb-line">Нет данных</div></div>`;
-    } else {
-      const mono="font-family:'Courier New',monospace;white-space:pre";
-      const hdrCols=['Пилот','Вылетов','Выполнено','Не выполнено','Борт вернул','Потерь'];
-      const dataRows=rows.map(([p,s])=>[p,s.total,s.done,s.total-s.done,s.returned,s.lost]);
-      const totRow=['Итого',
-        rows.reduce((s,[,v])=>s+v.total,0),
-        rows.reduce((s,[,v])=>s+v.done,0),
-        rows.reduce((s,[,v])=>s+(v.total-v.done),0),
-        rows.reduce((s,[,v])=>s+v.returned,0),
-        rows.reduce((s,[,v])=>s+v.lost,0)
-      ];
-      const allForW=[...dataRows,totRow];
-      const widths=hdrCols.map((h,i)=>Math.max(h.length,...allForW.map(r=>String(r[i]).length)));
-      const last=widths.length-1;
-      const pad=(val,i)=>i<last?String(val).padEnd(widths[i]):String(val);
-      const mkCell=(val,i,color,bold)=>{
-        const s=pad(val,i);
-        const style=(bold?'font-weight:700;':'')+(color?'color:'+color+';':'');
-        if(style)return `<span style="${style}">${esc(s)}</span>`;
-        return esc(s);
-      };
-      const hdr=hdrCols.map((h,i)=>pad(h,i)).join(' · ');
-      const sep='─'.repeat(hdr.length);
-      const mkDataRow=([p,s])=>{
-        const v=[p,s.total,s.done,s.total-s.done,s.returned,s.lost];
-        return [mkCell(v[0],0,'',false),mkCell(v[1],1,'',false),mkCell(v[2],2,'var(--green2)',false),
-          mkCell(v[3],3,v[3]>0?'var(--red)':'',false),mkCell(v[4],4,'',false),mkCell(v[5],5,v[5]>0?'var(--red)':'',false)].join(' · ');
-      };
-      const mkTotRow=r=>[mkCell(r[0],0,'',true),mkCell(r[1],1,'',true),mkCell(r[2],2,'var(--green2)',true),
-        mkCell(r[3],3,r[3]>0?'var(--red)':'',true),mkCell(r[4],4,'',true),mkCell(r[5],5,r[5]>0?'var(--red)':'',true)].join(' · ');
-      out.innerHTML=`<div class="report-block">
-        <div class="rb-head">Сводка по расчётам</div>
-        <div class="rb-line" style="${mono}">${esc(hdr)}</div>
-        <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
-        ${rows.map(r=>`<div class="rb-line" style="${mono}">${mkDataRow(r)}</div>`).join('')}
-        <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
-        <div class="rb-line" style="${mono}">${mkTotRow(totRow)}</div>
-      </div>`;
-    }
-}
-
-function reportIssued(out,from,to,filterPilot,filterDrones){
-    let transList=(state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад');
-    if(from) transList=transList.filter(t=>t.date>=from);
-    if(to)   transList=transList.filter(t=>t.date<=to);
-    if(filterPilot) transList=transList.filter(t=>t.to===filterPilot);
-    if(filterDrones&&filterDrones.length){
-      const low=filterDrones.map(d=>d.toLowerCase());
-      transList=transList.filter(t=>low.includes((t.drone||'').toLowerCase()));
-    }
-    const agg=new Map();
-    transList.forEach(t=>{
-      const key=t.to+'||'+t.drone;
-      if(!agg.has(key)) agg.set(key,{pilot:t.to,drone:t.drone,qty:0});
-      agg.get(key).qty+=(t.qty||1);
-    });
-    const rows=[...agg.values()];
-    const hasFilter=from||to||filterPilot||(filterDrones&&filterDrones.length);
-    if(!rows.length){
-      const msg=hasFilter?'Нет данных за выбранный период':'Нет данных';
-      window._reportText='Выдано бортов\n'+msg;
-      out.innerHTML=`<div class="report-block"><div class="rb-head">Выдано бортов</div><div class="rb-line">${msg}</div></div>`;
-    } else {
-      const wPilot=Math.max(...rows.map(r=>r.pilot.length),'Пилот'.length);
-      const wDrone=Math.max(...rows.map(r=>r.drone.length),'Борт'.length);
-      const wQty=Math.max(...rows.map(r=>String(r.qty).length),'Количество'.length);
-      const hdr=`${'Пилот'.padEnd(wPilot)} · ${'Борт'.padEnd(wDrone)} · Количество`;
-      const sep='─'.repeat(wPilot+wDrone+wQty+6);
-      const fmtRow=r=>`${r.pilot.padEnd(wPilot)} · ${r.drone.padEnd(wDrone)} · ${r.qty}`;
-      const totalQty=rows.reduce((s,r)=>s+r.qty,0);
-      const uniqueDrones=[...new Set(rows.map(r=>r.drone))].length;
-      window._reportText=['Выдано бортов',hdr,sep,...rows.map(fmtRow),'',`Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов`].join('\n');
-      const mono="font-family:'Courier New',monospace;white-space:pre";
-      out.innerHTML=`<div class="report-block">
-        <div class="rb-head">Выдано бортов</div>
-        <div class="rb-line" style="${mono}">${esc(hdr)}</div>
-        <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
-        ${rows.map(r=>`<div class="rb-line" style="${mono}">${esc(fmtRow(r))}</div>`).join('')}
-        <div class="rb-line" style="margin-top:8px;font-weight:700">Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов</div>
-      </div>`;
-    }
-}
-
-function isDelivery(ammo){
-  if(!ammo)return false;
-  const a=ammo.toLowerCase();
-  return a.includes('доставк') || a.includes('провизи') || a.includes('груз');
-}
-
-function buildDetailedReport(f,filterLabel,out){
-  f=f.filter(x=>x.pilot&&x.pilot!=='[ПЕРЕДАЧА]');
-  const pilotNames=[...new Set(f.map(x=>x.pilot))].filter(Boolean);
-
-  function stats(flights){
-    const total=flights.length;
-    const done=flights.filter(x=>x.result==='yes').length;
-    const ret=flights.filter(x=>x.returned==='yes').length;
-    const lost=flights.filter(x=>x.returned==='no').length;
-    const delivery=flights.filter(x=>isDelivery(x.ammo));
-    const mining=flights.filter(x=>!isDelivery(x.ammo));
-    const pct=(a,b)=>b?'('+Math.round(a/b*100)+'%)':'—';
-    return {total,done,notDone:total-done,ret,lost,
-      delivery:{total:delivery.length,done:delivery.filter(x=>x.result==='yes').length,notDone:delivery.filter(x=>x.result==='no').length},
-      mining:{total:mining.length,done:mining.filter(x=>x.result==='yes').length,notDone:mining.filter(x=>x.result==='no').length},
-      pct};
-  }
-
-  const pilotStats=pilotNames.map(p=>({name:p,s:stats(f.filter(x=>x.pilot===p))}));
-  const totalS=stats(f);
-  const period=filterLabel||'за всё время';
-
-  if(!pilotStats.length){
-    out.innerHTML=`<div class="report-block"><div class="rb-head">Подробный отчёт по расчётам · ${esc(period)}</div><div class="rb-line">Нет данных</div></div>`;
-    return;
-  }
-
-  const allStats=[...pilotStats.map(p=>p.s),totalS];
-  const colHdrs=['Показатель',...pilotStats.map((p,i)=>`Расчёт ${i+1} (${p.name})`),'Итого'];
-
-  // null = пустая строка-разделитель между секциями
-  const metricDefs=[
-    {label:'Всего вылетов',section:true,fn:s=>String(s.total)},
-    {label:'Задача выполнена',fn:s=>`${s.done} ${s.pct(s.done,s.total)}`},
-    {label:'Задача не выполнена',fn:s=>`${s.notDone} ${s.pct(s.notDone,s.total)}`,red:s=>s.notDone>0},
-    {label:'Борт вернулся',fn:s=>`${s.ret} ${s.pct(s.ret,s.total)}`},
-    {label:'Борт потерян',fn:s=>`${s.lost} ${s.pct(s.lost,s.total)}`,red:s=>s.lost>0},
-    null,
-    {label:'Минирование (всего)',section:true,fn:s=>String(s.mining.total)},
-    {label:'— удачных',fn:s=>`${s.mining.done} ${s.pct(s.mining.done,s.mining.total)}`},
-    {label:'— неудачных',fn:s=>`${s.mining.notDone} ${s.pct(s.mining.notDone,s.mining.total)}`,red:s=>s.mining.notDone>0},
-    null,
-    {label:'Доставка (всего)',section:true,fn:s=>String(s.delivery.total)},
-    {label:'— удачных',fn:s=>`${s.delivery.done} ${s.pct(s.delivery.done,s.delivery.total)}`},
-    {label:'— неудачных',fn:s=>`${s.delivery.notDone} ${s.pct(s.delivery.notDone,s.delivery.total)}`,red:s=>s.delivery.notDone>0},
-  ];
-
-  const textRows=metricDefs.filter(Boolean).map(m=>[m.label,...allStats.map(s=>m.fn(s))]);
-  const widths=colHdrs.map((h,i)=>Math.max(h.length,...textRows.map(r=>r[i].length)));
-  const last=widths.length-1;
-  const pad=(val,i)=>i<last?String(val).padEnd(widths[i]):String(val);
-  const mono="font-family:'Courier New',monospace;white-space:pre";
-  const hdr=colHdrs.map((h,i)=>pad(h,i)).join(' · ');
-  const sep='─'.repeat(hdr.length);
-
-  const mkCell=(val,i,color,bold)=>{
-    const s=pad(val,i);
-    const style=(bold?'font-weight:700;':'')+(color?'color:'+color+';':'');
-    if(style)return `<span style="${style}">${esc(s)}</span>`;
-    return esc(s);
-  };
-
-  const renderRow=m=>{
-    if(!m)return `<div class="rb-line" style="${mono}"> </div>`;
-    const parts=[
-      mkCell(m.label,0,m.section?'var(--green)':'',!!m.section),
-      ...allStats.map((s,si)=>{
-        const val=m.fn(s);
-        const isRed=m.red&&m.red(s);
-        return mkCell(val,si+1,isRed?'var(--red)':m.section?'var(--green)':'',!!m.section);
-      })
-    ];
-    return `<div class="rb-line" style="${mono}">${parts.join(' · ')}</div>`;
-  };
-
-  out.innerHTML=`<div class="report-block" style="overflow-x:auto">
-    <div class="rb-head">Подробный отчёт по расчётам · ${esc(period)}</div>
-    <div class="rb-line" style="${mono}">${esc(hdr)}</div>
-    <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
-    ${metricDefs.map(renderRow).join('\n    ')}
-  </div>`;
-}
-
-
-function copyReport(){
-  const txt=window._reportText||document.getElementById('reportOutput').innerText;
-  navigator.clipboard.writeText(txt).then(()=>{
-    const btns=document.querySelectorAll('[onclick="copyReport()"]');
-    btns.forEach(btn=>{const orig=btn.textContent;btn.textContent='✓ Скопировано';setTimeout(()=>{btn.textContent=orig;},1500);});
-  }).catch(()=>{
-    const el=document.createElement('textarea');
-    el.value=txt;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);
-  });
-}
-
-function printReport(){
-  const content=document.getElementById('reportOutput').innerHTML;
-  const win=window.open('','_blank','width=800,height=600');
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Отчёт</title>
-  <style>
-    body{font-family:'Courier New',monospace;font-size:13px;color:#000;background:#fff;padding:20px;margin:0}
-    .rb-head{font-size:15px;font-weight:700;margin-bottom:10px}
-    .rb-line{padding:2px 0;font-size:13px}
-    div[style*="font-weight:700"]{margin-top:10px;margin-bottom:4px;font-weight:700}
-    @media print{body{padding:10px}}
-  </style></head><body>${content}</body></html>`);
-  win.document.close();
-  win.focus();
-  win.onafterprint = function(){ win.close(); };
-  win.print();
-}
 
 function applyTheme(name){
   const map={terminal:'theme-terminal',wb:'theme-gray',gray:'theme-gray',white:'theme-gray',bw:'theme-paper',field:'theme-field'};
@@ -2680,6 +1977,7 @@ async function saveQuickFlight(){
     returned:returned?'yes':'no',
     note
   };
+  geoApplyToFlight(f);  // дистанции если есть гео и точка старта
   applyLossIfNeeded(f);
   state.flights.unshift(f);
   saveLocal();
@@ -2974,626 +2272,6 @@ async function aesDecrypt(b64,password){
   return new TextDecoder().decode(plain);
 }
 
-// ============================================================
-// SYNC MODULE v2 — переписан с нуля
-// Принципы:
-//   1. Очередь отправки (pendingQueue) — гарантия доставки
-//   2. flights/transfers — append-only + tombstones для удалений
-//   3. stock/squads — last-write-wins по версии
-//   4. pollCloud — только дельта (read_since)
-//   5. Полная загрузка — только при первом входе или вручную
-// ============================================================
-
-// --- Toast уведомления ---
-function showSyncToast(msg, duration=2500){
-  let el=document.getElementById('syncToast');
-  if(!el){
-    el=document.createElement('div');
-    el.id='syncToast';
-    el.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9999;background:var(--card);border:1px solid var(--accent2);color:var(--accent);padding:6px 14px;font-size:12px;font-family:inherit;letter-spacing:1px;pointer-events:none;opacity:0;transition:opacity .2s';
-    document.body.appendChild(el);
-  }
-  el.textContent=msg;
-  el.style.opacity='1';
-  clearTimeout(el._t);
-  el._t=setTimeout(()=>el.style.opacity='0',duration);
-}
-
-// --- Вспомогательные функции ---
-
-function syncGetCfg(){
-  return {
-    url:   cfg.url  || localStorage.getItem('cfg_url')  || '',
-    key:   cfg.key  || localStorage.getItem('cfg_key')  || '',
-    token: authToken || localStorage.getItem('auth_token') || ''
-  };
-}
-
-async function syncEncrypt(obj, key){
-  const json = JSON.stringify(obj);
-  if(!key) return { id: obj.id, data: json };
-  return { id: obj.id, data: await aesEncrypt(json, key) };
-}
-
-async function syncDecrypt(row, key){
-  try{
-    const json = key ? await aesDecrypt(row.data, key) : row.data;
-    return JSON.parse(json);
-  }catch(e){ console.warn('[SYNC] decrypt error:', e.message, row.id); return null; }
-}
-
-async function syncDecryptRows(rows, key){
-  if(!rows||!rows.length) return [];
-  const results = await Promise.all(rows.map(r => syncDecrypt(r, key)));
-  return results.filter(Boolean);
-}
-
-async function syncPost(url, body){
-  // Всегда cors+redirect:follow; при ошибке — no-cors
-  try{
-    const r = await fetch(url, {
-      method:'POST', headers:{'Content-Type':'text/plain'},
-      body, mode:'cors', redirect:'follow'
-    });
-    const d = await r.json();
-    if(d.error) throw new Error(d.error);
-    return { ok:true, data:d };
-  }catch(e){
-    try{
-      await fetch(url, {
-        method:'POST', headers:{'Content-Type':'text/plain'},
-        body, mode:'no-cors'
-      });
-      return { ok:true, data:null, unverified:true };
-    }catch(e2){
-      return { ok:false, error:e2.message };
-    }
-  }
-}
-
-function syncIndicator(state){
-  const ind = document.getElementById('syncIndicator');
-  if(!ind) return;
-  if(state==='syncing'){ ind.className='sync-indicator syncing'; ind.textContent='↑ синхр...'; }
-  else if(state==='ok'){ ind.className='sync-indicator saved';
-    ind.textContent='● '+new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}); }
-  else if(state==='loading'){ ind.className='sync-indicator syncing'; ind.textContent='↓ загрузка...'; }
-  else { ind.className='sync-indicator'; ind.textContent='⚠ нет связи'; }
-}
-
-function syncRenderAll(){
-  renderDashboard(); renderInventory(); renderFlights();
-  fillDataLists(); rebuildRoleSelector();
-}
-
-// --- Очередь отправки ---
-// Гарантирует что изменения не потеряются даже если сеть упала
-
-function _qid(x){ return (x.data&&x.data.id)||x.id; }
-const pendingQueue = {
-  _key: 'sync_pending_queue',
-  load(){ try{ return JSON.parse(localStorage.getItem(this._key)||'[]'); }catch(e){ return []; } },
-  save(q){ try{ localStorage.setItem(this._key, JSON.stringify(q)); }catch(e){} updateQueueIndicator(); },
-  add(item){
-    const id=_qid(item);
-    const q=this.load();
-    if(id&&q.some(x=>_qid(x)===id)) return; // уже в очереди — не дублируем
-    q.push({...item, id, addedAt:Date.now(), lastTryTs:0});
-    this.save(q);
-  },
-  remove(id){ const q=this.load().filter(x=>_qid(x)!==id); this.save(q); },
-  markTried(id){ const q=this.load(); const it=q.find(x=>_qid(x)===id); if(it){ it.lastTryTs=Date.now(); this.save(q); } },
-  // Подтверждение доставки: элементы, чьи id вернулись из облака, удаляем из кэша
-  confirmDelivered(ids){
-    if(!ids||!ids.size) return;
-    const q=this.load();
-    const kept=q.filter(x=>!ids.has(_qid(x)));
-    if(kept.length!==q.length){ console.log('[SYNC] подтверждено доставкой:', q.length-kept.length); this.save(kept); }
-  },
-  clear(){ this.save([]); },
-  all(){ return this.load(); },
-  count(){ return this.load().length; }
-};
-
-// Русское склонение для счётчика очереди
-function ruPlural(n, one, few, many){
-  const m10=n%10, m100=n%100;
-  if(m10===1&&m100!==11) return one;
-  if(m10>=2&&m10<=4&&(m100<10||m100>=20)) return few;
-  return many;
-}
-
-// Индикатор "в очереди N изменений" — читаем localStorage напрямую (безопасно вызывать до инициализации очереди)
-function updateQueueIndicator(){
-  const el=document.getElementById('queueIndicator');
-  if(!el) return;
-  let n=0;
-  try{ n=JSON.parse(localStorage.getItem('sync_pending_queue')||'[]').length; }catch(e){}
-  if(n>0){ el.style.display=''; el.textContent='⏳ в очереди '+n+' '+ruPlural(n,'изменение','изменения','изменений'); }
-  else { el.style.display='none'; }
-}
-
-// Отправка одного элемента очереди (append-only). Не удаляет из очереди —
-// удаление произойдёт только после подтверждения поллингом (confirmDelivered).
-async function trySendQueueItem(item, url, key, token){
-  try{
-    const enc = await syncEncrypt(item.data, key);
-    const body = JSON.stringify({
-      action:'append_one', token,
-      sheet: item.type==='flight'?'flights':'transfers',
-      row: enc
-    });
-    const res = await syncPost(url, body);
-    if(res.ok) pendingQueue.markTried(_qid(item));
-  }catch(e){ console.warn('[SYNC] send error:', e.message); }
-}
-
-// Диагностика очереди при старте + очистка зависших записей в локальном режиме.
-// Вызывается после initAuth, когда cfg.url/token уже определены.
-function syncQueueStartupCheck(){
-  const q = pendingQueue.all();
-  if(q.length){
-    console.log('[QUEUE] При старте в очереди '+q.length+' зап.:');
-    q.forEach(x=>console.log('  •', x.type, '| id:', _qid(x),
-      '| запись:', ((x.data&&x.data.date)||'?')+' '+((x.data&&x.data.time)||''),
-      '| добавлено:', new Date(x.addedAt||0).toLocaleString('ru'),
-      '| последняя попытка:', x.lastTryTs?new Date(x.lastTryTs).toLocaleString('ru'):'— ни разу'));
-  } else {
-    console.log('[QUEUE] Очередь пуста при старте');
-  }
-  // Облако не настроено (file:// / ?local=1 / нет URL) — отправлять некуда,
-  // записи зависнут навсегда. Чистим, чтобы индикатор не врал.
-  const {url,token} = syncGetCfg();
-  if(!url||!token){
-    if(q.length){
-      console.warn('[QUEUE] Облако не настроено (url/token пусты) — очередь очищена ('+q.length+' зап. отправить некуда)');
-      pendingQueue.clear();
-    }
-  }
-  updateQueueIndicator();
-}
-
-// --- Tombstones (удалённые вылеты) ---
-const tombstones = {
-  _key: 'sync_tombstones',
-  load(){ try{ return new Set(JSON.parse(localStorage.getItem(this._key)||'[]')); }catch(e){ return new Set(); } },
-  add(id){ const s=this.load(); s.add(id); try{ localStorage.setItem(this._key, JSON.stringify([...s])); }catch(e){} },
-  has(id){ return this.load().has(id); },
-  all(){ return [...this.load()]; }
-};
-
-// --- Версия склада ---
-let _stockVersion = parseInt(localStorage.getItem('sync_stock_version')||'0');
-function syncBumpStockVersion(){
-  _stockVersion = Date.now();
-  localStorage.setItem('sync_stock_version', String(_stockVersion));
-}
-
-// --- Время последнего поллинга ---
-let _lastPollTs = Date.now();
-let _lastStockTs = Date.now(); // Инициализируем текущим временем — не грузим старые изменения склада
-
-// ============================================================
-// ЗАПИСЬ ИЗМЕНЕНИЙ — единая точка входа для всех операций
-// ============================================================
-
-// Добавить вылет — кэшируем в очередь, сразу пробуем отправить (если есть сеть)
-async function syncAddFlight(flight){
-  if(!flight.id) flight.id = genId('f');
-  state.flights.unshift(flight);
-  saveLocal();
-  const {url,key,token} = syncGetCfg();
-  if(!url||!token) return;                          // локальный режим — облака нет, очередь не нужна
-  pendingQueue.add({type:'flight', data:flight});   // кэш до подтверждения доставки
-  if(!navigator.onLine) return;                     // нет сети — лежит в очереди до восстановления
-  await trySendQueueItem({type:'flight', data:flight}, url, key, token);
-}
-
-// Удалить вылет — tombstone + полная запись
-async function syncDeleteFlight(idx){
-  const f = state.flights[idx];
-  if(!f) return;
-
-  const pLow=(f.pilot||'').toLowerCase();
-  const dLow=(f.drone||'').toLowerCase();
-
-  // Компенсируем квоту дрона только если вылет числится как потеря
-  if(f.returned==='no' && f.drone && f.pilot){
-    const sq = state.squads.find(s=>s.pilot===f.pilot);
-    if(sq){
-      const d = sq.drones.find(d=>d.name.toLowerCase()===dLow);
-      if(d) d.qty++; else sq.drones.push({name:f.drone, qty:1});
-    }
-    syncBumpStockVersion();
-    setTimeout(()=>syncPushStockSquads(), 300);
-  }
-
-  // Всегда чистим связанные записи о потере — они могут остаться
-  // если вылет был отредактирован (returned: no→yes) перед удалением.
-  // Три прохода от точного к нестрогому:
-
-  const before=(state.transfers||[]).length;
-
-  // Проход 1: по flightId (для записей, созданных после обновления)
-  if(f.id){
-    state.transfers=(state.transfers||[]).filter(t=>!(t.type==='loss'&&t.flightId===f.id));
-  }
-
-  // Проход 2: пилот + борт + дата + время (регистронезависимо)
-  if((state.transfers||[]).length===before){
-    state.transfers=(state.transfers||[]).filter(t=>!(
-      t.type==='loss' &&
-      (t.pilot||'').toLowerCase()===pLow &&
-      (t.drone||'').toLowerCase()===dLow &&
-      t.date===f.date &&
-      t.time===f.time
-    ));
-  }
-
-  // Проход 3: пилот + борт + дата (без времени — для вылетов,
-  // чьё время менялось после первичной записи потери)
-  if((state.transfers||[]).length===before){
-    state.transfers=(state.transfers||[]).filter(t=>!(
-      t.type==='loss' &&
-      (t.pilot||'').toLowerCase()===pLow &&
-      (t.drone||'').toLowerCase()===dLow &&
-      t.date===f.date
-    ));
-  }
-
-  tombstones.add(f.id);
-  state.flights.splice(idx,1);
-  saveLocal();
-  logAction('flight','delete','Удалён вылет '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||''));
-  syncPushAll(true);
-  renderAdminFlights(); renderDashboard(); renderInventory();
-}
-
-// Обновить поле вылета
-function syncEditFlight(idx, field, val){
-  if(state.flights[idx]) state.flights[idx][field] = val;
-  saveLocal();
-  // Отправляем полный список вылетов через debounce
-  clearTimeout(syncEditFlight._timer);
-  syncEditFlight._timer = setTimeout(()=>syncPushAll(true), 2000);
-}
-
-// Добавить transfer/arrival/loss — кэшируем в очередь, сразу пробуем отправить
-async function syncAddTransfer(op){
-  if(!op.id) op.id = genId('t');
-  const {url,key,token} = syncGetCfg();
-  if(!url||!token) return;                       // локальный режим — облака нет, очередь не нужна
-  pendingQueue.add({type:'transfer', data:op});  // кэш до подтверждения доставки
-  if(!navigator.onLine) return;
-  await trySendQueueItem({type:'transfer', data:op}, url, key, token);
-}
-
-// Отправить склад и расчёты (last-write-wins)
-async function syncPushStockSquads(){
-  const {url,key,token} = syncGetCfg();
-  if(!url||!token) return;
-  syncBumpStockVersion();
-  const ts = Date.now();
-  const encRow = async (obj,i) => {
-    const o = {...obj, id:obj.id||(ts+i), _sv:_stockVersion};
-    return syncEncrypt(o, key);
-  };
-  const stock  = await Promise.all(state.stock.map((d,i)=>encRow(d,i)));
-  const squads = await Promise.all(state.squads.map((sq,i)=>encRow(sq,i)));
-  const body = JSON.stringify({action:'write', token, data:{stock, squads}});
-  const res = await syncPost(url, body);
-  if(res.ok){
-    _lastStockTs = _stockVersion; // Помним что эту версию мы сами отправили — не перезагружаем
-    console.log('[SYNC] stock+squads OK, sv:', _stockVersion);
-  }
-  else console.warn('[SYNC] stock push failed:', res.error);
-}
-
-// Отправить полный снимок (flights + transfers)
-async function syncPushAll(silent=false){
-  const {url,key,token} = syncGetCfg();
-  if(!url) return;
-  if(!silent) syncIndicator('syncing');
-  const ts = Date.now();
-  const encRow = async (obj,i) => syncEncrypt({...obj, id:obj.id||(ts+i)}, key);
-  const [flights,stock,squads,transfers] = await Promise.all([
-    Promise.all(state.flights.map((f,i)=>encRow(f,i))),
-    Promise.all(state.stock.map((d,i)=>encRow(d,i))),
-    Promise.all(state.squads.map((sq,i)=>encRow(sq,i))),
-    Promise.all((state.transfers||[]).map((t,i)=>encRow(t,i)))
-  ]);
-  const body = JSON.stringify({action:'write', token, data:{flights,stock,squads,transfers}});
-  console.log('[SYNC] pushAll flights:', state.flights.length, 'size:', body.length);
-  const res = await syncPost(url, body);
-  if(res.ok){
-    _lastStockTs = _stockVersion; // Не перезагружаем склад который только что сами отправили
-    console.log('[SYNC] pushAll OK');
-    await syncFlushQueue();
-    if(!silent){ syncIndicator('ok'); showSyncToast('✓ Данные выгружены'); }
-    const st=document.getElementById('cfg-sync-status');
-    if(st){ st.textContent='✓ Выгружено — '+new Date().toLocaleTimeString('ru'); st.style.color='var(--green2)'; }
-    renderSettingsStatus();
-  } else {
-    console.warn('[SYNC] pushAll failed:', res.error);
-    if(!silent){ syncIndicator('error'); }
-  }
-  return res.ok;
-}
-
-// --- Очередь pending: повторная отправка накопленного ---
-// Не удаляет элементы — удаление только после подтверждения поллингом.
-// Повторно шлёт лишь те, что давно не пробовали (или ещё ни разу), чтобы
-// не плодить дубли между отправкой и подтверждением.
-const QUEUE_RETRY_MS = 60000;
-async function syncFlushQueue(){
-  const q = pendingQueue.all();
-  if(!q.length) return;
-  const {url,key,token} = syncGetCfg();
-  if(!url||!token||!navigator.onLine) return;
-  const now = Date.now();
-  for(const item of q){
-    if(item.lastTryTs && now-item.lastTryTs < QUEUE_RETRY_MS) continue; // ждём подтверждения
-    await trySendQueueItem(item, url, key, token);
-  }
-}
-
-// ============================================================
-// ЧТЕНИЕ ИЗ ОБЛАКА
-// ============================================================
-
-// Полная загрузка — только при входе или вручную
-async function syncPullAll(confirm_=false){
-  const {url,key,token} = syncGetCfg();
-  if(!url) return null;
-  if(confirm_ && !confirm('Загрузить данные из облака? Локальные изменения будут заменены.')) return null;
-  syncIndicator('loading');
-  try{
-    const r = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
-    const d = await r.json();
-    if(d.error) throw new Error(d.error);
-    const loaded = {
-      flights:   await syncDecryptRows(d.flights||[], key),
-      stock:     await syncDecryptRows(d.stock||[], key),
-      squads:    (await syncDecryptRows(d.squads||[], key)).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]})),
-      transfers: await syncDecryptRows(d.transfers||[], key),
-      users: d.users||[]
-    };
-    // Фильтруем tombstones
-    const tb = tombstones.load();
-    loaded.flights = loaded.flights.filter(f=>!tb.has(f.id));
-    // Актлог
-    if(d.actlog&&d.actlog.length){
-      const entries = await syncDecryptRows(d.actlog, key);
-      entries.forEach(e=>{ if(!actLog.some(x=>x.id===e.id)) actLog.unshift(e); });
-      actLog.sort((a,b)=>b.ts-a.ts);
-      if(actLog.length>500) actLog=actLog.slice(0,500);
-      try{ localStorage.setItem('act_log',JSON.stringify(actLog)); }catch(e){}
-    }
-    if(d.stock&&d.stock.length){
-      const remoteStockVersion = Math.max(...(await syncDecryptRows(d.stock,key)).map(s=>s._sv||0));
-      _lastStockTs = remoteStockVersion;
-    }
-    return loaded;
-  }catch(e){
-    console.error('[SYNC] pullAll error:', e.message);
-    syncIndicator('error');
-    return null;
-  }
-}
-
-// Тихая загрузка при входе — не перезаписывает если есть pending
-async function syncPullOnLogin(){
-  const loaded = await syncPullAll(false);
-  if(!loaded){ syncIndicator('error'); return; }
-  // Подтверждаем доставку по полному снимку облака
-  pendingQueue.confirmDelivered(new Set([
-    ...loaded.flights.map(f=>f.id),
-    ...loaded.transfers.map(t=>t.id)
-  ].filter(Boolean)));
-  const hasPending = pendingQueue.all().length > 0;
-  if(!hasPending){
-    state.flights   = loaded.flights;
-    state.stock     = loaded.stock;
-    state.squads    = loaded.squads;
-    state.transfers = loaded.transfers;
-  } else {
-    // Есть несинхронизированное — сливаем только новое из облака
-    console.log('[SYNC] pending queue not empty, merging only new records');
-    const localFIds = new Set(state.flights.map(f=>f.id).filter(Boolean));
-    const newF = loaded.flights.filter(f=>f.id&&!localFIds.has(f.id));
-    state.flights = [...state.flights,...newF].sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
-    const localTIds = new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
-    const newT = loaded.transfers.filter(t=>t.id&&!localTIds.has(t.id));
-    state.transfers = [...(state.transfers||[]),...newT].sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
-    // Склад берём из облака только если наша версия старее
-    const remoteStockVersion = Math.max(0,...loaded.stock.map(s=>s._sv||0));
-    if(remoteStockVersion > _stockVersion){
-      state.stock   = loaded.stock;
-      state.squads  = loaded.squads;
-      _stockVersion = remoteStockVersion;
-    }
-    // Отправляем накопленное
-    setTimeout(()=>syncFlushQueue(), 1000);
-  }
-  saveLocal();
-  syncIndicator('ok');
-  syncRenderAll();
-  renderSettingsStatus();
-}
-
-// Принудительная загрузка вручную (кнопка)
-async function syncFromCloud(){
-  const {url} = syncGetCfg();
-  if(!url){ alert('Укажите URL в настройках'); return; }
-  const st=document.getElementById('cfg-sync-status');
-  const ind=document.getElementById('syncIndicator');
-  if(st){ st.textContent='Загружаю из облака...'; st.style.color='var(--amber)'; }
-  if(ind){ ind.className='sync-indicator syncing'; ind.textContent='↓ загрузка...'; }
-  const loaded = await syncPullAll(true);
-  if(!loaded){
-    if(st){ st.textContent='Ошибка загрузки'; st.style.color='var(--red)'; }
-    return;
-  }
-  state.flights   = loaded.flights;
-  state.stock     = loaded.stock;
-  state.squads    = loaded.squads;
-  state.transfers = loaded.transfers;
-  pendingQueue.clear();
-  saveLocal();
-  syncIndicator('ok');
-  syncRenderAll();
-  if(st){ st.textContent='✓ Загружено — '+new Date().toLocaleTimeString('ru'); st.style.color='var(--green2)'; }
-  renderSettingsStatus();
-  showSyncToast('✓ Данные загружены из облака');
-}
-
-// Принудительная выгрузка вручную (кнопка)
-async function syncToCloud(silent=false){
-  const ok = await syncPushAll(silent);
-  if(!ok && !silent) alert('Ошибка синхронизации. Проверьте соединение.');
-}
-
-// ============================================================
-// ПОЛЛИНГ — только дельта каждые 30 сек
-// ============================================================
-
-async function pollCloud(){
-  const {url,key,token} = syncGetCfg();
-  if(!url||!token) return;
-  const ind = document.getElementById('syncIndicator');
-  try{
-    const since = _lastPollTs;
-    const r = await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now(), {redirect:'follow'});
-    const d = await r.json();
-    if(d.error){ console.warn('[POLL]', d.error); return; }
-    _lastPollTs = Date.now();
-
-    let changed = false;
-    const tb = tombstones.load();
-    const deliveredIds = new Set(); // id, вернувшиеся из облака — подтверждение доставки
-
-    // Новые вылеты от других пользователей
-    for(const row of (d.flights||[])){
-      const obj = await syncDecrypt(row, key);
-      if(!obj) continue;
-      deliveredIds.add(obj.id);
-      if(tb.has(obj.id)) continue; // Удалён локально
-      if(!state.flights.some(f=>f.id===obj.id)){
-        state.flights.unshift(obj);
-        changed = true;
-        // Списываем дрон если потеря — но только если списание ещё не зафиксировано
-        // на устройстве-источнике (флаг приходит вместе с вылетом).
-        if(obj.returned==='no' && obj.drone && !obj._lossWritten){
-          writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id);
-          obj._lossWritten=true;
-          setTimeout(()=>syncPushStockSquads(), 500);
-        }
-      }
-    }
-
-    // Новые передачи
-    for(const row of (d.transfers||[])){
-      const obj = await syncDecrypt(row, key);
-      if(!obj) continue;
-      deliveredIds.add(obj.id);
-      if(!(state.transfers||[]).some(t=>t.id===obj.id)){
-        if(!state.transfers) state.transfers=[];
-        state.transfers.unshift(obj);
-        changed = true;
-      }
-    }
-
-    // Актлог
-    for(const row of (d.actlog||[])){
-      const obj = await syncDecrypt(row, key);
-      if(!obj) continue;
-      if(!actLog.some(e=>e.id===obj.id)){
-        actLog.unshift(obj); changed=true;
-      }
-    }
-    if(d.actlog&&d.actlog.length){
-      actLog.sort((a,b)=>b.ts-a.ts);
-      if(actLog.length>500) actLog=actLog.slice(0,500);
-      try{ localStorage.setItem('act_log',JSON.stringify(actLog)); }catch(e){}
-    }
-
-    // Склад обновился у другого пользователя
-    if(d.stock_updated_ts && d.stock_updated_ts > _lastStockTs){
-      console.log('[POLL] Склад обновился, загружаем');
-      _lastStockTs = d.stock_updated_ts;
-      try{
-        const r2 = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
-        const d2 = await r2.json();
-        if(!d2.error){
-          const remoteStock  = await syncDecryptRows(d2.stock||[], key);
-          const remoteSquads = (await syncDecryptRows(d2.squads||[], key)).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
-          // Берём только если версия новее нашей
-          const remoteVersion = Math.max(0,...remoteStock.map(s=>s._sv||0));
-          if(remoteVersion > _stockVersion){
-            state.stock   = remoteStock;
-            state.squads  = remoteSquads;
-            _stockVersion = remoteVersion;
-            changed = true;
-            console.log('[POLL] Склад обновлён, версия:', _stockVersion);
-          }
-        }
-      }catch(e){ console.warn('[POLL] stock sync error:', e.message); }
-    }
-
-    // Подтверждаем доставку отправленного: всё, что вернулось из облака, убираем из очереди
-    pendingQueue.confirmDelivered(deliveredIds);
-    // Досылаем то, что ещё не подтверждено (с защитой от частых повторов)
-    syncFlushQueue();
-
-    if(changed){
-      saveLocal();
-      renderDashboard(); renderFlights(); renderInventory(); rebuildRoleSelector();
-      const newF = (d.flights||[]).length;
-      if(newF>0) showSyncToast('↓ '+newF+' новых вылетов');
-    }
-    if(ind){ ind.className='sync-indicator saved'; ind.textContent='● '+new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}); }
-  }catch(e){
-    console.warn('[POLL] error:', e.message);
-    if(ind){ ind.className='sync-indicator'; ind.textContent='⚠ нет связи'; }
-  }
-}
-
-// ============================================================
-// ТАЙМЕРЫ
-// ============================================================
-
-function startPolling(){
-  if(window._pollInterval) clearInterval(window._pollInterval);
-  window._pollInterval = setInterval(()=>{
-    const {url,token} = syncGetCfg();
-    if(url&&token&&navigator.onLine) pollCloud();
-  }, 30000);
-  if(window._fullSyncInterval) clearInterval(window._fullSyncInterval);
-  window._fullSyncInterval = setInterval(()=>{
-    const {url,token} = syncGetCfg();
-    if(url&&token&&navigator.onLine){
-      console.log('[SYNC] Плановая полная синхронизация');
-      syncPullOnLogin();
-    }
-  }, 5*60*1000);
-}
-
-// Отправка в облако по имени листа. actlog шлём напрямую, остальное — как transfer.
-function appendToCloud(sheet, obj){
-  if(sheet==='actlog'){
-    // Журнал действий — отправляем отдельно напрямую
-    const {url,key,token}=syncGetCfg();
-    if(!url||!token)return;
-    (async()=>{
-      const enc=await syncEncrypt({...obj,id:obj.id||genId('a')},key);
-      const body=JSON.stringify({action:'append_one',token,sheet:'actlog',row:enc});
-      await syncPost(url,body);
-    })();
-    return;
-  }
-  // transfers, flights и т.д.
-  return syncAddTransfer(obj);
-}
 rebuildRoleSelector();
 renderDashboard();
 renderInventory();
