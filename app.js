@@ -301,7 +301,82 @@ function renderAdminFlights(){
 }
 
 function adminEditFlight(idx,field,val){
+  // Смена борта в вылете-потере → пересчитать списание у пилота
+  if(field==='drone'){
+    const f=state.flights[idx];
+    // Только если борт реально был списан как потеря (_lossWritten):
+    // переключение «вернул→потерян» в админке списания не делает — там обычная правка.
+    if(f && f.returned==='no' && f._lossWritten){
+      const oldDrone=(f.drone||'').trim();
+      const newDrone=(val||'').trim();
+      if(oldDrone && newDrone && oldDrone.toLowerCase()!==newDrone.toLowerCase()){
+        adminEditLossDrone(idx,oldDrone,newDrone);
+        return;
+      }
+    }
+  }
   syncEditFlight(idx,field,val);
+}
+
+// Пересчёт списания при смене борта в вылете-потере (returned='no').
+// Спрашивает подтверждение: применять ли изменения к складу/расчёту.
+// «Нет» — меняем только текст вылета, склад не трогаем.
+async function adminEditLossDrone(idx, oldDrone, newDrone){
+  const f=state.flights[idx];
+  if(!f) return;
+  const pilot=f.pilot;
+  const apply=await confirmLossDroneChange(oldDrone,newDrone,pilot);
+
+  // Текст вылета меняем в любом случае
+  f.drone=newDrone;
+
+  if(apply){
+    let sq=state.squads.find(s=>s.pilot===pilot);
+    if(!sq){ sq={pilot,drones:[]}; state.squads.push(sq); }
+    // 1) вернуть старый борт пилоту
+    const od=sq.drones.find(d=>d.name.toLowerCase()===oldDrone.toLowerCase());
+    if(od) od.qty++; else sq.drones.push({name:oldDrone,qty:1});
+    // 2) списать новый борт у пилота (если есть — иначе не плодим фантом qty:-1)
+    const nd=sq.drones.find(d=>d.name.toLowerCase()===newDrone.toLowerCase());
+    if(nd){ nd.qty--; if(nd.qty<=0) sq.drones=sq.drones.filter(d=>d!==nd); }
+    // 3) обновить запись о потере в transfers
+    updateLossTransferDrone(f, oldDrone, newDrone);
+    syncBumpStockVersion();
+  }
+
+  saveLocal();
+  clearTimeout(syncEditFlight._timer);
+  syncEditFlight._timer=setTimeout(()=>syncPushAll(true),2000);
+  renderAdminFlights(); renderDashboard(); renderInventory();
+}
+
+// Находит запись о потере для вылета (по flightId → пилот+борт+дата+время → +дата)
+// и меняет в ней борт. Запись уйдёт в облако полным снимком (syncPushAll).
+function updateLossTransferDrone(f, oldDrone, newDrone){
+  const ts=state.transfers||[];
+  const pLow=(f.pilot||'').toLowerCase();
+  const dLow=oldDrone.toLowerCase();
+  let rec=null;
+  if(f.id) rec=ts.find(t=>t.type==='loss'&&t.flightId===f.id);
+  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&t.time===f.time);
+  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date);
+  if(rec) rec.drone=newDrone;
+}
+
+// Диалог подтверждения смены борта в потере. Возвращает Promise<bool>.
+function confirmLossDroneChange(oldDrone,newDrone,pilot){
+  return new Promise(resolve=>{
+    const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
+      <div style="font-size:13px;font-weight:700;color:var(--amber,#f59e0b);margin-bottom:10px">Борт изменён</div>
+      <div style="font-size:12px;color:var(--text);margin-bottom:16px;line-height:1.5"><b>${esc(oldDrone)}</b> возвращён пилоту${pilot?' '+esc(pilot):''}, <b>${esc(newDrone)}</b> списан как потеря.<br>Применить изменения к складу?</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-success btn-sm" id="lds-yes">Да</button>
+        <button class="btn btn-sm" id="lds-no">Нет</button>
+      </div>
+    </div>`);
+    ov.querySelector('#lds-yes').onclick=()=>{ov.remove();resolve(true);};
+    ov.querySelector('#lds-no').onclick=()=>{ov.remove();resolve(false);};
+  });
 }
 
 function adminDeleteFlight(idx){
