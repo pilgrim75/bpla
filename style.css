@@ -538,6 +538,16 @@ body.theme-field{
 .crew-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .crew-tag{font-size:11px;padding:2px 8px;border-radius:999px;border:0.5px solid var(--color-border-tertiary);color:var(--color-text-secondary);background:var(--color-background-secondary)}
 
+/* Медали пилотов (Обзор → Расчёты) */
+.medal-row{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
+.medal-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;font-size:12px;line-height:1;border-radius:999px;border:0.5px solid transparent;cursor:pointer;transition:transform .1s ease}
+.medal-badge:hover{transform:scale(1.18)}
+.medal-modal{background:var(--color-background-primary,var(--card));border:1px solid var(--color-border-tertiary,var(--border));border-radius:14px;padding:24px 28px;max-width:340px;width:90%;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.55)}
+.medal-modal-icon{font-size:64px;line-height:1;margin-bottom:10px}
+.medal-modal-name{font-size:18px;font-weight:600;margin-bottom:2px}
+.medal-modal-pilot{font-size:12px;color:var(--color-text-secondary);margin-bottom:14px}
+.medal-modal-desc{font-size:13px;color:var(--color-text-primary);line-height:1.5;margin-bottom:18px}
+
 /* Flight items (Dashboard) */
 .flight-item{padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;gap:10px}
 .flight-item:last-child{border-bottom:none}

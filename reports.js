@@ -391,6 +391,82 @@ function isDelivery(ammo){
   return a.includes('доставк') || a.includes('провизи') || a.includes('груз');
 }
 
+// ===== НОМИНАЦИИ (общие правила присуждения — для медалей и отчёта) =====
+// Победитель номинации — ЕДИНСТВЕННЫЙ пилот с явным отрывом.
+//   cands: [{pilot, value, ...}] (value=null → не участвует);
+//   higherBetter: больше значение = лучше;
+//   dominates(best,second): достаточен ли отрыв.
+// Правила: один кандидат → присуждаем всегда; ничья (равные) → не присуждаем;
+// иначе — только если отрыв проходит dominates().
+function _nomWinner(cands, higherBetter, dominates){
+  const c=cands.filter(x=>x.value!=null);
+  if(!c.length) return null;
+  c.sort((a,b)=> higherBetter ? b.value-a.value : a.value-b.value);
+  const best=c[0];
+  if(higherBetter && !(best.value>0)) return null;   // нулевой максимум не награждаем
+  if(c.length===1) return best;                       // один активный — всегда
+  const second=c[1];
+  if(second.value===best.value) return null;          // ничья
+  return dominates(best.value, second.value) ? best : null;
+}
+// Числовой «больше-лучше»: второй результат < лучший × 0.9 (отрыв >10%)
+function nomRatioTop(cands){ return _nomWinner(cands, true, (b,s)=> s < b*0.9); }
+// Процентный показатель: разница ≥ 10 процентных пунктов (higherBetter — направление)
+function nomPctTop(cands, higherBetter){ return _nomWinner(cands, !!higherBetter, (b,s)=> Math.abs(b-s) >= 10); }
+// Серия без потерь: разница ≥ 2 вылета
+function nomStreakTop(cands){ return _nomWinner(cands, true, (b,s)=> (b-s) >= 2); }
+
+// Строки раздела «ОТЛИЧИВШИЕСЯ ЗА ПЕРИОД» для подробного отчёта.
+// Только победитель каждой номинации, без иконок/названий медалей.
+function perfNominationLines(flights){
+  const fl=flights.filter(x=>x.pilot&&x.pilot!=='[ПЕРЕДАЧА]');
+  const pilots=[...new Set(fl.map(x=>x.pilot))].filter(Boolean);
+  if(!pilots.length) return [];
+  const hasGeo=fl.some(x=>x.range_km!=null);
+  const at=p=>fl.filter(x=>x.pilot===p);
+  const lines=[];
+
+  // Самый дальний вылет (только при наличии гео)
+  if(hasGeo){
+    const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null).sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
+    const r=nomRatioTop(c);
+    if(r) lines.push(`${r.pilot} — самый дальний вылет: ${r.value} км${r._f&&r._f.date?` (${r._f.date})`:''}`);
+  }
+  // Больше всего вылетов
+  {
+    const c=pilots.map(p=>({pilot:p, value:at(p).length}));
+    const r=nomRatioTop(c);
+    if(r) lines.push(`${r.pilot} — больше всего вылетов: ${r.value}`);
+  }
+  // Лучший результат — % выполнения (мин. 3 вылета)
+  {
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=3?a.filter(x=>x.result==='yes').length/a.length*100:null}; });
+    const r=nomPctTop(c, true);
+    if(r){ const a=at(r.pilot); const done=a.filter(x=>x.result==='yes').length; lines.push(`${r.pilot} — лучший результат: ${Math.round(r.value)}% выполнения (${done} из ${a.length})`); }
+  }
+  // Меньше всего потерь — % потерь (мин. 3 вылета)
+  {
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=3?a.filter(x=>x.returned==='no').length/a.length*100:null}; });
+    const r=nomPctTop(c, false);
+    if(r){ const a=at(r.pilot); lines.push(`${r.pilot} — меньше всего потерь: ${Math.round(r.value)}% (${a.length} вылетов)`); }
+  }
+  // Лучшая серия без потерь (наибольшая серия в периоде)
+  {
+    const streakOf=p=>{ const a=at(p).slice().sort((x,y)=>(x.date+x.time).localeCompare(y.date+y.time)); let best=0,cur=0; for(const f of a){ if(f.returned==='no') cur=0; else { cur++; if(cur>best) best=cur; } } return best; };
+    const c=pilots.map(p=>({pilot:p, value:streakOf(p)}));
+    const r=nomStreakTop(c);
+    if(r) lines.push(`${r.pilot} — лучшая серия без потерь: ${r.value} вылетов подряд`);
+  }
+  // Лучший день (рекорд вылетов за один календарный день)
+  {
+    const dm=p=>{ const by={}; at(p).forEach(x=>{by[x.date]=(by[x.date]||0)+1;}); let b=0,d=null; for(const k in by){ if(by[k]>b){ b=by[k]; d=k; } } return {v:b, d}; };
+    const c=pilots.map(p=>{ const x=dm(p); return {pilot:p, value:x.v>=2?x.v:null, _d:x.d}; });
+    const r=nomRatioTop(c);
+    if(r) lines.push(`${r.pilot} — лучший день: ${r.value} вылетов${r._d?` (${r._d})`:''}`);
+  }
+  return lines;
+}
+
 function buildDetailedReport(f,filterLabel,out){
   f=f.filter(x=>x.pilot&&x.pilot!=='[ПЕРЕДАЧА]');
   const pilotNames=[...new Set(f.map(x=>x.pilot))].filter(Boolean);
@@ -473,11 +549,25 @@ function buildDetailedReport(f,filterLabel,out){
     return `<div class="rb-line" style="${mono}">${parts.join(' · ')}</div>`;
   };
 
+  // Раздел «ОТЛИЧИВШИЕСЯ ЗА ПЕРИОД» — простой текст, без иконок/названий медалей
+  const nomLines=perfNominationLines(f);
+  let nomHtml='';
+  if(nomLines.length){
+    const nomW=Math.max(33,'ОТЛИЧИВШИЕСЯ ЗА ПЕРИОД'.length,...nomLines.map(l=>l.length));
+    const bar='═'.repeat(nomW);
+    nomHtml=`
+    <div class="rb-line" style="${mono}"> </div>
+    <div class="rb-line" style="${mono}">${esc(bar)}</div>
+    <div class="rb-line" style="${mono};font-weight:700">ОТЛИЧИВШИЕСЯ ЗА ПЕРИОД</div>
+    <div class="rb-line" style="${mono}">${esc(bar)}</div>
+    ${nomLines.map(l=>`<div class="rb-line" style="${mono}">${esc(l)}</div>`).join('\n    ')}`;
+  }
+
   out.innerHTML=`<div class="report-block" style="overflow-x:auto">
     <div class="rb-head">Подробный отчёт по расчётам · ${esc(period)}</div>
     <div class="rb-line" style="${mono}">${esc(hdr)}</div>
     <div class="rb-line" style="${mono};color:var(--border2)">${esc(sep)}</div>
-    ${metricDefs.map(renderRow).join('\n    ')}
+    ${metricDefs.map(renderRow).join('\n    ')}${nomHtml}
   </div>`;
 }
 

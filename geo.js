@@ -13,7 +13,13 @@ function geoBuildIndex(){
   for(const p of geoDB){
     const ck = p.color_key || '';
     if(!ck) continue;
-    (geoIndex[ck] || (geoIndex[ck] = {}))[p.num] = p;
+    const bucket = geoIndex[ck] || (geoIndex[ck] = {});
+    // ПЕРВОЕ вхождение выигрывает. Склеенные подслои с одним именем (напр.
+    // «Горчичненые точки» = ~4×999) переиспользуют номера 1..999. При last-wins
+    // номер 274 возвращал точку из ПОСЛЕДНЕГО подслоя (неверную); первый подслой —
+    // основной (его координаты совпадают с реальными). geoDB хранится в порядке
+    // файла, поэтому первое вхождение = первый подслой. См. geoDiagDuplicates().
+    if(bucket[p.num] === undefined) bucket[p.num] = p;
   }
 }
 
@@ -235,6 +241,24 @@ function geoDiag(){
   return {points:geoDB.length, colors:[...new Set(geoDB.map(p=>p.color_key))]};
 }
 
+// Диагностика коллизий номеров: слои, где один номер встречается несколько раз
+// (склеенные подслои, переиспользующие номера). Вызывать из консоли: geoDiagDuplicates()
+function geoDiagDuplicates(){
+  const byCk={};
+  for(const p of geoDB){ const ck=p.color_key||''; (byCk[ck]||(byCk[ck]={})); (byCk[ck][p.num]||(byCk[ck][p.num]=[])).push(p); }
+  const res=[];
+  for(const ck in byCk){
+    let dup=0, total=0, maxRep=0;
+    for(const num in byCk[ck]){ total++; const r=byCk[ck][num].length; if(r>1) dup++; if(r>maxRep) maxRep=r; }
+    if(dup) res.push({color_key:ck, points:geoDB.filter(p=>p.color_key===ck).length, uniqueNums:total, collidingNums:dup, maxRepeat:maxRep});
+  }
+  res.sort((a,b)=>b.collidingNums-a.collidingNums);
+  console.log('[GEO] Слои с дублирующимися номерами (склеенные подслои, ~maxRepeat подслоёв):');
+  res.forEach(r=>console.log('  ', JSON.stringify(r)));
+  if(!res.length) console.log('  нет — номера уникальны в каждом слое');
+  return res;
+}
+
 // Диагностика промежуточных точек из примечаний (вызывать из консоли: geoDiagNotes())
 function geoDiagNotes(){
   // примечания с признаком промежуточной точки: "вернул до", "до X", "вернул к", "к X"
@@ -278,9 +302,29 @@ function geoNoteIntermediate(note){
   return m?m[1].trim():'';
 }
 
+// Диагностика расчёта дальности конкретного вылета (из консоли):
+//   geoDiagDist('Поп','274 Горчичная')
+function geoDiagDist(pilot, target){
+  const sq=state.squads.find(s=>s.pilot && pilot && s.pilot.toLowerCase()===pilot.toLowerCase());
+  const startQ=sq&&sq.start_point;
+  const start=startQ?findGeoPoint(startQ):null;
+  const tgt=findGeoPoint(target);
+  const dist=(start&&tgt)?geoRound2(calcDistance(start.lat,start.lon,tgt.lat,tgt.lon)):null;
+  console.log('[GEO] пилот:', pilot, '| точка старта:', startQ||'— (не задана)');
+  console.log('[GEO] findGeoPoint(цель "'+target+'") →', tgt);
+  console.log('[GEO] findGeoPoint(старт "'+(startQ||'')+'") →', start);
+  console.log('[GEO] calcDistance старт→цель →', dist!=null?dist+' км':'нет (точка не найдена)');
+  if(!tgt) console.log('[GEO] диагностика цели:', geoDiagFind(target));
+  if(startQ && !start) console.log('[GEO] диагностика старта:', geoDiagFind(startQ));
+  return {pilot, start_point:startQ, start, target:tgt, range_km:dist};
+}
+
 // Расчёт дистанций вылета → {range_km, distance_km} | null
 function geoComputeFlight(f){
   if(!geoDB.length) return null;
+  // Потеря без выполнения задачи (result='no' + returned='no'): борт не долетел
+  // и неизвестно где упал — дальность/путь не считаем (иначе ложное расстояние до цели).
+  if(f.result==='no' && f.returned==='no') return null;
   const sq=state.squads.find(s=>s.pilot && f.pilot && s.pilot.toLowerCase()===f.pilot.toLowerCase());
   const startQ=sq&&sq.start_point;
   if(!startQ) return null;
@@ -344,6 +388,11 @@ function geoRecomputeFlights(opts){
     const end = Math.min(i+BATCH, total);
     for(; i<end; i++){
       const f = list[i];
+      // Потеря без выполнения — дистанции быть не должно: чистим прежние (возможно неверные) значения
+      if(f.result==='no' && f.returned==='no'){
+        if(f.range_km!=null || f.distance_km!=null){ delete f.range_km; delete f.distance_km; changed++; }
+        continue;
+      }
       const r = geoComputeFlight(f);
       if(r){ f.range_km=r.range_km; f.distance_km=r.distance_km; f.geo_locked=true; changed++; } // авто-блокировка после успешного пересчёта
     }

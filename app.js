@@ -280,6 +280,7 @@ function renderAdminFlights(){
         <th style="min-width:82px">БПЛА</th>
         <th style="min-width:46px">Задача</th>
         <th style="min-width:82px">Борт</th>
+        <th style="min-width:60px">Дальн</th>
         <th style="width:100%">Примечание</th>
         <th style="min-width:24px"></th>
       </tr></thead>
@@ -293,6 +294,7 @@ function renderAdminFlights(){
         <td><input style="width:85px" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" onclick="event.stopPropagation();showQuickPicker(this,[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort(),v=>{adminEditFlight(${i},'drone',v)})" autocomplete="off"></td>
         <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select style="width:80px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
+        <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
         <td><input style="width:100%;min-width:120px" value="${x.note||''}" onchange="adminEditFlight(${i},'note',this.value)"></td>
         <td style="white-space:nowrap">${x.geo_locked?'<span title="Дистанция зафиксирована (🔒). Защищена от пересчёта">🔒</span> ':''}<button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
       </tr>`).join('')}
@@ -678,6 +680,167 @@ function adminCleanOrphanLosses(){
 }
 
 // ============ DASHBOARD ============
+// ===== МЕДАЛИ ПИЛОТОВ (Обзор → Расчёты) =====
+// Каталог: id → {icon, name, color}. Текст описания (desc) формируется
+// динамически с конкретными цифрами в calcPilotMedals.
+const MEDALS = {
+  longshot:  {icon:'🚀', name:'Дальнобойщик', color:'#6366f1'},
+  workhorse: {icon:'⚡', name:'Трудяга',      color:'#f59e0b'},
+  sniper:    {icon:'🥇', name:'Снайпер',      color:'#eab308'},
+  thrifty:   {icon:'🛡️', name:'Бережливый',   color:'#10b981'},
+  streak:    {icon:'🔥', name:'На волне',     color:'#ef4444'},
+  veteran:   {icon:'💎', name:'Ветеран',      color:'#06b6d4'},
+  progress:  {icon:'📈', name:'Прогресс',     color:'#22c55e'},
+  bestday:   {icon:'🌟', name:'Лучший день',  color:'#a855f7'},
+  raid:      {icon:'🎯', name:'Дальний рейд', color:'#ec4899'},
+};
+
+// ISO-дата n дней назад от текущего момента
+function medalIsoDaysAgo(n){ return new Date(Date.now()-n*864e5).toISOString().slice(0,10); }
+// 'YYYY-MM-DD' → 'DD.MM'
+function medalFmtDate(iso){ const p=(iso||'').split('-'); return p.length===3?`${p[2]}.${p[1]}`:iso; }
+
+// Определяет единственного победителя каждой сравнительной медали с учётом
+// правил отрыва (общий движок nomRatioTop/nomPctTop/nomStreakTop из reports.js).
+// Возвращает { medalId: {pilot, desc} } — только для медалей с победителем.
+// Окно — последние 10 дней (кроме ветерана: за всё время).
+function computeMedalWinners(){
+  const flights = state.flights||[];
+  const d10 = medalIsoDaysAgo(9);
+  const f10 = flights.filter(f=>f.date>=d10);
+  const pilots = [...new Set(
+    state.squads.map(s=>s.pilot).concat(flights.map(f=>f.pilot)).filter(Boolean)
+  )];
+  const at = p => f10.filter(f=>f.pilot===p);
+  const hasGeo = f10.some(f=>f.range_km!=null);
+  const w = {};
+
+  // 🚀 Дальнобойщик — рекорд дальности одного вылета (нужно гео)
+  if(hasGeo){
+    const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null).sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
+    const r=nomRatioTop(c);
+    if(r) w.longshot={pilot:r.pilot, desc:`Абсолютный рекорд дальности одного вылета среди всех пилотов: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
+  }
+  // ⚡ Трудяга — больше всего вылетов за 10 дней
+  {
+    const c=pilots.map(p=>({pilot:p, value:at(p).length}));
+    const r=nomRatioTop(c);
+    if(r) w.workhorse={pilot:r.pilot, desc:`${r.value} вылетов за 10 дней — больше всех с явным отрывом.`};
+  }
+  // 🥇 Снайпер — наибольший % выполнения (мин. 3 вылета)
+  {
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=3?a.filter(x=>x.result==='yes').length/a.length*100:null}; });
+    const r=nomPctTop(c, true);
+    if(r){ const a=at(r.pilot); const done=a.filter(x=>x.result==='yes').length; w.sniper={pilot:r.pilot, desc:`${Math.round(r.value)}% выполненных задач (${done} из ${a.length}) за 10 дней — лучший результат.`}; }
+  }
+  // 🛡️ Бережливый — наименьший % потерь (мин. 3 вылета)
+  {
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=3?a.filter(x=>x.returned==='no').length/a.length*100:null}; });
+    const r=nomPctTop(c, false);
+    if(r){ const a=at(r.pilot); const lost=a.filter(x=>x.returned==='no').length; w.thrifty={pilot:r.pilot, desc:`Потерь всего ${Math.round(r.value)}% (${lost} из ${a.length}) за 10 дней — меньше всех.`}; }
+  }
+  // 💎 Ветеран — больше всего вылетов за всё время. Особое правило: лидер +
+  // все, кто в пределах 10% от лидера (несколько носителей). w.veteran — карта
+  // {пилот: desc} по всем носителям верхнего яруса.
+  {
+    const vals=pilots.map(p=>({pilot:p, value:flights.filter(f=>f.pilot===p).length})).filter(x=>x.value>0);
+    if(vals.length){
+      const max=Math.max(...vals.map(x=>x.value));
+      const tier=vals.filter(x=>x.value>=max*0.9);   // лидер и все в пределах 10%
+      w.veteran={};
+      tier.forEach(x=>{
+        w.veteran[x.pilot]=tier.length>1
+          ? `Всего вылетов за всё время: ${x.value} — в числе лидеров подразделения.`
+          : `Всего вылетов за всё время: ${x.value} — больше всех в подразделении.`;
+      });
+    }
+  }
+  // 📈 Прогресс — рост к прошлой неделе (мин. +3)
+  {
+    const thisW0=medalIsoDaysAgo(6), prevW0=medalIsoDaysAgo(13);
+    const thisCnt=p=>flights.filter(f=>f.pilot===p && f.date>=thisW0).length;
+    const prevCnt=p=>flights.filter(f=>f.pilot===p && f.date>=prevW0 && f.date<thisW0).length;
+    const c=pilots.map(p=>{ const g=thisCnt(p)-prevCnt(p); return {pilot:p, value:g>=3?g:null}; });
+    const r=nomRatioTop(c);
+    if(r) w.progress={pilot:r.pilot, desc:`Рост к прошлой неделе: +${r.value} вылетов (было ${prevCnt(r.pilot)}, стало ${thisCnt(r.pilot)}) — лучшая динамика.`};
+  }
+  // 🌟 Лучший день — рекорд за один календарный день (мин. 2)
+  {
+    const dm=p=>{ const by={}; at(p).forEach(x=>{by[x.date]=(by[x.date]||0)+1;}); let b=0,d=null; for(const k in by){ if(by[k]>b){ b=by[k]; d=k; } } return {v:b, d}; };
+    const c=pilots.map(p=>{ const x=dm(p); return {pilot:p, value:x.v>=2?x.v:null, _d:x.d}; });
+    const r=nomRatioTop(c);
+    if(r) w.bestday={pilot:r.pilot, desc:`Рекорд за один день: ${r.value} вылетов${r._d?` (${medalFmtDate(r._d)})`:''} — больше всех за 10 дней.`};
+  }
+  return w;
+}
+
+// Возвращает массив заработанных медалей пилота: [{id,icon,name,color,desc}].
+// Три категории присуждения:
+//  • Единственный носитель (правило 10%): 🚀 ⚡ 🥇 🛡️ 📈 🌟 — computeMedalWinners.
+//  • Верхний ярус (лидер + все в пределах 10%): 💎 Ветеран.
+//  • Абсолютное условие (несколько носителей): 🔥 серия ≥5, 🎯 вылет >20 км.
+function calcPilotMedals(pilot){
+  const flights = state.flights||[];
+  const d10 = medalIsoDaysAgo(9);
+  const w = computeMedalWinners();
+  const out = [];
+  const add = (id,desc)=>{ const m=MEDALS[id]; out.push({id, icon:m.icon, name:m.name, color:m.color, desc}); };
+
+  // Единственный носитель — победитель совпал с пилотом
+  ['longshot','workhorse','sniper','thrifty','progress','bestday'].forEach(id=>{
+    if(w[id] && w[id].pilot===pilot) add(id, w[id].desc);
+  });
+
+  // 💎 Ветеран — верхний ярус (карта носителей)
+  if(w.veteran && w.veteran[pilot]) add('veteran', w.veteran[pilot]);
+
+  // 🔥 На волне — абсолютное: текущая серия без потерь ≥5 (каждому, кто выполнил)
+  {
+    const mine=flights.filter(f=>f.pilot===pilot).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+    let streak=0;
+    for(const f of mine){ if(f.returned==='no') break; streak++; }
+    if(streak>=5) add('streak', `Текущая серия без потерь: ${streak} вылетов подряд.`);
+  }
+
+  // 🎯 Дальний рейд — абсолютное: вылет >20 км за 10 дней (каждому, кто выполнил)
+  const hasGeo=flights.some(f=>f.date>=d10 && f.range_km!=null);
+  if(hasGeo){
+    const far=flights.filter(f=>f.pilot===pilot && f.date>=d10 && f.range_km!=null && f.range_km>20).sort((a,b)=>b.range_km-a.range_km)[0];
+    if(far) add('raid', `Дальний вылет на ${far.range_km} км${far.date?` (${medalFmtDate(far.date)})`:''} — свыше 20 км.`);
+  }
+
+  // Порядок отображения — как в каталоге MEDALS
+  const order=Object.keys(MEDALS);
+  out.sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id));
+  return out;
+}
+
+// Бейджи медалей для строки имени пилота. Заполняет window._pilotMedals для модалки.
+function medalsHtml(pilot){
+  const medals=calcPilotMedals(pilot);
+  (window._pilotMedals||(window._pilotMedals={}))[pilot]=medals;
+  if(!medals.length) return '';
+  const pj=esc(pilot).replace(/'/g,"\\'");
+  return `<span class="medal-row">`+medals.map((m,i)=>
+    `<span class="medal-badge" style="background:${m.color}22;border-color:${m.color}77" title="${esc(m.name)}" onclick="event.stopPropagation();showMedalModal('${pj}',${i})">${m.icon}</span>`
+  ).join('')+`</span>`;
+}
+
+// Модальное окно медали: большая иконка, название, описание с цифрами
+function showMedalModal(pilot, idx){
+  const m=((window._pilotMedals||{})[pilot]||[])[idx];
+  if(!m) return;
+  const ov=modalOverlay(`<div class="medal-modal">
+    <div class="medal-modal-icon" style="filter:drop-shadow(0 2px 12px ${m.color}99)">${m.icon}</div>
+    <div class="medal-modal-name" style="color:${m.color}">${esc(m.name)}</div>
+    <div class="medal-modal-pilot">Пилот ${esc(pilot)}</div>
+    <div class="medal-modal-desc">${esc(m.desc)}</div>
+    <button class="btn btn-sm" id="medal-close">Закрыть</button>
+  </div>`);
+  ov.addEventListener('click',e=>{ if(e.target===ov) ov.remove(); });
+  ov.querySelector('#medal-close').onclick=()=>ov.remove();
+}
+
 function renderDashboard(){
   const now=new Date();
   const today=now.toISOString().slice(0,10);
@@ -738,7 +901,7 @@ function renderDashboard(){
     return `<div class="crew-item">
       <div class="crew-header">
         <div>
-          <div class="crew-name">Пилот ${sq.pilot}</div>
+          <div class="crew-name">Пилот ${sq.pilot}${medalsHtml(sq.pilot)}</div>
           <div class="crew-sub">Последний вылет: ${lastFlight?lastFlight.date+' '+lastFlight.time:'нет данных'}</div>
         </div>
         <div class="crew-flights">${sqFlightsToday.length?sqFlightsToday.length+' сегодня':'нет вылетов'}</div>
@@ -1022,6 +1185,7 @@ function renderFlights(){
         <th style="white-space:nowrap">БПЛА</th>
         <th style="width:90px">Задача</th>
         <th style="width:75px">Борт</th>
+        <th style="width:60px">Дальн</th>
         <th>Примечание</th>
         <th style="width:28px"></th>
       </tr></thead>
@@ -1052,9 +1216,10 @@ function renderFlights(){
             <td style="white-space:nowrap;padding-right:14px">${x.drone||'—'}</td>
             <td><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
+            <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
             <td style="padding:2px 4px;width:36px"><button class="copy-flight-btn" data-copy="${copyStr.replace(/"/g,'&quot;').replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></td>
-          </tr>${editRow?`<tr><td colspan="11" style="padding:0;border:none">${editRow}</td></tr>`:''}`
+          </tr>${editRow?`<tr><td colspan="12" style="padding:0;border:none">${editRow}</td></tr>`:''}`
         }).join('')}
       </tbody>
     </table>`;
