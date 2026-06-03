@@ -304,15 +304,13 @@ function adminEditFlight(idx,field,val){
   // Смена борта в вылете-потере → пересчитать списание у пилота
   if(field==='drone'){
     const f=state.flights[idx];
-    // Только если борт реально был списан как потеря (_lossWritten):
-    // переключение «вернул→потерян» в админке списания не делает — там обычная правка.
-    if(f && f.returned==='no' && f._lossWritten){
-      const oldDrone=(f.drone||'').trim();
-      const newDrone=(val||'').trim();
-      if(oldDrone && newDrone && oldDrone.toLowerCase()!==newDrone.toLowerCase()){
-        adminEditLossDrone(idx,oldDrone,newDrone);
-        return;
-      }
+    const oldDrone=(f?f.drone||'':'').trim();
+    const newDrone=(val||'').trim();
+    // Вылет помечен как потеря и борт реально изменился — пересчитать списание.
+    // Флаг _lossWritten не проверяем: у исторических вылетов он не выставлен.
+    if(f && f.returned==='no' && oldDrone && newDrone && oldDrone.toLowerCase()!==newDrone.toLowerCase()){
+      adminEditLossDrone(idx,oldDrone,newDrone);
+      return;
     }
   }
   syncEditFlight(idx,field,val);
