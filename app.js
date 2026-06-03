@@ -301,6 +301,14 @@ function renderAdminFlights(){
 }
 
 function adminEditFlight(idx,field,val){
+  // Смена статуса «вернул ↔ потерян» → списать/вернуть борт у пилота
+  if(field==='returned'){
+    const f=state.flights[idx];
+    if(f && f.returned!==val && (val==='no'||val==='yes')){
+      adminEditReturned(idx,val);
+      return;
+    }
+  }
   // Смена борта в вылете-потере → пересчитать списание у пилота
   if(field==='drone'){
     const f=state.flights[idx];
@@ -374,6 +382,94 @@ function confirmLossDroneChange(oldDrone,newDrone,pilot){
     </div>`);
     ov.querySelector('#lds-yes').onclick=()=>{ov.remove();resolve(true);};
     ov.querySelector('#lds-no').onclick=()=>{ov.remove();resolve(false);};
+  });
+}
+
+// Смена статуса вылета «вернул ↔ потерян» с пересчётом склада.
+// «Нет» — меняем только статус вылета, склад/расчёт не трогаем.
+async function adminEditReturned(idx, newReturned){
+  const f=state.flights[idx];
+  if(!f) return;
+  const drone=(f.drone||'').trim();
+  const pilot=f.pilot;
+  const loss = newReturned==='no'; // yes→no списание, no→yes возврат
+
+  // Без борта списывать/возвращать нечего — просто меняем статус
+  if(!drone){ syncEditFlight(idx,'returned',newReturned); return; }
+
+  const msg = loss
+    ? `Борт <b>${esc(drone)}</b> будет списан как потеря у пилота${pilot?' '+esc(pilot):''}. Применить?`
+    : `Борт <b>${esc(drone)}</b> будет возвращён пилоту${pilot?' '+esc(pilot):''}. Применить?`;
+  const apply = await confirmReturnedChange(msg);
+
+  // Статус вылета меняем в любом случае
+  f.returned=newReturned;
+
+  if(apply){
+    if(loss){
+      // списать борт у пилота + запись о потере в transfers
+      writeDroneLoss(f.pilot, drone, f.date, f.time, f.id);
+      f._lossWritten=true;
+    } else {
+      // вернуть борт пилоту + убрать запись о потере
+      returnLossDrone(f);
+      f._lossWritten=false;
+    }
+  }
+
+  saveLocal();
+  clearTimeout(syncEditFlight._timer);
+  syncEditFlight._timer=setTimeout(()=>syncPushAll(true),2000);
+  renderAdminFlights(); renderDashboard(); renderInventory();
+}
+
+// Возврат борта пилоту (+1) и удаление записи о потере.
+// Поиск записи — тем же трёхуровневым проходом, что и в syncDeleteFlight.
+function returnLossDrone(f){
+  const pLow=(f.pilot||'').toLowerCase();
+  const dLow=(f.drone||'').toLowerCase();
+  const sq=state.squads.find(s=>s.pilot===f.pilot);
+  if(sq){
+    const d=sq.drones.find(d=>d.name.toLowerCase()===dLow);
+    if(d) d.qty++; else sq.drones.push({name:f.drone,qty:1});
+  }
+  const before=(state.transfers||[]).length;
+  if(f.id){
+    state.transfers=(state.transfers||[]).filter(t=>!(t.type==='loss'&&t.flightId===f.id));
+  }
+  if((state.transfers||[]).length===before){
+    state.transfers=(state.transfers||[]).filter(t=>!(
+      t.type==='loss' &&
+      (t.pilot||'').toLowerCase()===pLow &&
+      (t.drone||'').toLowerCase()===dLow &&
+      t.date===f.date && t.time===f.time
+    ));
+  }
+  if((state.transfers||[]).length===before){
+    state.transfers=(state.transfers||[]).filter(t=>!(
+      t.type==='loss' &&
+      (t.pilot||'').toLowerCase()===pLow &&
+      (t.drone||'').toLowerCase()===dLow &&
+      t.date===f.date
+    ));
+  }
+  syncBumpStockVersion();
+  setTimeout(()=>syncPushStockSquads(),300);
+}
+
+// Диалог подтверждения смены статуса потери. Возвращает Promise<bool>.
+function confirmReturnedChange(msgHtml){
+  return new Promise(resolve=>{
+    const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
+      <div style="font-size:13px;font-weight:700;color:var(--amber,#f59e0b);margin-bottom:10px">Изменение статуса вылета</div>
+      <div style="font-size:12px;color:var(--text);margin-bottom:16px;line-height:1.5">${msgHtml}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-success btn-sm" id="rch-yes">Да</button>
+        <button class="btn btn-sm" id="rch-no">Нет</button>
+      </div>
+    </div>`);
+    ov.querySelector('#rch-yes').onclick=()=>{ov.remove();resolve(true);};
+    ov.querySelector('#rch-no').onclick=()=>{ov.remove();resolve(false);};
   });
 }
 
