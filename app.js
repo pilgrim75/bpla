@@ -95,6 +95,13 @@ function saveLocal(){
     if(url&&token&&navigator.onLine)syncPushAll(true);
   },2000);
 }
+// Сохранить локально БЕЗ авто-выгрузки полного снимка (syncPushAll).
+// Для операций, которые сами выгружают нужные листы точечно (append/stock),
+// чтобы не делать деструктивный полный write массива flights (Risk 3).
+function saveLocalQuiet(){
+  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
+  clearTimeout(saveLocal._timer); // отменяем отложенный полный write, если был запланирован
+}
 function loadLocal(){
   try{
     const s=localStorage.getItem('droneState');
@@ -352,9 +359,11 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
     syncBumpStockVersion();
   }
 
-  saveLocal();
-  clearTimeout(syncEditFlight._timer);
-  syncEditFlight._timer=setTimeout(()=>syncPushAll(true),2000);
+  // Risk 3/1: без полного syncPushAll (затирал чужие несполленные вылеты).
+  // Склад/расчёт выгружаем точечно; правка f.drone и записи о потере попадут
+  // в облако при ближайшем ambient-write (syncPushAll теперь неразрушающий).
+  saveLocalQuiet();
+  if(apply) syncPushStockSquads();
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
@@ -413,15 +422,17 @@ async function adminEditReturned(idx, newReturned){
       writeDroneLoss(f.pilot, drone, f.date, f.time, f.id);
       f._lossWritten=true;
     } else {
-      // вернуть борт пилоту + убрать запись о потере
+      // вернуть борт пилоту + убрать запись о потере (сам пушит склад)
       returnLossDrone(f);
       f._lossWritten=false;
     }
   }
 
-  saveLocal();
-  clearTimeout(syncEditFlight._timer);
-  syncEditFlight._timer=setTimeout(()=>syncPushAll(true),2000);
+  // Risk 3: без полного syncPushAll. Склад выгружаем точечно — для потери (writeDroneLoss
+  // не пушит склад сам), для возврата это делает returnLossDrone. Смена статуса/флага
+  // _lossWritten уйдёт в облако ближайшим ambient-write (syncPushAll неразрушающий).
+  saveLocalQuiet();
+  if(apply && loss) syncPushStockSquads(); // syncPushStockSquads сам бампит версию
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
@@ -436,25 +447,33 @@ function returnLossDrone(f){
     if(d) d.qty++; else sq.drones.push({name:f.drone,qty:1});
   }
   const before=(state.transfers||[]).length;
+  let removedTransfers=[];
+  const removeLoss=(pred)=>{
+    const keep=[], removed=[];
+    (state.transfers||[]).forEach(t=>(pred(t)?removed:keep).push(t));
+    state.transfers=keep; return removed;
+  };
   if(f.id){
-    state.transfers=(state.transfers||[]).filter(t=>!(t.type==='loss'&&t.flightId===f.id));
+    removedTransfers=removeLoss(t=>t.type==='loss'&&t.flightId===f.id);
   }
   if((state.transfers||[]).length===before){
-    state.transfers=(state.transfers||[]).filter(t=>!(
+    removedTransfers=removeLoss(t=>
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
       t.date===f.date && t.time===f.time
-    ));
+    );
   }
   if((state.transfers||[]).length===before){
-    state.transfers=(state.transfers||[]).filter(t=>!(
+    removedTransfers=removeLoss(t=>
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
       t.date===f.date
-    ));
+    );
   }
+  // tombstone удалённых loss-передач — чтобы неразрушающий merge не вернул их из облака
+  removedTransfers.forEach(t=>{ if(t.id) tombstones.add(t.id); });
   syncBumpStockVersion();
   setTimeout(()=>syncPushStockSquads(),300);
 }
@@ -501,6 +520,8 @@ function renderAdminStock(){
 function adminEditStock(idx,field,val){
   if(state.stock[idx])state.stock[idx][field]=val;
   saveLocal();
+  syncBumpStockVersion();   // версионируем — иначе поллинг затрёт правку
+  syncPushStockSquads();
   renderDashboard();
 }
 
@@ -508,6 +529,8 @@ function adminDeleteStock(idx){
   if(!confirm('Удалить позицию со склада?'))return;
   state.stock.splice(idx,1);
   saveLocal();
+  syncBumpStockVersion();
+  syncPushStockSquads();
   renderAdminStock();
   renderDashboard();
 }
@@ -561,6 +584,8 @@ function _logAdminTransfer(pilot,drone,delta,note){
 function adminEditSquadPilot(si,val){
   if(state.squads[si])state.squads[si].pilot=val;
   saveLocal();
+  syncBumpStockVersion();
+  syncPushStockSquads();
 }
 function adminEditSquadDrone(si,di,field,val){
   const sq=state.squads[si];const d=sq&&sq.drones[di];
@@ -570,11 +595,15 @@ function adminEditSquadDrone(si,di,field,val){
     d[field]=val;
   }
   saveLocal();
+  syncBumpStockVersion();
+  syncPushStockSquads();
 }
 function adminDeleteSquad(si){
   if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
   state.squads.splice(si,1);
   saveLocal();
+  syncBumpStockVersion();
+  syncPushStockSquads();
   renderAdminSquads();
   renderDashboard();
 }
@@ -585,6 +614,8 @@ function adminAddSquad(){
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
   ds.forEach(n=>_logAdminTransfer(p,n,1,'адм: новый расчёт'));
   saveLocal();
+  syncBumpStockVersion();
+  syncPushStockSquads();
   renderAdminSquads();
   renderDashboard();
   document.getElementById('adm-newPilot').value='';
@@ -1325,7 +1356,7 @@ function squadCleanZeros(si){
   renderSquadEditor();
   renderInventory();
 }
-function squadEditPilot(si,val){state.squads[si].pilot=val;saveLocal();renderInventory();}
+function squadEditPilot(si,val){state.squads[si].pilot=val;saveLocal();syncBumpStockVersion();syncPushStockSquads();renderInventory();}
 // Сколько вылетов пилота без посчитанной дистанции
 function geoPilotMissingCount(pilot){
   const lo=(pilot||'').toLowerCase();

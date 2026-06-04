@@ -238,49 +238,63 @@ async function syncDeleteFlight(idx){
   // Три прохода от точного к нестрогому:
 
   const before=(state.transfers||[]).length;
+  let removedTransfers=[];
+  // Удаляем по предикату, возвращая удалённые записи (чтобы занести их id в tombstones)
+  const removeLoss = (pred)=>{
+    const keep=[], removed=[];
+    (state.transfers||[]).forEach(t=>(pred(t)?removed:keep).push(t));
+    state.transfers=keep; return removed;
+  };
 
   // Проход 1: по flightId (для записей, созданных после обновления)
   if(f.id){
-    state.transfers=(state.transfers||[]).filter(t=>!(t.type==='loss'&&t.flightId===f.id));
+    removedTransfers = removeLoss(t=>t.type==='loss'&&t.flightId===f.id);
   }
 
   // Проход 2: пилот + борт + дата + время (регистронезависимо)
   if((state.transfers||[]).length===before){
-    state.transfers=(state.transfers||[]).filter(t=>!(
+    removedTransfers = removeLoss(t=>
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
       t.date===f.date &&
       t.time===f.time
-    ));
+    );
   }
 
   // Проход 3: пилот + борт + дата (без времени — для вылетов,
   // чьё время менялось после первичной записи потери)
   if((state.transfers||[]).length===before){
-    state.transfers=(state.transfers||[]).filter(t=>!(
+    removedTransfers = removeLoss(t=>
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
       t.date===f.date
-    ));
+    );
   }
 
+  // tombstone и для вылета, и для удалённых loss-передач — чтобы неразрушающий
+  // merge в syncPushAll/pollCloud/syncPullAll не вернул их из облака обратно.
   tombstones.add(f.id);
+  removedTransfers.forEach(t=>{ if(t.id) tombstones.add(t.id); });
   state.flights.splice(idx,1);
-  saveLocal();
+  // Risk 3: НЕ делаем syncPushAll (полный write затирает чужие, ещё не сполленные
+  // вылеты/передачи). Удаление держится локально на tombstone; склад/расчёты
+  // (если была компенсация потери) уже выгружены через syncPushStockSquads выше.
+  // У бэкенда нет delete_one — фактическое удаление из облака произойдёт при
+  // ближайшем ambient-полном write от другой операции.
+  saveLocalQuiet();
   logAction('flight','delete','Удалён вылет '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||''));
-  syncPushAll(true);
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
 // Обновить поле вылета
 function syncEditFlight(idx, field, val){
   if(state.flights[idx]) state.flights[idx][field] = val;
-  saveLocal();
-  // Отправляем полный список вылетов через debounce
-  clearTimeout(syncEditFlight._timer);
-  syncEditFlight._timer = setTimeout(()=>syncPushAll(true), 2000);
+  // Risk 3: правка поля вылета не должна тянуть полный write массива flights.
+  // Сохраняем локально без авто-выгрузки; правка попадёт в облако при ближайшем
+  // ambient-полном write (у бэкенда нет update_one для точечного обновления строки).
+  saveLocalQuiet();
 }
 
 // Добавить transfer/arrival/loss — кэшируем в очередь, сразу пробуем отправить
@@ -316,11 +330,50 @@ async function syncPushStockSquads(){
   else console.warn('[SYNC] stock push failed:', res.error);
 }
 
-// Отправить полный снимок (flights + transfers)
+// Отправить полный снимок (flights + transfers).
+// НЕРАЗРУШАЮЩИЙ: перед записью доливаем из облака flights/transfers, которых нет
+// локально (merge по id, исключая tombstones) — чтобы полный write не стёр чужие
+// записи, ещё не полученные поллингом. Локальные данные при этом не теряются:
+// итоговый снимок = (локальное) ∪ (облачное) − (удалённое локально).
 async function syncPushAll(silent=false){
   const {url,key,token} = syncGetCfg();
   if(!url) return;
   if(!silent) syncIndicator('syncing');
+
+  // Merge с облаком. Если чтение не удалось — пишем как есть (деградация к прежнему
+  // поведению), append-записи всё равно дублируются через pendingQueue.
+  if(token){
+    try{
+      const r = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      const tb = tombstones.load();
+      const [cloudF, cloudT] = await Promise.all([
+        syncDecryptRows(d.flights||[], key),
+        syncDecryptRows(d.transfers||[], key)
+      ]);
+      const localFIds = new Set(state.flights.map(f=>f.id).filter(Boolean));
+      const addF = cloudF.filter(f=>f.id && !localFIds.has(f.id) && !tb.has(f.id));
+      const localTIds = new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
+      const addT = cloudT.filter(t=>t.id && !localTIds.has(t.id) && !tb.has(t.id));
+      if(addF.length){
+        state.flights = [...state.flights, ...addF]
+          .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
+      }
+      if(addT.length){
+        if(!state.transfers) state.transfers=[];
+        state.transfers = [...state.transfers, ...addT]
+          .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
+      }
+      if(addF.length || addT.length){
+        console.log('[SYNC] pushAll merge: +'+addF.length+' flights, +'+addT.length+' transfers из облака');
+        try{ saveLocalQuiet(); }catch(e){}
+      }
+    }catch(e){
+      console.warn('[SYNC] pushAll merge пропущен (чтение не удалось):', e.message);
+    }
+  }
+
   const ts = Date.now();
   const encRow = async (obj,i) => syncEncrypt({...obj, id:obj.id||(ts+i)}, key);
   const [flights,stock,squads,transfers] = await Promise.all([
@@ -346,6 +399,22 @@ async function syncPushAll(silent=false){
     if(!silent){ syncIndicator('error'); }
   }
   return res.ok;
+}
+
+// Точечная выгрузка ТОЛЬКО листа flights (action:'write' с data={flights}).
+// writeAll пропускает остальные листы (stock/squads/transfers — undefined),
+// поэтому _sv склада, записанный syncPushStockSquads, НЕ затирается.
+// Используется для возврата флага _lossWritten в облако (Risk 4) — у бэкенда нет
+// update_one, обновить строку вылета можно только перезаписью листа flights.
+async function syncPushFlightsOnly(){
+  const {url,key,token} = syncGetCfg();
+  if(!url||!token) return;
+  const ts = Date.now();
+  const flights = await Promise.all(state.flights.map((f,i)=>syncEncrypt({...f, id:f.id||(ts+i)}, key)));
+  const data = geoStripFromSync({flights});
+  const body = JSON.stringify({action:'write', token, data});
+  const res = await syncPost(url, body);
+  if(!res.ok) console.warn('[SYNC] flights-only push failed:', res.error);
 }
 
 // --- Очередь pending: повторная отправка накопленного ---
@@ -386,9 +455,10 @@ async function syncPullAll(confirm_=false){
       transfers: await syncDecryptRows(d.transfers||[], key),
       users: d.users||[]
     };
-    // Фильтруем tombstones
+    // Фильтруем tombstones (и удалённые вылеты, и удалённые loss-передачи)
     const tb = tombstones.load();
-    loaded.flights = loaded.flights.filter(f=>!tb.has(f.id));
+    loaded.flights   = loaded.flights.filter(f=>!tb.has(f.id));
+    loaded.transfers = loaded.transfers.filter(t=>!tb.has(t.id));
     // Актлог
     if(d.actlog&&d.actlog.length){
       const entries = await syncDecryptRows(d.actlog, key);
@@ -419,11 +489,20 @@ async function syncPullOnLogin(){
     ...loaded.transfers.map(t=>t.id)
   ].filter(Boolean)));
   const hasPending = pendingQueue.all().length > 0;
+  // Склад/расчёты — last-write-wins по _sv. Берём из облака ТОЛЬКО если версия
+  // облака новее локальной — иначе затрём несохранённые локальные правки
+  // (stock/squads НЕ кэшируются в pendingQueue, поэтому "нет pending" ещё не значит
+  //  "локальные данные склада уже выгружены").
+  const remoteStockVersion = Math.max(0,...loaded.stock.map(s=>s._sv||0));
+  const stockNewer = remoteStockVersion > _stockVersion;
   if(!hasPending){
     state.flights   = loaded.flights;
-    state.stock     = loaded.stock;
-    state.squads    = loaded.squads;
     state.transfers = loaded.transfers;
+    if(stockNewer){
+      state.stock   = loaded.stock;
+      state.squads  = loaded.squads;
+      _stockVersion = remoteStockVersion;   // синхронизируем версию после замены
+    }
   } else {
     // Есть несинхронизированное — сливаем только новое из облака
     console.log('[SYNC] pending queue not empty, merging only new records');
@@ -434,8 +513,7 @@ async function syncPullOnLogin(){
     const newT = loaded.transfers.filter(t=>t.id&&!localTIds.has(t.id));
     state.transfers = [...(state.transfers||[]),...newT].sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
     // Склад берём из облака только если наша версия старее
-    const remoteStockVersion = Math.max(0,...loaded.stock.map(s=>s._sv||0));
-    if(remoteStockVersion > _stockVersion){
+    if(stockNewer){
       state.stock   = loaded.stock;
       state.squads  = loaded.squads;
       _stockVersion = remoteStockVersion;
@@ -497,6 +575,7 @@ async function pollCloud(){
     _lastPollTs = Date.now();
 
     let changed = false;
+    let lossFlagSet = false; // выставили _lossWritten при приёме чужой потери — надо вернуть в облако
     const tb = tombstones.load();
     const deliveredIds = new Set(); // id, вернувшиеся из облака — подтверждение доставки
 
@@ -514,7 +593,8 @@ async function pollCloud(){
         if(obj.returned==='no' && obj.drone && !obj._lossWritten){
           writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id);
           obj._lossWritten=true;
-          setTimeout(()=>syncPushStockSquads(), 500);
+          lossFlagSet = true;                       // Risk 4: вернём флаг в облако ниже
+          setTimeout(()=>syncPushStockSquads(), 500); // списание + версия склада
         }
       }
     }
@@ -524,6 +604,7 @@ async function pollCloud(){
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
       deliveredIds.add(obj.id);
+      if(tb.has(obj.id)) continue; // удалена локально (напр. loss-передача удалённого вылета)
       if(!(state.transfers||[]).some(t=>t.id===obj.id)){
         if(!state.transfers) state.transfers=[];
         state.transfers.unshift(obj);
@@ -579,6 +660,10 @@ async function pollCloud(){
       const newF = (d.flights||[]).length;
       if(newF>0) showSyncToast('↓ '+newF+' новых вылетов');
     }
+    // Risk 4: вернуть выставленный _lossWritten в облако, чтобы другие устройства
+    // не списали тот же борт повторно. Точечный write листа flights сразу после
+    // поллинга (состояние максимально свежее → риск затирания минимален).
+    if(lossFlagSet) syncPushFlightsOnly();
     if(ind){ ind.className='sync-indicator saved'; ind.textContent='● '+new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}); }
   }catch(e){
     console.warn('[POLL] error:', e.message);
