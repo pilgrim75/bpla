@@ -259,6 +259,12 @@ function reportFlights(out,f){
 
 function reportLosses(out,f){
     f=f.filter(x=>x.returned==='no');
+    window._writeoffLosses=f; // для документа на списание (writeoff.js)
+    // Кнопка формирования акта списания — только командиру (cmd)
+    const isCmd=((typeof state!=='undefined'&&state.role)||(window.authUser&&authUser.role)||'')==='cmd';
+    const woBtn=(isCmd&&f.length)
+      ?`<button class="btn btn-sm" style="margin-top:12px;color:var(--accent2)" onclick="woOpenWriteoff()">📄 Документ на списание (${f.length})</button>`
+      :'';
     if(!f.length){
       window._reportText='Потери БПЛА — 0 борт(ов)\nПотерь нет';
       out.innerHTML=`<div class="report-block"><div class="rb-head">Потери БПЛА — 0 борт(ов)</div><div class="rb-line">Потерь нет</div></div>`;
@@ -274,6 +280,7 @@ function reportLosses(out,f){
       out.innerHTML=`<div class="report-block">
         <div class="rb-head">Потери БПЛА — ${f.length} борт(ов)</div>
         ${f.map(x=>`<div class="rb-line" style="font-family:'Courier New',monospace;white-space:pre">${esc(fmtLine(x))}</div>`).join('')}
+        ${woBtn}
       </div>`;
     }
 

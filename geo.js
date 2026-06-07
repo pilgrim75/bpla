@@ -42,6 +42,8 @@ function geoStripFromSync(data){
   if(data && typeof data==='object'){
     delete data.geo_points_db; delete data.geo; delete data.geoDB; delete data.geo_points;
     delete data.geo_aliases; delete data.geoAliases;
+    // подсказки/настройки документа на списание (writeoff_*) — только локально, в облако не уходят
+    Object.keys(data).forEach(k=>{ if(k.indexOf('writeoff')===0)delete data[k]; });
   }
   return data;
 }

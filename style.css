@@ -378,6 +378,50 @@ label{
 .dp-day.other-month{color:var(--text3)}
 .dp-day.empty{cursor:default}.dp-day.empty:hover{background:none;border-color:transparent}
 
+/* ============ ДОКУМЕНТ НА СПИСАНИЕ (writeoff) ============ */
+.wo-modal{
+  width:560px;max-width:94vw;max-height:90vh;overflow-y:auto;
+  background:var(--card);border:1px solid var(--border2);padding:18px 20px;
+}
+.wo-title{font-size:15px;font-weight:700;color:var(--accent);margin-bottom:4px}
+.wo-period{font-size:11px;color:var(--muted);margin-bottom:12px}
+.wo-sec{
+  font-size:11px;font-weight:700;color:var(--accent2);text-transform:uppercase;
+  letter-spacing:.8px;margin:14px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border);
+}
+.wo-note{font-size:11px;color:var(--muted);margin-bottom:8px}
+.wo-field{margin-bottom:8px}
+.wo-hintwrap{position:relative}
+.wo-inp{width:100%}
+.wo-hintlist{
+  position:absolute;z-index:10001;left:0;right:0;top:calc(100% + 2px);
+  background:var(--card2);border:1px solid var(--border2);border-radius:var(--radius);
+  box-shadow:0 8px 24px rgba(0,0,0,.45);display:none;max-height:200px;overflow-y:auto;
+}
+.wo-hint{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:6px 10px;font-size:13px;color:var(--text);cursor:pointer;
+  border-bottom:1px solid var(--border);
+}
+.wo-hint:last-child{border-bottom:none}
+.wo-hint:hover{background:var(--accent-dim);color:var(--accent)}
+.wo-hint>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wo-hintdel{
+  flex-shrink:0;width:18px;height:18px;line-height:16px;text-align:center;
+  color:var(--muted);font-style:normal;font-size:14px;cursor:pointer;border-radius:3px;
+}
+.wo-hintdel:hover{color:var(--red);background:var(--red-dim)}
+.wo-drone,.wo-crew,.wo-signer{
+  border:1px solid var(--border2);border-radius:var(--radius);
+  padding:10px 12px;margin-bottom:10px;background:var(--bg2);
+}
+.wo-dronehead{font-size:12px;color:var(--text2);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.wo-dronehead b{color:var(--accent2)}
+.wo-signerdel{font-size:11px;color:var(--muted);cursor:pointer}
+.wo-signerdel:hover{color:var(--red)}
+.wo-actions{display:flex;gap:8px;margin-top:16px}
+.wo-status{font-size:12px;margin-top:10px;min-height:16px}
+
 /* ============ SCROLLBAR ============ */
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-track{background:var(--bg)}
