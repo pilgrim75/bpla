@@ -212,7 +212,9 @@ function switchRole(r){
     pilotName=state.squads[idx]?state.squads[idx].pilot:'?';
     label='Пилот '+pilotName;
   }
-  document.getElementById('roleBadge').innerHTML='<b>'+label+'</b>';
+  // Для роли пилота — золотые щиты рядом с именем в topbar (под высоту заглавных букв)
+  const tbShields=r.startsWith('pilot_')&&pilotName&&pilotName!=='?'?goldShieldsHtml(pilotName,{inline:true}):'';
+  document.getElementById('roleBadge').innerHTML='<b>'+label+'</b>'+tbShields;
   const canEdit=r==='cmd'||r==='tech'||r==='admin';
   document.getElementById('addDroneBtn').style.display=canEdit?'':'none';
   document.getElementById('transferBtnArea').style.display=canEdit?'':'none';
@@ -872,7 +874,141 @@ function showMedalModal(pilot, idx){
   ov.querySelector('#medal-close').onclick=()=>ov.remove();
 }
 
+// ===== АБСОЛЮТНЫЕ РЕКОРДЫ (золотые щиты) =====
+// Отдельная система поверх медалей: рекорды ЗА ВСЁ ВРЕМЯ по правилу 1%.
+// Не хранятся в localStorage — пересчитываются из state.flights при каждом renderDashboard().
+const ABS_RECORDS = {
+  longshot:  {icon:'🚀', name:'Дальнобойщик'},
+  workhorse: {icon:'⚡', name:'Трудяга'},
+  bestday:   {icon:'🌟', name:'Лучший день'},
+  sniper:    {icon:'🥇', name:'Снайпер'},
+  thrifty:   {icon:'🛡️', name:'Бережливый'},
+  veteran:   {icon:'💎', name:'Ветеран'},
+};
+
+// Победитель абсолютного рекорда по ПРАВИЛУ 1%.
+// cands: [{pilot,value,...}] (value=null → пилот не участвует).
+// higherBetter — больше значение = лучше. mode: 'ratio' (отрыв >1% относительно) | 'pct' (>1 п.п.).
+// 0 или 1 активный пилот → щит присуждается всегда; приблизились в пределах 1% → щит исчезает.
+function _absWinner(cands, higherBetter, mode){
+  const c=cands.filter(x=>x.value!=null);
+  if(!c.length) return null;
+  c.sort((a,b)=> higherBetter ? b.value-a.value : a.value-b.value);
+  const best=c[0];
+  if(higherBetter && mode==='ratio' && !(best.value>0)) return null; // нулевой числовой максимум не награждаем
+  if(c.length===1) return best;                                       // 0/1 активный — всегда
+  const second=c[1];
+  if(best.value===second.value) return null;                         // ничья
+  const dominates = mode==='pct'
+    ? Math.abs(best.value-second.value) > 1                          // >1 процентного пункта
+    : (higherBetter ? best.value > second.value*1.01 : best.value < second.value*0.99); // >1% относительно
+  return dominates ? best : null;
+}
+
+// Максимум вылетов за любую неделю (скользящее окно 7 дней) для набора вылетов
+function maxFlightsInWeek(fs){
+  const counts={}; fs.forEach(f=>{ if(f.date)counts[f.date]=(counts[f.date]||0)+1; });
+  const uniq=Object.keys(counts);
+  if(!uniq.length) return 0;
+  const toMs=d=>new Date(d+'T00:00:00').getTime();
+  let best=0;
+  uniq.forEach(d0=>{
+    const start=toMs(d0), end=start+6*864e5;
+    let c=0;
+    uniq.forEach(d=>{ const t=toMs(d); if(t>=start&&t<=end)c+=counts[d]; });
+    if(c>best)best=c;
+  });
+  return best;
+}
+
+// Пересчитывает все абсолютные рекорды из state.flights.
+// → { recordId: {pilot, desc} } (только для рекордов с действующим держателем).
+function computeAbsoluteRecords(){
+  const flights=state.flights||[];
+  const pilots=[...new Set(state.squads.map(s=>s.pilot).concat(flights.map(f=>f.pilot)).filter(Boolean))];
+  const at=p=>flights.filter(f=>f.pilot===p);
+  const res={};
+
+  // 🚀 Дальнобойщик — самый дальний одиночный вылет за всё время
+  {
+    const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null).sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
+    const r=_absWinner(c,true,'ratio');
+    if(r) res.longshot={pilot:r.pilot, desc:`Самый дальний одиночный вылет за всё время: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
+  }
+  // ⚡ Трудяга — максимум вылетов за любую одну неделю за всё время
+  {
+    const c=pilots.map(p=>{ const v=maxFlightsInWeek(at(p)); return {pilot:p, value:v||null}; });
+    const r=_absWinner(c,true,'ratio');
+    if(r) res.workhorse={pilot:r.pilot, desc:`Максимум вылетов за одну неделю: ${r.value}.`};
+  }
+  // 🌟 Лучший день — максимум вылетов за один календарный день за всё время
+  {
+    const dayMax=fs=>{ const by={}; fs.forEach(x=>{by[x.date]=(by[x.date]||0)+1;}); let b=0,d=null; for(const k in by)if(by[k]>b){b=by[k];d=k;} return {v:b,d}; };
+    const c=pilots.map(p=>{ const x=dayMax(at(p)); return {pilot:p, value:x.v||null, _d:x.d}; });
+    const r=_absWinner(c,true,'ratio');
+    if(r) res.bestday={pilot:r.pilot, desc:`Максимум вылетов за один день: ${r.value}${r._d?` (${medalFmtDate(r._d)})`:''}.`};
+  }
+  // 🥇 Снайпер — лучший % выполнения за всё время, мин. 20 вылетов
+  {
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=20?a.filter(x=>x.result==='yes').length/a.length*100:null}; });
+    const r=_absWinner(c,true,'pct');
+    if(r){ const a=at(r.pilot); const done=a.filter(x=>x.result==='yes').length; res.sniper={pilot:r.pilot, desc:`Лучший % выполнения за всё время: ${Math.round(r.value)}% (${done} из ${a.length}).`}; }
+  }
+  // 🛡️ Бережливый — минимальный % потерь за всё время, мин. 20 вылетов
+  {
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=20?a.filter(x=>x.returned==='no').length/a.length*100:null}; });
+    const r=_absWinner(c,false,'pct');
+    if(r){ const a=at(r.pilot); const lost=a.filter(x=>x.returned==='no').length; res.thrifty={pilot:r.pilot, desc:`Минимальный % потерь за всё время: ${Math.round(r.value)}% (${lost} из ${a.length}).`}; }
+  }
+  // 💎 Ветеран — наибольшее общее число вылетов за всё время
+  {
+    const c=pilots.map(p=>({pilot:p, value:at(p).length||null}));
+    const r=_absWinner(c,true,'ratio');
+    if(r) res.veteran={pilot:r.pilot, desc:`Наибольшее общее число вылетов за всё время: ${r.value}.`};
+  }
+  return res;
+}
+
+// Текущая карта рекордов (пересчёт + кэш для модалки)
+function getAbsRecords(){ return (window._absRecords=computeAbsoluteRecords()); }
+
+// Список золотых щитов пилота: [{id,icon,name,desc}] в порядке каталога
+function pilotGoldShields(pilot){
+  const recs=getAbsRecords();
+  return Object.keys(ABS_RECORDS).filter(id=>recs[id]&&recs[id].pilot===pilot)
+    .map(id=>({id, icon:ABS_RECORDS[id].icon, name:ABS_RECORDS[id].name, desc:recs[id].desc}));
+}
+
+// HTML золотых щитов пилота. opts.inline — компактный вариант (под высоту заглавных букв имени).
+function goldShieldsHtml(pilot, opts){
+  opts=opts||{};
+  const recs=pilotGoldShields(pilot);
+  if(!recs.length) return '';
+  const pj=esc(pilot).replace(/'/g,"\\'");
+  const inner=recs.map(r=>
+    `<span class="gold-shield" title="${esc(r.name)} — абсолютный рекорд" onclick="event.stopPropagation();showAbsRecordModal('${pj}','${r.id}')"><span class="gs-emoji">${r.icon}</span></span>`
+  ).join('');
+  return `<span class="gold-row${opts.inline?' gold-inline':''}">${inner}</span>`;
+}
+
+// Модалка золотого щита
+function showAbsRecordModal(pilot, id){
+  const recs=window._absRecords||computeAbsoluteRecords();
+  const r=recs[id], c=ABS_RECORDS[id];
+  if(!r||!c) return;
+  const ov=modalOverlay(`<div class="medal-modal abs-modal">
+    <div class="abs-modal-shield"><span class="gold-shield" style="font-size:46px"><span class="gs-emoji">${c.icon}</span></span></div>
+    <div class="medal-modal-name" style="color:#D99A00">${esc(c.name)}</div>
+    <div class="medal-modal-pilot">Абсолютный рекорд · Пилот ${esc(pilot)}</div>
+    <div class="medal-modal-desc">${esc(r.desc)}</div>
+    <button class="btn btn-sm" id="abs-close">Закрыть</button>
+  </div>`);
+  ov.addEventListener('click',e=>{ if(e.target===ov) ov.remove(); });
+  ov.querySelector('#abs-close').onclick=()=>ov.remove();
+}
+
 function renderDashboard(){
+  window._absRecords=computeAbsoluteRecords(); // пересчёт абсолютных рекордов при каждом рендере
   const now=new Date();
   const today=now.toISOString().slice(0,10);
   const yest=new Date(now-864e5).toISOString().slice(0,10);
@@ -929,10 +1065,15 @@ function renderDashboard(){
     const sqLossWeek=sqFlightsWeek.filter(x=>x.returned==='no').length;
     const lastFlight=[...fAll].filter(x=>x.pilot===sq.pilot).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
     const drones=sq.drones.filter(d=>d.qty!==0);
+    // Рядом с именем — только золотые щиты (под высоту заглавных букв);
+    // внизу карточки — только обычные медали (10 дней), щиты уже показаны у имени
+    const goldName=goldShieldsHtml(sq.pilot,{inline:true});
+    const medalsBottom=medalsHtml(sq.pilot);
+    const achRow=medalsBottom?`<div class="crew-achievements">${medalsBottom}</div>`:'';
     return `<div class="crew-item">
       <div class="crew-header">
         <div>
-          <div class="crew-name">Пилот ${sq.pilot}${medalsHtml(sq.pilot)}</div>
+          <div class="crew-name">Пилот ${sq.pilot}${goldName}</div>
           <div class="crew-sub">Последний вылет: ${lastFlight?lastFlight.date+' '+lastFlight.time:'нет данных'}</div>
         </div>
         <div class="crew-flights">${sqFlightsToday.length?sqFlightsToday.length+' сегодня':'нет вылетов'}</div>
@@ -942,6 +1083,7 @@ function renderDashboard(){
         ${drones.length===0?'<div class="crew-tag" style="color:var(--color-text-secondary)">нет дронов</div>':''}
       </div>
       <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px">За неделю: ${sqFlightsWeek.length} вылетов${sqLossWeek?` · <span style="color:var(--color-text-danger)">потери: ${sqLossWeek}</span>`:''}</div>
+      ${achRow}
     </div>`;
   }).join('')||'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет расчётов</div>';
 

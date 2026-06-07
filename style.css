@@ -592,6 +592,28 @@ body.theme-field{
 .medal-modal-pilot{font-size:12px;color:var(--color-text-secondary);margin-bottom:14px}
 .medal-modal-desc{font-size:13px;color:var(--color-text-primary);line-height:1.5;margin-bottom:18px}
 
+/* ===== Золотые щиты (абсолютные рекорды) ===== */
+.gold-row{display:inline-flex;gap:3px;align-items:center;vertical-align:middle}
+.gold-row.gold-inline{margin-left:5px;gap:2px}
+.crew-achievements{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:8px}
+.crew-achievements .gold-row,.crew-achievements .medal-row{margin-left:0}
+/* щит: эмодзи поверх золотого щита (#FFD700), размер через font-size */
+.gold-shield{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:1.25em;height:1.4em;font-size:14px;cursor:pointer;
+  background:linear-gradient(155deg,#FFF3AE 0%,#FFD700 45%,#D99A00 100%);
+  clip-path:polygon(50% 0%,100% 16%,100% 56%,50% 100%,0% 56%,0% 16%);
+  box-shadow:0 1px 2px rgba(0,0,0,.45);transition:transform .1s ease;
+}
+.gold-shield:hover{transform:scale(1.15)}
+.gold-shield .gs-emoji{font-size:0.8em;line-height:1}
+/* инлайн рядом с именем — высота под заглавные буквы (em от шрифта имени) */
+.gold-inline .gold-shield{width:0.85em;height:0.98em;font-size:1em}
+.gold-inline .gold-shield .gs-emoji{font-size:0.6em}
+.abs-modal-shield{display:flex;justify-content:center;margin-bottom:10px}
+.abs-modal-shield .gold-shield{cursor:default}
+.abs-modal-shield .gold-shield:hover{transform:none}
+
 /* Flight items (Dashboard) */
 .flight-item{padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;gap:10px}
 .flight-item:last-child{border-bottom:none}
