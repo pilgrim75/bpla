@@ -8,7 +8,7 @@ function fillReportFilters(){
   if(pilotSel){
     const curPilot=pilotSel.value;
     const pilots=[...new Set(state.flights.map(x=>x.pilot).filter(Boolean))].sort();
-    pilotSel.innerHTML='<option value="">Все пилоты</option>'+pilots.map(p=>`<option value="${p}">${p}</option>`).join('');
+    pilotSel.innerHTML='<option value="">Все пилоты</option>'+pilots.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join('');
     if(curPilot)[...pilotSel.options].forEach(o=>{if(o.value===curPilot)o.selected=true;});
   }
   renderDroneFilter();
@@ -137,6 +137,7 @@ function refreshReportOutput(){
   else if(type==='summary') reportSummary(out,f);
   else if(type==='detailed') buildDetailedReport(f,filterLabel,out);
   else if(type==='issued') reportIssued(out,from,to,filterPilot,filterDrones);
+  else if(type==='verbal') reportVerbal(out);
 }
 
 function reportStock(out){
@@ -604,5 +605,294 @@ function printReport(){
   win.document.close();
   win.focus();
   win.onafterprint = function(){ win.close(); };
+  win.print();
+}
+
+// ===== УСТНЫЙ ДОКЛАД (AI, claude-sonnet-4-6) =====
+// Данные анонимизируются перед отправкой в Claude API и восстанавливаются в ответе.
+// Ничего не сохраняется и не уходит в Google Sheets.
+const VR_PROMPT = 'Составь устный военный доклад на русском языке на основе данных о боевых вылетах подразделения за указанный период. Стиль — чёткий, лаконичный, военный. Структура: общие итоги, действия по расчётам, потери, выводы. Не добавляй данные которых нет в исходных данных.';
+
+// Панель устного доклада. Состояние (период, текст, даты) сохраняется в window._vr*,
+// чтобы не теряться при перерисовке отчёта.
+function reportVerbal(out){
+  window._reportText=null;
+  const per=window._vrPeriod||'week';
+  const txt=window._vrText||'';
+  out.innerHTML=`<div class="report-block">
+    <div class="rb-head">Устный доклад (AI)</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Перед отправкой в Claude API имена расчётов, точки, борта и грузы заменяются условными номерами и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт».</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <select id="vrPeriod" onchange="vrPeriodChange()" style="width:auto">
+        <option value="week">Неделя</option>
+        <option value="month">Месяц</option>
+        <option value="year">Год</option>
+        <option value="custom">Произвольный</option>
+      </select>
+      <span id="vrCustomHint" style="display:${per==='custom'?'inline':'none'};font-size:11px;color:var(--muted)">↑ используются поля «С даты» / «По дату» вверху</span>
+      <button class="btn btn-primary" id="vrGenBtn" onclick="vrGenerate()">Сформировать доклад</button>
+      <button class="btn btn-sm" id="vrTplBtn" onclick="vrTemplate()" title="Сформировать без обращения к API">Шаблонный доклад</button>
+      <span id="vrStatus" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <div id="vrResultWrap" style="display:${txt?'block':'none'}">
+      <textarea id="vrResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-sm" onclick="vrCopy()">Копировать</button>
+        <button class="btn btn-sm" onclick="vrPrint()">Печать</button>
+      </div>
+    </div>
+  </div>`;
+  const sel=document.getElementById('vrPeriod'); if(sel) sel.value=per;
+}
+
+function vrPeriodChange(){
+  const per=document.getElementById('vrPeriod').value;
+  window._vrPeriod=per;
+  const h=document.getElementById('vrCustomHint');
+  if(h) h.style.display=per==='custom'?'inline':'none';
+}
+
+// Диапазон дат по выбранному периоду (скользящие окна 7/30/365 дней либо произвольный)
+function vrPeriodRange(){
+  const per=(document.getElementById('vrPeriod')||{}).value||'week';
+  const today=todayISO();
+  const fd=iso=>iso?iso.split('-').reverse().join('.'):'…';
+  if(per==='custom'){
+    // Произвольный период берёт общие поля дат сверху страницы отчётов (repFrom/repTo)
+    const from=(document.getElementById('repFrom')||{}).value||'';
+    const to=(document.getElementById('repTo')||{}).value||today;
+    return {from,to,label:'за период '+fd(from)+' — '+fd(to)};
+  }
+  const days=per==='week'?7:per==='month'?30:365;
+  return {from:localISO(new Date(Date.now()-(days-1)*864e5)), to:today,
+    label:per==='week'?'за неделю':per==='month'?'за месяц':'за год'};
+}
+
+// Таблица замен для одной категории: реальное значение → «Метка N» (порядок по алфавиту).
+// revPrefix добавляется к реальному значению при обратной замене (для пилотов — «пилот »).
+function vrIndexMap(values,label,revPrefix){
+  const sorted=[...new Set(values.filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),'ru'));
+  const toTok=new Map(), rev={};
+  sorted.forEach((v,i)=>{ toTok.set(v,label+' '+(i+1)); rev[i+1]=(revPrefix||'')+v; });
+  return {sorted,toTok,rev};
+}
+
+// Построение анонимизированного текста-данных + таблиц замен.
+// НП из примечаний в API НЕ отправляются (только агрегаты) — анонимны по построению.
+function vrBuildPayload(flights,label){
+  const P=vrIndexMap(flights.map(f=>f.pilot),'Расчёт','пилот ');
+  const D=vrIndexMap(flights.map(f=>f.drone),'Борт типа');
+  const T=vrIndexMap(flights.map(f=>f.target),'Точка');
+  const A=vrIndexMap(flights.map(f=>f.ammo),'Груз');
+  const maps={P,D,T,A};
+  const isDeliv=a=>(typeof isDelivery==='function')?isDelivery(a):/доставк|провизи|груз/i.test(a||'');
+  const pct=(a,b)=>b?Math.round(a/b*100)+'%':'—';
+  const total=flights.length;
+  const done=flights.filter(f=>f.result==='yes').length;
+  const lost=flights.filter(f=>f.returned==='no').length;
+  const mining=flights.filter(f=>!isDeliv(f.ammo)).length;
+  const delivery=flights.filter(f=>isDeliv(f.ammo)).length;
+  const L=[];
+  L.push('Данные о боевых вылетах подразделения '+label+'. Обозначения «Расчёт N», «Борт типа N», «Точка N», «Груз N» используй в докладе дословно, не переименовывай.');
+  L.push('');
+  L.push('ОБЩИЕ ИТОГИ:');
+  L.push('- Всего вылетов: '+total+'.');
+  L.push('- Задача выполнена: '+done+' ('+pct(done,total)+').');
+  L.push('- Потеряно бортов: '+lost+' ('+pct(lost,total)+').');
+  L.push('- Минирование: '+mining+'; доставка: '+delivery+'.');
+  L.push('');
+  L.push('ПО РАСЧЁТАМ:');
+  P.sorted.forEach(p=>{
+    const fs=flights.filter(f=>f.pilot===p);
+    const d=fs.filter(f=>f.result==='yes').length;
+    const l=fs.filter(f=>f.returned==='no').length;
+    const m=fs.filter(f=>!isDeliv(f.ammo)).length;
+    const dl=fs.filter(f=>isDeliv(f.ammo)).length;
+    L.push('- '+P.toTok.get(p)+': вылетов '+fs.length+', выполнено '+d+' ('+pct(d,fs.length)+'), потерь '+l+'; минирование '+m+', доставка '+dl+'.');
+  });
+  const lossBy={};
+  flights.filter(f=>f.returned==='no'&&f.drone).forEach(f=>{ lossBy[f.drone]=(lossBy[f.drone]||0)+1; });
+  L.push('');
+  L.push('ПОТЕРИ ПО ТИПАМ БОРТОВ:');
+  const le=Object.entries(lossBy).sort((a,b)=>b[1]-a[1]);
+  if(le.length) le.forEach(([dr,c])=>L.push('- '+D.toTok.get(dr)+': '+c+'.'));
+  else L.push('- потерь нет.');
+  const ammoBy={};
+  flights.filter(f=>f.ammo).forEach(f=>{ ammoBy[f.ammo]=(ammoBy[f.ammo]||0)+1; });
+  const ae=Object.entries(ammoBy).sort((a,b)=>b[1]-a[1]);
+  if(ae.length){
+    L.push('');
+    L.push('ПРИМЕНЁННЫЕ ГРУЗЫ:');
+    ae.forEach(([am,c])=>L.push('- '+A.toTok.get(am)+': '+c+'.'));
+  }
+  const tgtBy={};
+  flights.filter(f=>f.target).forEach(f=>{ tgtBy[f.target]=(tgtBy[f.target]||0)+1; });
+  const te=Object.entries(tgtBy).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  if(te.length){
+    L.push('');
+    L.push('РАБОТА ПО ТОЧКАМ (по убыванию числа вылетов):');
+    te.forEach(([tg,c])=>L.push('- '+T.toTok.get(tg)+': '+c+'.'));
+  }
+  const hasGeo=flights.some(f=>f.distance_km!=null||f.range_km!=null);
+  if(hasGeo){
+    const km=flights.reduce((s,f)=>s+(f.distance_km||0),0);
+    const rng=flights.filter(f=>f.range_km!=null);
+    const avg=rng.length?rng.reduce((s,f)=>s+f.range_km,0)/rng.length:null;
+    L.push('');
+    L.push('ГЕОДАННЫЕ:');
+    if(km>0) L.push('- Суммарный налёт: '+geoRound2(km)+' км.');
+    if(avg!=null) L.push('- Средняя дальность вылета: '+geoRound2(avg)+' км.');
+  }
+  return {payload:L.join('\n'), maps};
+}
+
+// Обратная замена токенов на реальные данные (с учётом склонений и ё/е)
+function vrDeanon(text,M){
+  const sub=(re,rev)=>{ text=text.replace(re,(m,n)=> (rev[n]!==undefined?rev[n]:m)); };
+  sub(/Расч[её]т[а-яё]*\s+(\d+)/gi, M.P.rev);
+  sub(/Борт[а-яё]*\s+типа\s+(\d+)/gi, M.D.rev);
+  sub(/Точк[а-яё]*\s+(\d+)/gi, M.T.rev);
+  sub(/Груз[а-яё]*\s+(\d+)/gi, M.A.rev);
+  return text;
+}
+
+function vrSetStatus(t,c){ const st=document.getElementById('vrStatus'); if(st){ st.textContent=t||''; st.style.color=c||'var(--muted)'; } }
+function vrFilterFlights(range){
+  return (state.flights||[]).filter(f=>f.pilot&&f.pilot!=='[ПЕРЕДАЧА]'&&(!range.from||f.date>=range.from)&&(!range.to||f.date<=range.to));
+}
+function vrShowText(txt){
+  window._vrText=txt;
+  const ta=document.getElementById('vrResult'), wrap=document.getElementById('vrResultWrap');
+  if(ta) ta.value=txt;
+  if(wrap) wrap.style.display='block';
+}
+
+// Шаблонный доклад без API — подстановка РЕАЛЬНЫХ данных (локально, анонимизация не нужна)
+function vrBuildTemplate(flights, range){
+  const fd=iso=>iso?iso.split('-').reverse().join('.'):'—';
+  if(!flights.length) return 'За выбранный период вылетов не зафиксировано.';
+  const pct=(a,b)=>b?Math.round(a/b*100):0;
+  const total=flights.length;
+  const done=flights.filter(f=>f.result==='yes').length;
+  const lost=flights.filter(f=>f.returned==='no').length;
+  const pilots=[...new Set(flights.map(f=>f.pilot).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'));
+  const dates=flights.map(f=>f.date).filter(Boolean).sort();
+  const dFrom=range.from||dates[0]||'';
+  const dTo=range.to||dates[dates.length-1]||'';
+  const L=[];
+  L.push(`За период с ${fd(dFrom)} по ${fd(dTo)} силами расчётов ${pilots.join(', ')} выполнено ${total} ${ruPlural(total,'боевой вылет','боевых вылета','боевых вылетов')}.`);
+  L.push('');
+  L.push(`Процент выполнения задач составил ${pct(done,total)}%.`);
+  L.push(`Потери техники: ${lost} ${ruPlural(lost,'единица','единицы','единиц')}.`);
+  L.push('');
+  L.push('По расчётам:');
+  pilots.forEach(p=>{
+    const fs=flights.filter(f=>f.pilot===p);
+    const d=fs.filter(f=>f.result==='yes').length;
+    const l=fs.filter(f=>f.returned==='no').length;
+    L.push(`Расчёт пилота ${p} — ${fs.length} ${ruPlural(fs.length,'вылет','вылета','вылетов')}, выполнено ${d}, потери ${l}.`);
+  });
+  const hasGeo=flights.some(f=>f.distance_km!=null||f.range_km!=null);
+  if(hasGeo){
+    const km=flights.reduce((s,f)=>s+(f.distance_km||0),0);
+    const rng=flights.filter(f=>f.range_km!=null);
+    const avg=rng.length?rng.reduce((s,f)=>s+f.range_km,0)/rng.length:null;
+    const far=rng.slice().sort((a,b)=>b.range_km-a.range_km)[0];
+    L.push('');
+    if(km>0) L.push(`Суммарный налёт составил ${geoRound2(km)} км.`);
+    if(avg!=null) L.push(`Средняя дальность вылета — ${geoRound2(avg)} км.`);
+    if(far) L.push(`Наибольшая дальность — ${far.range_km} км (пилот ${far.pilot}, ${fd(far.date)}).`);
+  }
+  if(lost>0){
+    // Группировка потерь по типу борта, столбиком с количеством (по убыванию)
+    const byDrone={};
+    flights.filter(f=>f.returned==='no').forEach(f=>{ const k=(f.drone||'').trim()||'борт не указан'; byDrone[k]=(byDrone[k]||0)+1; });
+    L.push('');
+    L.push('В ходе выполнения задач потеряно:');
+    Object.entries(byDrone).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ru'))
+      .forEach(([dr,c])=>L.push(`  - ${dr} — ${c} шт.`));
+  }
+  // Период без потерь — по всем данным («по настоящее время»), не только за выбранный период
+  const allLosses=(state.flights||[]).filter(f=>f.returned==='no'&&f.date).map(f=>f.date).sort();
+  L.push('');
+  if(allLosses.length){
+    const last=allLosses[allLosses.length-1];
+    const days=Math.max(0,Math.round((Date.now()-new Date(last+'T00:00:00').getTime())/864e5));
+    L.push(`Период без потерь с ${fd(last)} по настоящее время составляет ${days} ${ruPlural(days,'день','дня','дней')}.`);
+  } else {
+    L.push('Потери за всё время не зафиксированы.');
+  }
+  return L.join('\n');
+}
+
+// Явная кнопка «Шаблонный доклад» — без обращения к API
+function vrTemplate(){
+  const r=vrPeriodRange();
+  const flights=vrFilterFlights(r);
+  vrShowText(vrBuildTemplate(flights,r));
+  vrSetStatus(flights.length?'Шаблонный доклад сформирован (без API).':'За выбранный период вылетов нет.','var(--muted)');
+}
+
+// Основная кнопка: пробуем API (таймаут 10с) → при недоступности сети/таймауте автоматически шаблон
+async function vrGenerate(){
+  const r=vrPeriodRange();
+  const flights=vrFilterFlights(r);
+  if(!flights.length){ vrSetStatus('За выбранный период вылетов нет.','var(--amber)'); return; }
+  const apiKey=(localStorage.getItem('anthropicKey')||'').trim();
+  const btn=document.getElementById('vrGenBtn');
+  const fallback=(notice)=>{ vrShowText(vrBuildTemplate(flights,r)); vrSetStatus(notice,'var(--amber)'); };
+
+  // Нет ключа или нет сети — сразу шаблон, без попытки запроса
+  if(!apiKey||!apiKey.startsWith('sk-ant')){ fallback('API-ключ не задан — сформирован шаблонный доклад.'); return; }
+  if(!navigator.onLine){ fallback('Сеть недоступна — сформирован шаблонный доклад.'); return; }
+
+  const {payload,maps}=vrBuildPayload(flights,r.label);
+  if(btn) btn.disabled=true;
+  vrSetStatus('⏳ Формирую доклад…');
+  try{
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),10000); // таймаут 10с
+    let resp;
+    try{
+      resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:1000, system:VR_PROMPT, messages:[{role:'user',content:payload}] }),
+        signal:ctrl.signal
+      });
+    } finally { clearTimeout(tid); }
+    if(!resp.ok){ const err=await resp.json().catch(()=>({})); throw new Error('HTTP '+resp.status+': '+((err.error&&err.error.message)||resp.statusText)); }
+    const data=await resp.json();
+    let txt=(data.content||[]).map(i=>i.text||'').join('').trim();
+    if(!txt) throw new Error('пустой ответ API');
+    txt=vrDeanon(txt,maps);
+    vrShowText(txt);
+    vrSetStatus('✓ Готово','var(--green2)');
+  }catch(e){
+    // Сеть/таймаут → шаблон с уведомлением; прочие ошибки API — тоже шаблон, но с пометкой
+    const net = e.name==='AbortError' || /Failed to fetch|NetworkError|network|ERR_/i.test(e.message||'');
+    fallback(net ? 'Сеть недоступна — сформирован шаблонный доклад.'
+                 : 'API недоступен ('+e.message+') — сформирован шаблонный доклад.');
+  } finally { if(btn) btn.disabled=false; }
+}
+
+function vrCopy(){
+  const ta=document.getElementById('vrResult'); if(!ta) return;
+  window._vrText=ta.value; // сохраняем правки
+  navigator.clipboard.writeText(ta.value).then(()=>{
+    const b=document.querySelector('[onclick="vrCopy()"]');
+    if(b){ const o=b.textContent; b.textContent='✓ Скопировано'; setTimeout(()=>b.textContent=o,1500); }
+  }).catch(()=>{ ta.select(); document.execCommand('copy'); });
+}
+
+function vrPrint(){
+  const ta=document.getElementById('vrResult'); if(!ta) return;
+  window._vrText=ta.value;
+  const win=window.open('','_blank','width=800,height=600');
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Устный доклад</title>'
+    +'<style>body{font-family:Georgia,serif;font-size:14px;line-height:1.6;color:#000;background:#fff;padding:24px;white-space:pre-wrap}@media print{body{padding:12px}}</style>'
+    +'</head><body>'+esc(ta.value)+'</body></html>');
+  win.document.close(); win.focus();
+  win.onafterprint=function(){ win.close(); };
   win.print();
 }
