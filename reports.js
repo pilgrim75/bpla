@@ -12,6 +12,7 @@ function fillReportFilters(){
     if(curPilot)[...pilotSel.options].forEach(o=>{if(o.value===curPilot)o.selected=true;});
   }
   renderDroneFilter();
+  repToggleReportageOption();
 }
 
 // Список бортов, реально использованных в выбранном периоде (вылеты + перемещения)
@@ -138,6 +139,19 @@ function refreshReportOutput(){
   else if(type==='detailed') buildDetailedReport(f,filterLabel,out);
   else if(type==='issued') reportIssued(out,from,to,filterPilot,filterDrones);
   else if(type==='verbal') reportVerbal(out);
+  else if(type==='reportage') reportReportage(out);
+}
+
+// Показ опции «Репортаж недели» только для admin/cmd (вызывается при открытии вкладки отчётов и смене роли)
+function repToggleReportageOption(){
+  const opt=document.getElementById('repTypeReportage');
+  if(!opt) return;
+  const show=rpgIsPrivileged();
+  opt.style.display=show?'':'none';
+  if(!show){
+    const sel=document.getElementById('repType');
+    if(sel&&sel.value==='reportage'){ sel.value='stock'; }
+  }
 }
 
 function reportStock(out){
@@ -895,4 +909,222 @@ function vrPrint(){
   win.document.close(); win.focus();
   win.onafterprint=function(){ win.close(); };
   win.print();
+}
+
+// ===== РЕПОРТАЖ НЕДЕЛИ (AI, шутливый) — только admin/cmd =====
+// Шутливо-ироничный спортивный репортаж о достижениях пилотов за КАЛЕНДАРНУЮ
+// неделю (пн–вс) или месяц. В Claude API уходят только агрегаты + дельта
+// медалей/щитов за период; ИМЕНА ПИЛОТОВ анонимизируются («Пилот N») и
+// восстанавливаются в ответе. Ничего не сохраняется и не уходит в Google Sheets.
+// Состояние панели — в window._rpg* (период/текст), переживает перерисовку.
+// Модель: claude-sonnet-4-6 (текущая; запрошенный claude-sonnet-4-20250514
+// устарел и снимается 15.06.2026 — используем актуальный ID, как в остальном app).
+const RPG_PROMPT = 'Напиши шутливый и ироничный репортаж на русском языке о боевых достижениях пилотов FPV-дронов за указанный период. Стиль — как залихватский спортивный комментатор, с грубым юмором, иронией и лёгким матом (не перебарщивай). Можно намекать на двусмысленные ситуации. Упоминай соперничество между пилотами — кто кого обошёл, кто затаил обиду, кто готовится к реваншу. Уважение к пилотам при этом сохраняется — смеёмся вместе, не над ними. Используй эмодзи медалей в тексте: 🚀⚡🥇🛡️🔥💎📈🌟🎯 и золотой щит 🛡️. Упоминай конкретные цифры из данных. Длина — 150-250 слов. Не добавляй данные которых нет. Используй Telegram markdown для форматирования: *жирный текст* (одна звёздочка с каждой стороны, не две). Не используй ## заголовки — вместо них просто текст с эмодзи. Не используй ** двойные звёздочки.';
+
+function rpgRole(){ return (typeof state!=='undefined'&&state.role) || (window.authUser&&authUser.role) || ''; }
+function rpgIsPrivileged(){ const r=rpgRole(); return r==='admin'||r==='cmd'; }
+
+// Диапазон выбранного периода: календарная неделя (пн–вс) или календарный месяц.
+function rpgPeriodRange(){
+  const per=(document.getElementById('rpgPeriod')||{}).value||'week';
+  const fd=iso=>iso?iso.split('-').reverse().join('.'):'…';
+  const now=new Date();
+  let start,end;
+  if(per==='month'){
+    // Последний ЗАВЕРШЁННЫЙ календарный месяц (не текущий)
+    start=new Date(now.getFullYear(),now.getMonth()-1,1);
+    end=new Date(now.getFullYear(),now.getMonth(),0); // последний день предыдущего месяца
+  } else {
+    // Последняя ЗАВЕРШЁННАЯ неделя пн–вс. В понедельник прошлая неделя
+    // закончилась лишь вчера (вс) — берём позапрошлую (на неделю раньше).
+    const dow=(now.getDay()+6)%7; // 0=пн
+    const curMon=new Date(now.getFullYear(),now.getMonth(),now.getDate()-dow); // пн текущей недели
+    const backWeeks=dow===0?2:1;
+    start=new Date(curMon.getFullYear(),curMon.getMonth(),curMon.getDate()-7*backWeeks);
+    end=new Date(start.getFullYear(),start.getMonth(),start.getDate()+6); // вс той недели
+  }
+  const from=localISO(start), to=localISO(end);
+  return {from,to,startMs:start.getTime(),endMs:end.getTime(),
+    label:(per==='month'?'за месяц ':'за неделю ')+fd(from)+'–'+fd(to)};
+}
+
+// Снимок медалей и золотых щитов КАЖДОГО пилота по состоянию на момент asOfMs.
+// Переиспользует штатный движок: временно подменяет state.flights (только вылеты
+// ≤ даты среза) и Date.now (movable "сегодня" для скользящих окон медалей), всё в
+// try/finally. Функции медалей/рекордов синхронны и только читают данные —
+// глобальные кэши (window._absRecords/_pilotMedals) здесь НЕ затрагиваются.
+function rpgSnapshotAt(asOfMs, pilots){
+  const realFlights=state.flights, realNow=Date.now;
+  const cut=localISO(new Date(asOfMs));
+  const medals={}, shields={};
+  try{
+    state.flights=(realFlights||[]).filter(f=>f.date && f.date<=cut);
+    Date.now=()=>asOfMs;
+    pilots.forEach(p=>{ medals[p]=new Set(calcPilotMedals(p).map(m=>m.id)); });
+    const sh=computeAbsoluteRecords(); // {id:{pilot,desc}}
+    Object.keys(sh).forEach(id=>{ shields[id]=sh[id].pilot; });
+  } finally {
+    state.flights=realFlights; Date.now=realNow;
+  }
+  return {medals,shields};
+}
+
+// Сбор данных периода + дельты медалей/щитов; анонимизация имён пилотов → «Пилот N».
+function rpgBuildPayload(range){
+  const flights=state.flights||[];
+  const allPilots=[...new Set(state.squads.map(s=>s.pilot).concat(flights.map(f=>f.pilot)).filter(Boolean))];
+  const periodF=flights.filter(f=>f.pilot&&f.pilot!=='[ПЕРЕДАЧА]'&&f.date>=range.from&&f.date<=range.to);
+  const P=vrIndexMap(allPilots,'Пилот','');
+  const maps={P};
+  const tok=p=>P.toTok.get(p)||p;
+  const medName=id=>{ const m=MEDALS[id]; return m?(m.icon+' '+m.name):id; };
+  const shName =id=>{ const m=ABS_RECORDS[id]; return m?('🛡️ золотой щит «'+m.name+'» '+m.icon):('🛡️ '+id); };
+
+  // Дельта за период: до начала (срез на день раньше) → конец периода
+  const before=rpgSnapshotAt(range.startMs-1, allPilots);
+  const after =rpgSnapshotAt(range.endMs, allPilots);
+  const medalsGained={}, medalsLost={};
+  allPilots.forEach(p=>{
+    const b=before.medals[p]||new Set(), a=after.medals[p]||new Set();
+    const g=[...a].filter(id=>!b.has(id)), l=[...b].filter(id=>!a.has(id));
+    if(g.length) medalsGained[p]=g;
+    if(l.length) medalsLost[p]=l;
+  });
+  const shieldsGained=[], shieldsLost=[];
+  Object.keys(ABS_RECORDS).forEach(id=>{
+    const bp=before.shields[id], ap=after.shields[id];
+    if(ap&&ap!==bp) shieldsGained.push({pilot:ap,id});
+    if(bp&&bp!==ap) shieldsLost.push({pilot:bp,id});
+  });
+
+  const total=periodF.length;
+  const done=periodF.filter(f=>f.result==='yes').length;
+  const lost=periodF.filter(f=>f.returned==='no').length;
+  const hasGeo=periodF.some(f=>f.range_km!=null);
+
+  const L=[];
+  L.push('Данные для шутливого репортажа '+range.label+'. Имена пилотов заменены на «Пилот N» — используй эти обозначения дословно, не переименовывай.');
+  L.push('');
+  L.push('ОБЩЕЕ: всего вылетов '+total+', выполнено '+done+', потеряно бортов '+lost+'.');
+  L.push('');
+  L.push('ПО ПИЛОТАМ:');
+  const periodPilots=allPilots.filter(p=>periodF.some(f=>f.pilot===p));
+  if(periodPilots.length){
+    periodPilots.forEach(p=>{
+      const fs=periodF.filter(f=>f.pilot===p);
+      const d=fs.filter(f=>f.result==='yes').length;
+      const l=fs.filter(f=>f.returned==='no').length;
+      const byDay={}; fs.forEach(f=>{ if(f.date) byDay[f.date]=(byDay[f.date]||0)+1; });
+      const best=Math.max(0,...Object.values(byDay));
+      let line='- '+tok(p)+': вылетов '+fs.length+', выполнено '+d+', потеряно '+l+'; лучший день '+best;
+      if(hasGeo){ const far=fs.filter(f=>f.range_km!=null).sort((a,b)=>b.range_km-a.range_km)[0]; if(far) line+='; самый дальний вылет '+far.range_km+' км'; }
+      L.push(line+'.');
+    });
+  } else L.push('- вылетов за период не было.');
+
+  L.push('');
+  L.push('МЕДАЛИ ЗА ПЕРИОД:');
+  const gk=Object.keys(medalsGained), lk=Object.keys(medalsLost);
+  if(!gk.length&&!lk.length) L.push('- изменений нет.');
+  else {
+    gk.forEach(p=>L.push('- '+tok(p)+' получил: '+medalsGained[p].map(medName).join(', ')+'.'));
+    lk.forEach(p=>L.push('- '+tok(p)+' потерял: '+medalsLost[p].map(medName).join(', ')+'.'));
+  }
+
+  L.push('');
+  L.push('ЗОЛОТЫЕ ЩИТЫ (абсолютные рекорды) ЗА ПЕРИОД:');
+  if(!shieldsGained.length&&!shieldsLost.length) L.push('- щиты не меняли владельцев.');
+  else {
+    shieldsGained.forEach(s=>L.push('- '+tok(s.pilot)+' завоевал '+shName(s.id)+'.'));
+    shieldsLost.forEach(s=>L.push('- '+tok(s.pilot)+' лишился '+shName(s.id)+'.'));
+  }
+
+  return {payload:L.join('\n'), maps, total};
+}
+
+// Обратная замена «Пилот N» → реальное имя (терпимо к склонениям и ё/е)
+function rpgDeanon(text,M){
+  return text.replace(/Пилот[а-яё]*\s+(\d+)/gi,(m,n)=> (M.P.rev[n]!==undefined?M.P.rev[n]:m));
+}
+
+function rpgSetStatus(t,c){ const st=document.getElementById('rpgStatus'); if(st){ st.textContent=t||''; st.style.color=c||'var(--muted)'; } }
+function rpgShowText(txt){
+  window._rpgText=txt;
+  const ta=document.getElementById('rpgResult'), wrap=document.getElementById('rpgResultWrap');
+  if(ta) ta.value=txt;
+  if(wrap) wrap.style.display='block';
+}
+function rpgPeriodChange(){ window._rpgPeriod=document.getElementById('rpgPeriod').value; }
+
+function reportReportage(out){
+  window._reportText=null;
+  if(!rpgIsPrivileged()){
+    out.innerHTML='<div class="report-block"><div class="rb-head">Репортаж недели (AI)</div>'
+      +'<div class="rb-line" style="color:var(--amber)">Доступно только командиру и администратору (роли admin/cmd).</div></div>';
+    return;
+  }
+  const per=window._rpgPeriod||'week';
+  const txt=window._rpgText||'';
+  out.innerHTML=`<div class="report-block">
+    <div class="rb-head">Репортаж недели (AI) 🎙️</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Шутливый репортаж о достижениях пилотов. Перед отправкой в Claude API имена пилотов заменяются на «Пилот N» и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт».</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <select id="rpgPeriod" onchange="rpgPeriodChange()" style="width:auto">
+        <option value="week">Календарная неделя (пн–вс)</option>
+        <option value="month">Календарный месяц</option>
+      </select>
+      <button class="btn btn-primary" id="rpgGenBtn" onclick="rpgGenerate()">Сформировать репортаж</button>
+      <span id="rpgStatus" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <div id="rpgResultWrap" style="display:${txt?'block':'none'}">
+      <textarea id="rpgResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-sm" onclick="rpgCopyTelegram()">📋 Копировать для Telegram</button>
+      </div>
+    </div>
+  </div>`;
+  const sel=document.getElementById('rpgPeriod'); if(sel) sel.value=per;
+}
+
+async function rpgGenerate(){
+  if(!rpgIsPrivileged()){ rpgSetStatus('Доступно только admin/cmd.','var(--amber)'); return; }
+  const range=rpgPeriodRange();
+  const {payload,maps,total}=rpgBuildPayload(range);
+  if(!total){ rpgSetStatus('За выбранный период вылетов нет.','var(--amber)'); return; }
+  const apiKey=(localStorage.getItem('anthropicKey')||'').trim();
+  if(!apiKey||!apiKey.startsWith('sk-ant')){ rpgSetStatus('API-ключ не задан (вкладка «Импорт»).','var(--amber)'); return; }
+  if(!navigator.onLine){ rpgSetStatus('Нет сети — репортаж формируется только через API.','var(--amber)'); return; }
+  const btn=document.getElementById('rpgGenBtn');
+  if(btn) btn.disabled=true;
+  rpgSetStatus('⏳ Пишу репортаж…');
+  try{
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),20000);
+    let resp;
+    try{
+      resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:1000, system:RPG_PROMPT, messages:[{role:'user',content:payload}] }),
+        signal:ctrl.signal
+      });
+    } finally { clearTimeout(tid); }
+    if(!resp.ok){ const err=await resp.json().catch(()=>({})); throw new Error('HTTP '+resp.status+': '+((err.error&&err.error.message)||resp.statusText)); }
+    const data=await resp.json();
+    let txt=(data.content||[]).map(i=>i.text||'').join('').trim();
+    if(!txt) throw new Error('пустой ответ API');
+    txt=rpgDeanon(txt,maps);
+    rpgShowText(txt);
+    rpgSetStatus('✓ Готово','var(--green2)');
+  }catch(e){
+    const net = e.name==='AbortError' || /Failed to fetch|NetworkError|network|ERR_/i.test(e.message||'');
+    rpgSetStatus(net?'Сеть недоступна — попробуйте ещё раз.':'Ошибка API: '+e.message,'var(--red)');
+  } finally { if(btn) btn.disabled=false; }
+}
+
+function rpgCopyTelegram(){
+  const ta=document.getElementById('rpgResult'); if(!ta) return;
+  window._rpgText=ta.value; // сохраняем правки
+  const done=()=>{ const b=document.querySelector('[onclick="rpgCopyTelegram()"]'); if(b){ const o=b.textContent; b.textContent='✓ Скопировано!'; setTimeout(()=>b.textContent=o,2000); } };
+  navigator.clipboard.writeText(ta.value).then(done).catch(()=>{ ta.select(); document.execCommand('copy'); done(); });
 }
