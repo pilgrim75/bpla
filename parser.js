@@ -88,25 +88,25 @@ function renderParsedCards(items){
   document.getElementById('parsedCards').innerHTML=items.map((x,i)=>`
     <div class="card" style="margin-bottom:8px" id="pcard-${i}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:12px;font-weight:700;color:var(--muted)">Вылет ${x.flightnum||i+1} — ${x.pilot||'?'} · ${x.date||''} ${x.time||''}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--muted)">Вылет ${esc(x.flightnum||i+1)} — ${esc(x.pilot||'?')} · ${esc(x.date||'')} ${esc(x.time||'')}</div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-success btn-sm" id="pbtn-save-${i}" onclick="confirmParsed(${i})">✓ Сохранить</button>
           <button class="btn btn-sm" style="color:var(--muted)" onclick="hideCard(${i})">Скрыть</button>
         </div>
       </div>
-      ${x._src?`<div id="psrc-${i}" style="font-size:11px;color:var(--muted);background:var(--bg2);border:1px solid var(--border);padding:5px 8px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap">${x._src}</div>`:''}
+      ${x._src?`<div id="psrc-${i}" style="font-size:11px;color:var(--muted);background:var(--bg2);border:1px solid var(--border);padding:5px 8px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap">${esc(x._src)}</div>`:''}
       <div class="form-row cols3">
-        <div><label>Дата</label><input id="p${i}-date" type="date" value="${x.date}"></div>
-        <div><label>Время</label><input id="p${i}-time" type="time" value="${x.time}"></div>
-        <div><label>Номер вылета</label><input id="p${i}-flightnum" type="number" min="1" value="${x.flightnum||''}"></div>
+        <div><label>Дата</label><input id="p${i}-date" type="date" value="${esc(x.date)}"></div>
+        <div><label>Время</label><input id="p${i}-time" type="time" value="${esc(x.time)}"></div>
+        <div><label>Номер вылета</label><input id="p${i}-flightnum" type="number" min="1" value="${esc(x.flightnum||'')}"></div>
       </div>
       <div class="form-row cols3">
-        <div><label>Пилот</label><input id="p${i}-pilot" value="${x.pilot||''}"></div>
-        <div><label>Точка</label><input id="p${i}-target" value="${x.target||''}"></div>
-        <div><label>Боеприпас / груз</label><input id="p${i}-ammo" value="${x.ammo||''}"></div>
+        <div><label>Пилот</label><input id="p${i}-pilot" value="${esc(x.pilot||'')}"></div>
+        <div><label>Точка</label><input id="p${i}-target" value="${esc(x.target||'')}"></div>
+        <div><label>Боеприпас / груз</label><input id="p${i}-ammo" value="${esc(x.ammo||'')}"></div>
       </div>
       <div class="form-row cols3">
-        <div><label>БПЛА</label><input id="p${i}-drone" value="${x.drone||''}"></div>
+        <div><label>БПЛА</label><input id="p${i}-drone" value="${esc(x.drone||'')}"></div>
         <div><label>Задача</label>
           <select id="p${i}-result"><option value="yes" ${x.result==='yes'?'selected':''}>Выполнена</option><option value="no" ${x.result==='no'?'selected':''}>Не выполнена</option></select>
         </div>
@@ -114,7 +114,7 @@ function renderParsedCards(items){
           <select id="p${i}-returned"><option value="yes" ${x.returned==='yes'?'selected':''}>Вернул</option><option value="no" ${x.returned==='no'?'selected':''}>Потерян</option></select>
         </div>
       </div>
-      <div><label>Примечание</label><input id="p${i}-note" value="${x.note||''}"></div>
+      <div><label>Примечание</label><input id="p${i}-note" value="${esc(x.note||'')}"></div>
     </div>`).join('');
 }
 
@@ -306,8 +306,7 @@ async function confirmParsed(i){
   f.id=f.id||genId('f');
   geoApplyToFlight(f);  // дистанции если есть гео и точка старта
   applyLossIfNeeded(f);
-  state.flights.unshift(f);
-  saveLocal();
+  await syncAddFlight(f);   // unshift + saveLocal + pendingQueue (гарантия доставки)
   checkNet();
   renderDashboard();
   renderInventory();

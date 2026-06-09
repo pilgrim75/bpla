@@ -8,8 +8,10 @@ function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 // ============ UTILS ============
 // Уникальный id. prefix помечает источник: 'f' вылет, 't' transfer, 'a' actlog и т.п.
 function genId(prefix){return Date.now()+'_'+(prefix?prefix+'_':'')+Math.random().toString(36).slice(2);}
+// Локальная дата (YYYY-MM-DD) — НЕ UTC (toISOString сдвигает день на границе часовых поясов)
+function localISO(d){d=d||new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 // Текущая дата ISO (YYYY-MM-DD) и время (HH:MM) — локальные
-function todayISO(){return new Date().toISOString().slice(0,10);}
+function todayISO(){return localISO();}
 function nowHM(){return new Date().toTimeString().slice(0,5);}
 
 // Статус-сообщение в элемент с цветом из дизайн-системы.
@@ -47,7 +49,7 @@ function rebuildRoleSelector(){
     '<option value="admin">Администратор</option>'+
     '<option value="cmd">Командир</option>'+
     '<option value="tech">Техник</option>'+
-    state.squads.map((sq,i)=>`<option value="pilot_${i}">Пилот ${sq.pilot}</option>`).join('');
+    state.squads.map((sq,i)=>`<option value="pilot_${i}">Пилот ${esc(sq.pilot)}</option>`).join('');
   // восстановить выбор если возможно
   if([...sel.options].some(o=>o.value===cur))sel.value=cur;
 }
@@ -86,8 +88,16 @@ let state = {
   transfers: []
 };
 
+// Однократное предупреждение при переполнении localStorage (иначе данные тихо теряются)
+let _lsQuotaWarned=false;
+function lsQuotaWarn(e){
+  console.error('[STORAGE] localStorage write failed:', e&&e.name);
+  if(_lsQuotaWarned)return;
+  _lsQuotaWarned=true;
+  try{ if(typeof showSyncToast==='function') showSyncToast('⚠ Хранилище переполнено — данные не сохранены локально', 6000); }catch(_){}
+}
 function saveLocal(){
-  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
+  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){lsQuotaWarn(e);}
   // Debounce — отправляем в облако через 2 сек после последнего изменения
   clearTimeout(saveLocal._timer);
   saveLocal._timer=setTimeout(()=>{
@@ -99,7 +109,7 @@ function saveLocal(){
 // Для операций, которые сами выгружают нужные листы точечно (append/stock),
 // чтобы не делать деструктивный полный write массива flights (Risk 3).
 function saveLocalQuiet(){
-  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){}
+  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){lsQuotaWarn(e);}
   clearTimeout(saveLocal._timer); // отменяем отложенный полный write, если был запланирован
 }
 function loadLocal(){
@@ -190,8 +200,8 @@ function showPage(id,btn){
   if(id==='admin'){
     // Инициализируем дефолтные даты фильтра
     const now=new Date();
-    const firstDay=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10);
-    const today=now.toISOString().slice(0,10);
+    const firstDay=localISO(new Date(now.getFullYear(),now.getMonth(),1));
+    const today=localISO(now);
     const ff=document.getElementById('adm-filterFrom');
     const ft=document.getElementById('adm-filterTo');
     if(ff&&!ff.value)ff.value=firstDay;
@@ -214,7 +224,7 @@ function switchRole(r){
   }
   // Для роли пилота — золотые щиты рядом с именем в topbar (под высоту заглавных букв)
   const tbShields=r.startsWith('pilot_')&&pilotName&&pilotName!=='?'?goldShieldsHtml(pilotName,{inline:true}):'';
-  document.getElementById('roleBadge').innerHTML='<b>'+label+'</b>'+tbShields;
+  document.getElementById('roleBadge').innerHTML='<b>'+esc(label)+'</b>'+tbShields;
   const canEdit=r==='cmd'||r==='tech'||r==='admin';
   document.getElementById('addDroneBtn').style.display=canEdit?'':'none';
   document.getElementById('transferBtnArea').style.display=canEdit?'':'none';
@@ -297,14 +307,14 @@ function renderAdminFlights(){
         <td><input style="width:100px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"></td>
         <td><input style="width:76px;min-width:76px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
         <td><input style="width:36px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
-        <td><input style="width:72px" value="${x.pilot||''}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
-        <td><input style="width:100px" value="${x.target||''}" onchange="adminEditFlight(${i},'target',this.value)"></td>
-        <td><input style="width:80px" value="${x.ammo||''}" onchange="adminEditFlight(${i},'ammo',this.value)" onclick="event.stopPropagation();const ammoList=ammoCatalog.length?ammoCatalog.map(a=>a.name):[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();showQuickPicker(this,ammoList,v=>{adminEditFlight(${i},'ammo',v)})" autocomplete="off"></td>
-        <td><input style="width:85px" value="${x.drone||''}" onchange="adminEditFlight(${i},'drone',this.value)" onclick="event.stopPropagation();showQuickPicker(this,[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort(),v=>{adminEditFlight(${i},'drone',v)})" autocomplete="off"></td>
+        <td><input style="width:72px" value="${esc(x.pilot||'')}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
+        <td><input style="width:100px" value="${esc(x.target||'')}" onchange="adminEditFlight(${i},'target',this.value)"></td>
+        <td><input style="width:80px" value="${esc(x.ammo||'')}" onchange="adminEditFlight(${i},'ammo',this.value)" onclick="event.stopPropagation();const ammoList=ammoCatalog.length?ammoCatalog.map(a=>a.name):[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();showQuickPicker(this,ammoList,v=>{adminEditFlight(${i},'ammo',v)})" autocomplete="off"></td>
+        <td><input style="width:85px" value="${esc(x.drone||'')}" onchange="adminEditFlight(${i},'drone',this.value)" onclick="event.stopPropagation();showQuickPicker(this,[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort(),v=>{adminEditFlight(${i},'drone',v)})" autocomplete="off"></td>
         <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select style="width:80px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
         <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
-        <td><input style="width:100%;min-width:120px" value="${x.note||''}" onchange="adminEditFlight(${i},'note',this.value)"></td>
+        <td><input style="width:100%;min-width:120px" value="${esc(x.note||'')}" onchange="adminEditFlight(${i},'note',this.value)"></td>
         <td style="white-space:nowrap">${x.geo_locked?'<span title="Дистанция зафиксирована (🔒). Защищена от пересчёта">🔒</span> ':''}<button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
       </tr>`).join('')}
       </tbody>
@@ -506,7 +516,7 @@ function renderAdminStock(){
     <table>
       <thead><tr><th>Название</th><th>Кол-во</th><th>Статус</th><th>Действие</th></tr></thead>
       <tbody>${state.stock.map((d,i)=>`<tr>
-        <td><input style="width:120px" value="${d.name}" onchange="adminEditStock(${i},'name',this.value)"></td>
+        <td><input style="width:120px" value="${esc(d.name)}" onchange="adminEditStock(${i},'name',this.value)"></td>
         <td><input style="width:60px" type="number" min="0" value="${d.qty}" onchange="adminEditStock(${i},'qty',parseInt(this.value)||0)"></td>
         <td><select onchange="adminEditStock(${i},'status',this.value)">
           <option value="bg" ${d.status==='bg'?'selected':''}>БГ</option>
@@ -729,7 +739,7 @@ const MEDALS = {
 };
 
 // ISO-дата n дней назад от текущего момента
-function medalIsoDaysAgo(n){ return new Date(Date.now()-n*864e5).toISOString().slice(0,10); }
+function medalIsoDaysAgo(n){ return localISO(new Date(Date.now()-n*864e5)); }
 // 'YYYY-MM-DD' → 'DD.MM'
 function medalFmtDate(iso){ const p=(iso||'').split('-'); return p.length===3?`${p[2]}.${p[1]}`:iso; }
 
@@ -969,8 +979,9 @@ function computeAbsoluteRecords(){
   return res;
 }
 
-// Текущая карта рекордов (пересчёт + кэш для модалки)
-function getAbsRecords(){ return (window._absRecords=computeAbsoluteRecords()); }
+// Текущая карта рекордов. Кэш `window._absRecords` обновляется в renderDashboard
+// (по разу на рендер) — здесь переиспользуем его, чтобы не пересчитывать на каждый щит.
+function getAbsRecords(){ return window._absRecords || (window._absRecords=computeAbsoluteRecords()); }
 
 // Список золотых щитов пилота: [{id,icon,name,desc}] в порядке каталога
 function pilotGoldShields(pilot){
@@ -1010,10 +1021,10 @@ function showAbsRecordModal(pilot, id){
 function renderDashboard(){
   window._absRecords=computeAbsoluteRecords(); // пересчёт абсолютных рекордов при каждом рендере
   const now=new Date();
-  const today=now.toISOString().slice(0,10);
-  const yest=new Date(now-864e5).toISOString().slice(0,10);
-  const weekAgo=new Date(now-7*864e5).toISOString().slice(0,10);
-  const monthStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10);
+  const today=localISO(now);
+  const yest=localISO(new Date(now-864e5));
+  const weekAgo=localISO(new Date(now-7*864e5));
+  const monthStart=localISO(new Date(now.getFullYear(),now.getMonth(),1));
 
   // --- БПЛА на учёте ---
   const allDrones=[
@@ -1031,14 +1042,14 @@ function renderDashboard(){
   document.getElementById('st-total').textContent=totalAll;
   document.getElementById('st-total-detail').innerHTML=
     Object.entries(byName).filter(([,q])=>q!==0).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
-      `<div class="stat-row"><span>${n}</span><span style="${q<0?'color:var(--color-text-danger)':''}">${q}</span></div>`
+      `<div class="stat-row"><span>${esc(n)}</span><span style="${q<0?'color:var(--color-text-danger)':''}">${q}</span></div>`
     ).join('');
 
   document.getElementById('st-stock').textContent=totalStock;
   document.getElementById('st-stock-detail').innerHTML=
     Object.entries(stockByName).length
       ? Object.entries(stockByName).sort((a,b)=>b[1]-a[1]).map(([n,q])=>
-          `<div class="stat-row"><span>${n}</span><span>${q}</span></div>`
+          `<div class="stat-row"><span>${esc(n)}</span><span>${q}</span></div>`
         ).join('')
       :'<span style="color:var(--color-text-secondary)">склад пуст</span>';
 
@@ -1073,13 +1084,13 @@ function renderDashboard(){
     return `<div class="crew-item">
       <div class="crew-header">
         <div>
-          <div class="crew-name">Пилот ${sq.pilot}${goldName}</div>
+          <div class="crew-name">Пилот ${esc(sq.pilot)}${goldName}</div>
           <div class="crew-sub">Последний вылет: ${lastFlight?lastFlight.date+' '+lastFlight.time:'нет данных'}</div>
         </div>
         <div class="crew-flights">${sqFlightsToday.length?sqFlightsToday.length+' сегодня':'нет вылетов'}</div>
       </div>
       <div class="crew-tags">
-        ${drones.map(d=>`<div class="crew-tag">${d.name} × ${d.qty}</div>`).join('')}
+        ${drones.map(d=>`<div class="crew-tag">${esc(d.name)} × ${d.qty}</div>`).join('')}
         ${drones.length===0?'<div class="crew-tag" style="color:var(--color-text-secondary)">нет дронов</div>':''}
       </div>
       <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px">За неделю: ${sqFlightsWeek.length} вылетов${sqLossWeek?` · <span style="color:var(--color-text-danger)">потери: ${sqLossWeek}</span>`:''}</div>
@@ -1094,11 +1105,11 @@ function renderDashboard(){
 
   const flightRow=x=>`
     <div class="flight-item">
-      <div class="flight-time">${x.time}</div>
-      <div class="flight-pilot">${x.pilot}</div>
+      <div class="flight-time">${esc(x.time)}</div>
+      <div class="flight-pilot">${esc(x.pilot)}</div>
       <div class="flight-status ${x.returned==='no'?'s-loss':'s-ok'}">${x.returned==='no'?'потеря':'вылет'}</div>
-      <div class="flight-drone">${x.drone||'—'}</div>
-      <div class="flight-target"><i class="ti ti-map-pin"></i> ${x.target||'—'}${x.returned==='no'?' · <span style="font-size:11px;color:var(--color-text-danger)">борт потерян</span>':''}</div>
+      <div class="flight-drone">${esc(x.drone||'—')}</div>
+      <div class="flight-target"><i class="ti ti-map-pin"></i> ${esc(x.target||'—')}${x.returned==='no'?' · <span style="font-size:11px;color:var(--color-text-danger)">борт потерян</span>':''}</div>
     </div>`;
 
   let html='';
@@ -1124,23 +1135,23 @@ function renderInventory(){
   const bg=state.stock.filter(d=>d.status==='bg');
   const nbg=state.stock.filter(d=>d.status!=='bg'&&d.qty!==0);
   document.getElementById('stockListBG').innerHTML=bg.length?bg.map(d=>
-    `<div class="stock-row"><div class="stock-name">${d.name}</div><div class="stock-count">${d.qty}</div></div>`
+    `<div class="stock-row"><div class="stock-name">${esc(d.name)}</div><div class="stock-count">${d.qty}</div></div>`
   ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Пусто</div>';
   document.getElementById('stockListNBG').innerHTML=nbg.length?nbg.map(d=>
-    `<div class="offstock-row"><div class="offstock-name">${d.name}</div><div style="display:flex;align-items:center;gap:8px"><div class="${d.status==='loss'?'badge-danger':'badge-warn'}">${d.status==='loss'?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
+    `<div class="offstock-row"><div class="offstock-name">${esc(d.name)}</div><div style="display:flex;align-items:center;gap:8px"><div class="${d.status==='loss'?'badge-danger':'badge-warn'}">${d.status==='loss'?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
   ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет</div>';
 
   document.getElementById('squadTable').innerHTML=state.squads.map(sq=>{
     const drones=sq.drones.filter(d=>d.qty!==0);
     const abbr=sq.pilot.slice(0,2).toUpperCase();
     return `<div class="crew-header-row">
-        <div class="crew-abbr">${abbr}</div>
-        <div class="crew-pname">Пилот ${sq.pilot}</div>
+        <div class="crew-abbr">${esc(abbr)}</div>
+        <div class="crew-pname">Пилот ${esc(sq.pilot)}</div>
         <div class="crew-status-badge">БГ</div>
       </div>
       ${drones.map((d,i)=>`<div class="drone-subrow">
         <div class="drone-label">${i===0?'БПЛА':''}</div>
-        <div class="drone-name" style="${d.qty<0?'color:var(--color-text-danger)':''}">${d.name}${d.qty<0?' ⚠':''}</div>
+        <div class="drone-name" style="${d.qty<0?'color:var(--color-text-danger)':''}">${esc(d.name)}${d.qty<0?' ⚠':''}</div>
         <div class="drone-qty" style="${d.qty<0?'color:var(--color-text-danger);border-color:var(--color-border-danger)':''}">${d.qty}</div>
       </div>`).join('')}
       ${drones.length===0?`<div class="drone-subrow"><div class="drone-label"></div><div class="drone-name" style="color:var(--color-text-secondary)">нет дронов</div></div>`:''}`;
@@ -1294,26 +1305,26 @@ function renderTransfersLog(){
     if(op.type==='loss'){
       return `<div class="change-row">
         <div class="badge-danger">Потеря</div>
-        <div class="change-detail"><span>${op.drone}</span> · пилот: ${op.pilot}</div>
-        <div class="change-time">${op.date} ${op.time||''}</div>
+        <div class="change-detail"><span>${esc(op.drone)}</span> · пилот: ${esc(op.pilot)}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else if(op.type==='arrival'){
       return `<div class="change-row">
         <div class="change-badge-in">Поступление</div>
-        <div class="change-detail"><span>${op.drone} × ${op.qty}</span>${op.note?` · ${op.note}`:''}</div>
-        <div class="change-time">${op.date} ${op.time||''}</div>
+        <div class="change-detail"><span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else if(op.type==='exchange'){
       return `<div class="change-row">
         <div class="badge-warn">Обмен</div>
-        <div class="change-detail"><span>${op.unit}</span> · отдали: ${op.give} × ${op.giveQty} → получили: ${op.get} × ${op.getQty}${op.note?` · ${op.note}`:''}</div>
-        <div class="change-time">${op.date} ${op.time||''}</div>
+        <div class="change-detail"><span>${esc(op.unit)}</span> · отдали: ${esc(op.give)} × ${op.giveQty} → получили: ${esc(op.get)} × ${op.getQty}${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else {
       return `<div class="change-row">
         <div class="change-badge-in">Передача</div>
-        <div class="change-detail">${op.from} → ${op.to} · <span>${op.drone} × ${op.qty}</span>${op.note?` · ${op.note}`:''}</div>
-        <div class="change-time">${op.date} ${op.time||''}</div>
+        <div class="change-detail">${esc(op.from)} → ${esc(op.to)} · <span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     }
   }).join('');
@@ -1380,18 +1391,18 @@ function renderFlights(){
             +', '+(x.returned==='yes'?'вернул':'потерян')
             +(x.note?', '+x.note:'');
           return `<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
-            <td style="white-space:nowrap">${x.date||'—'}</td>
-            <td style="white-space:nowrap;color:var(--muted)">${x.time||'—'}</td>
+            <td style="white-space:nowrap">${esc(x.date||'—')}</td>
+            <td style="white-space:nowrap;color:var(--muted)">${esc(x.time||'—')}</td>
             <td style="text-align:center;color:var(--muted);font-size:10px;white-space:nowrap">${num?'#'+num:''}</td>
-            <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.pilot||'—'}</td>
-            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.target||'—'}</td>
-            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.ammo||'—'}</td>
-            <td style="white-space:nowrap;padding-right:14px">${x.drone||'—'}</td>
+            <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.pilot||'—')}</td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.target||'—')}</td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.ammo||'—')}</td>
+            <td style="white-space:nowrap;padding-right:14px">${esc(x.drone||'—')}</td>
             <td><span class="tag ${x.result==='yes'?'tag-ok':'tag-danger'}" style="font-size:10px">${x.result==='yes'?'✅ выполнена':'❌ нет'}</span></td>
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
             <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
-            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${x.note||''}</td>
-            <td style="padding:2px 4px;width:36px"><button class="copy-flight-btn" data-copy="${copyStr.replace(/"/g,'&quot;').replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${esc(x.note||'')}</td>
+            <td style="padding:2px 4px;width:36px"><button class="copy-flight-btn" data-copy="${esc(copyStr).replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></td>
           </tr>${editRow?`<tr><td colspan="12" style="padding:0;border:none">${editRow}</td></tr>`:''}`
         }).join('')}
       </tbody>
@@ -1416,22 +1427,22 @@ function fillDataLists(){
   ]);
   // Сортируем: частые вверху, остальные по алфавиту
   const sorted=[...known].sort((a,b)=>(freq[b]||0)-(freq[a]||0)||(a.localeCompare(b,'ru')));
-  const opts=sorted.map(v=>`<option value="${v}">`).join('');
+  const opts=sorted.map(v=>`<option value="${esc(v)}">`).join('');
   document.querySelectorAll('datalist[id^="dl-drones"]').forEach(dl=>dl.innerHTML=opts);
 
   // Пилоты
   const pilots=[...new Set(state.flights.map(x=>x.pilot).filter(Boolean))].sort();
-  const pilotOpts=pilots.map(v=>`<option value="${v}">`).join('');
+  const pilotOpts=pilots.map(v=>`<option value="${esc(v)}">`).join('');
   const dlp=document.getElementById('dl-pilots');if(dlp)dlp.innerHTML=pilotOpts;
 
   // Боеприпасы
   const ammos=[...new Set(state.flights.map(x=>x.ammo).filter(Boolean))].sort();
-  const ammoOpts=ammos.map(v=>`<option value="${v}">`).join('');
+  const ammoOpts=ammos.map(v=>`<option value="${esc(v)}">`).join('');
   const dla=document.getElementById('dl-ammo');if(dla)dla.innerHTML=ammoOpts;
 
   // Точки
   const targets=[...new Set(state.flights.map(x=>x.target).filter(Boolean))].sort();
-  const tgtOpts=targets.map(v=>`<option value="${v}">`).join('');
+  const tgtOpts=targets.map(v=>`<option value="${esc(v)}">`).join('');
   const dlt=document.getElementById('dl-targets');if(dlt)dlt.innerHTML=tgtOpts;
 
   // Обновляем селекты передачи пилотами из расчётов
@@ -1439,10 +1450,10 @@ function fillDataLists(){
   const fromSel=document.getElementById('transFrom');
   const toSel=document.getElementById('transTo');
   if(fromSel){
-    fromSel.innerHTML='<option value="склад">Склад</option>'+pilotNames.map(p=>`<option value="${p}">Пилот ${p}</option>`).join('');
+    fromSel.innerHTML='<option value="склад">Склад</option>'+pilotNames.map(p=>`<option value="${esc(p)}">Пилот ${esc(p)}</option>`).join('');
   }
   if(toSel){
-    toSel.innerHTML='<option value="склад">На склад</option>'+pilotNames.map(p=>`<option value="${p}">Пилот ${p}</option>`).join('');
+    toSel.innerHTML='<option value="склад">На склад</option>'+pilotNames.map(p=>`<option value="${esc(p)}">Пилот ${esc(p)}</option>`).join('');
   }
   rebuildRoleSelector();
   // Обновляем фильтр пилотов в журнале
@@ -1450,7 +1461,7 @@ function fillDataLists(){
   if(fp){
     const cur=fp.value;
     const pilots=[...new Set(state.flights.map(x=>x.pilot).filter(Boolean))].sort();
-    fp.innerHTML='<option value="">Все пилоты</option>'+pilots.map(p=>`<option value="${p}">${p}</option>`).join('');
+    fp.innerHTML='<option value="">Все пилоты</option>'+pilots.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join('');
     if(cur)[...fp.options].forEach(o=>{if(o.value===cur)o.selected=true;});
   }
   // Обновляем datalist боеприпасов
@@ -1470,7 +1481,7 @@ function renderSquadEditor(){
   el.innerHTML=state.squads.map((sq,si)=>`
     <div style="border:0.5px solid var(--border2);padding:10px;margin-bottom:8px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <input style="flex:1;font-weight:600" value="${sq.pilot}" onchange="squadEditPilot(${si},this.value)" placeholder="Имя пилота">
+        <input style="flex:1;font-weight:600" value="${esc(sq.pilot)}" onchange="squadEditPilot(${si},this.value)" placeholder="Имя пилота">
         <button class="btn btn-sm btn-primary" onclick="squadCleanZeros(${si})">Удалить нули</button>
         <button class="btn btn-danger btn-sm" onclick="squadDeletePilot(${si})">Удалить расчёт</button>
       </div>
@@ -1483,7 +1494,7 @@ function renderSquadEditor(){
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">БПЛА расчёта:</div>
       ${sq.drones.map((d,di)=>`
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px${d.qty===0?';opacity:0.5':''}">
-          <input style="flex:1" list="dl-drones-smart" value="${d.name}" onchange="squadEditDrone(${si},${di},'name',this.value)" autocomplete="off">
+          <input style="flex:1" list="dl-drones-smart" value="${esc(d.name)}" onchange="squadEditDrone(${si},${di},'name',this.value)" autocomplete="off">
           <input type="number" style="width:60px${d.qty===0?';color:var(--red)':''}" min="0" value="${d.qty}" onchange="squadEditDrone(${si},${di},'qty',parseInt(this.value)||0)">
           <button class="btn btn-sm" style="color:var(--red)" onclick="squadDeleteDrone(${si},${di})">✕</button>
         </div>`).join('')}
@@ -1601,24 +1612,24 @@ function geoRecalcAllResetLocks(){
 function squadEditDrone(si,di,field,val){
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
-    if(field==='qty'){const delta=(parseInt(val)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'инв');}
+    if(field==='qty'){const delta=(parseInt(val,10)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'инв');}
     else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'инв');
     d[field]=val;
   }
-  saveLocal();renderInventory();
+  saveLocal();syncPushStockSquads();renderInventory(); // версионируем — иначе поллинг затрёт правку (last-write-wins по _sv)
 }
 function squadDeleteDrone(si,di){
   state.squads[si].drones.splice(di,1);
-  saveLocal();renderSquadEditor();renderInventory();
+  saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();
 }
 function squadAddDrone(si){
   state.squads[si].drones.push({name:'',qty:1});
-  saveLocal();renderSquadEditor();
+  saveLocal();syncPushStockSquads();renderSquadEditor();
 }
 function squadDeletePilot(si){
   if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
   state.squads.splice(si,1);
-  saveLocal();renderSquadEditor();renderInventory();rebuildRoleSelector();
+  saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();rebuildRoleSelector();
 }
 function squadAddPilot(){
   const p=document.getElementById('sq-newPilot').value.trim();
@@ -1627,6 +1638,7 @@ function squadAddPilot(){
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
   ds.forEach(n=>_logAdminTransfer(p,n,1,'инв: новый расчёт'));
   saveLocal();
+  syncPushStockSquads();
   renderSquadEditor();
   renderInventory();
   rebuildRoleSelector();
@@ -2000,7 +2012,7 @@ function applyRoleFromAuth(){
     }
     switchRole(r);
     const badge=document.getElementById('roleBadge');
-    if(badge)badge.innerHTML='<b>'+authUser.login+'</b>';
+    if(badge)badge.innerHTML='<b>'+esc(authUser.login)+'</b>';
   }
   setTimeout(applyRoleRestrictions,100);
   setTimeout(initQuickForm,150);
@@ -2022,7 +2034,7 @@ function nuRoleChange(){
     row.style.display='';
     // Заполняем список из расчётов
     sel.innerHTML='<option value="">— выбрать из расчётов —</option>'
-      +state.squads.map(sq=>`<option value="${sq.pilot}">${sq.pilot}</option>`).join('');
+      +state.squads.map(sq=>`<option value="${esc(sq.pilot)}">${esc(sq.pilot)}</option>`).join('');
   } else {
     row.style.display='none';
   }
@@ -2107,15 +2119,15 @@ async function loadUsersList(){
     el.innerHTML=users.length?`
       <table style="width:100%;font-size:12px">
         <thead><tr><th>Логин</th><th>Роль</th><th>Статус</th><th>Действие</th></tr></thead>
-        <tbody>${users.map(u=>`<tr>
-          <td style="padding:6px 8px">${u.login}</td>
-          <td style="padding:6px 8px">${u.role}</td>
+        <tbody>${users.map(u=>{const lj=esc(u.login).replace(/'/g,"\\'");return `<tr>
+          <td style="padding:6px 8px">${esc(u.login)}</td>
+          <td style="padding:6px 8px">${esc(u.role)}</td>
           <td style="padding:6px 8px"><span class="tag ${u.active?'tag-ok':'tag-danger'}">${u.active?'активен':'заблокирован'}</span></td>
           <td style="padding:6px 8px;display:flex;gap:4px">
-            <button class="btn btn-sm btn-primary" onclick="regenerateToken('${u.login}')">Новая ссылка</button>
-            <button class="btn btn-sm btn-danger" onclick="toggleUser('${u.login}',${!u.active})">${u.active?'Блок':'Разблок'}</button>
+            <button class="btn btn-sm btn-primary" onclick="regenerateToken('${lj}')">Новая ссылка</button>
+            <button class="btn btn-sm btn-danger" onclick="toggleUser('${lj}',${!u.active})">${u.active?'Блок':'Разблок'}</button>
           </td>
-        </tr>`).join('')}</tbody>
+        </tr>`;}).join('')}</tbody>
       </table>`:'<div style="color:var(--muted);font-size:12px">Нет пользователей</div>';
   }catch(e){}
 }
@@ -2178,15 +2190,15 @@ function renderFlightEditRow(x, realIdx){
   return '<div style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
     +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap">✏ '+minsLeft+' мин</span>'
     +'<input style="width:36px;font-size:11px;padding:2px 5px;text-align:center" type="number" min="1" value="'+(x.flightnum||'')+'" placeholder="#" id="edit-flightnum-'+realIdx+'">'
-    +'<input style="width:90px;font-size:11px;padding:2px 5px" list="dl-ammo-catalog" value="'+(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off">'
-    +'<input style="width:75px;font-size:11px;padding:2px 5px" list="dl-drones-smart" value="'+(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off">'
+    +'<input style="width:90px;font-size:11px;padding:2px 5px" list="dl-ammo-catalog" value="'+esc(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off">'
+    +'<input style="width:75px;font-size:11px;padding:2px 5px" list="dl-drones-smart" value="'+esc(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off">'
     +'<select style="font-size:11px;padding:2px 3px" id="edit-result-'+realIdx+'">'
     +'<option value="yes" '+(x.result==='yes'?'selected':'')+'>✅ выполнена</option>'
     +'<option value="no" '+(x.result==='no'?'selected':'')+'>❌ нет</option></select>'
     +'<select style="font-size:11px;padding:2px 3px" id="edit-returned-'+realIdx+'">'
     +'<option value="yes" '+(x.returned==='yes'?'selected':'')+'>вернул</option>'
     +'<option value="no" '+(x.returned==='no'?'selected':'')+'>потерян</option></select>'
-    +'<input style="flex:1;min-width:80px;font-size:11px;padding:2px 5px" value="'+(x.note||'')+'" placeholder="Примечание" id="edit-note-'+realIdx+'">'
+    +'<input style="flex:1;min-width:80px;font-size:11px;padding:2px 5px" value="'+esc(x.note||'')+'" placeholder="Примечание" id="edit-note-'+realIdx+'">'
     +'<button class="btn btn-success btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="saveFlightEdit('+realIdx+')">✓</button>'
     +'</div>';
 }
@@ -2211,7 +2223,7 @@ function saveFlightEdit(idx){
 function getSmartTargets(){
   const cutoff=new Date();
   cutoff.setDate(cutoff.getDate()-7);
-  const cutoffStr=cutoff.toISOString().slice(0,10);
+  const cutoffStr=localISO(cutoff);
   const pilot=document.getElementById('qf-pilot')?.value||'';
   // Берём вылеты текущего пилота за последние 7 дней
   const recent=state.flights.filter(f=>
@@ -2240,7 +2252,7 @@ function getSmartTargets(){
     }
     _cb=cb;_open=true;
     popup.dataset.inputId=input.id||'';
-    popup.innerHTML=items.filter(Boolean).map(v=>`<div class="qp-item" data-v="${v.replace(/"/g,'&quot;')}">${v}</div>`).join('');
+    popup.innerHTML=items.filter(Boolean).map(v=>`<div class="qp-item" data-v="${esc(v)}">${esc(v)}</div>`).join('');
     popup.querySelectorAll('.qp-item').forEach(el=>{
       el.addEventListener('click',e=>{
         e.stopPropagation();
@@ -2289,7 +2301,7 @@ function ammoSave(){
 function ammoFillDatalist(){
   const dl=document.getElementById('dl-ammo-catalog');
   if(!dl)return;
-  dl.innerHTML=ammoCatalog.map(a=>`<option value="${a.name}">`).join('');
+  dl.innerHTML=ammoCatalog.map(a=>`<option value="${esc(a.name)}">`).join('');
 }
 
 // Нормализация названия боеприпаса по справочнику
@@ -2327,8 +2339,8 @@ function renderAmmoList(){
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${rawAmmo.map(v=>{
           const isCovered=covered.has(v.toLowerCase().trim());
-          return `<span class="tag ${isCovered?'tag-ok':'tag-warn'}" style="cursor:pointer" title="${isCovered?'Покрыт справочником':'Нет в справочнике — нажмите чтобы добавить в алиасы'}" onclick="ammoQuickAdd('${v.replace(/'/g,"\\'")}')">
-            ${v}${isCovered?'':' ⚡'}
+          return `<span class="tag ${isCovered?'tag-ok':'tag-warn'}" style="cursor:pointer" title="${isCovered?'Покрыт справочником':'Нет в справочнике — нажмите чтобы добавить в алиасы'}" onclick="ammoQuickAdd('${esc(v).replace(/'/g,"\\'")}')">
+            ${esc(v)}${isCovered?'':' ⚡'}
           </span>`;
         }).join('')}
       </div>
@@ -2342,14 +2354,14 @@ function renderAmmoList(){
   el.innerHTML=rawBlock+`<table style="width:100%;font-size:12px">
     <thead><tr><th>Название (эталон)</th><th>Категория</th><th>Алиасы</th><th>Действие</th></tr></thead>
     <tbody>${ammoCatalog.map((a,i)=>`<tr>
-      <td style="padding:5px 8px"><input style="width:100%" value="${a.name}" onchange="ammoCatalog[${i}].name=this.value;ammoSave();renderAmmoList();"></td>
+      <td style="padding:5px 8px"><input style="width:100%" value="${esc(a.name)}" onchange="ammoCatalog[${i}].name=this.value;ammoSave();renderAmmoList();"></td>
       <td style="padding:5px 8px">
         <select onchange="ammoCatalog[${i}].category=this.value;ammoSave();">
           <option value="минирование" ${a.category==='минирование'?'selected':''}>Минирование</option>
           <option value="доставка" ${a.category==='доставка'?'selected':''}>Доставка</option>
         </select>
       </td>
-      <td style="padding:5px 8px"><input style="width:100%" value="${(a.aliases||[]).join(', ')}" onchange="ammoCatalog[${i}].aliases=this.value.split(',').map(s=>s.trim()).filter(Boolean);ammoSave();renderAmmoList();"></td>
+      <td style="padding:5px 8px"><input style="width:100%" value="${esc((a.aliases||[]).join(', '))}" onchange="ammoCatalog[${i}].aliases=this.value.split(',').map(s=>s.trim()).filter(Boolean);ammoSave();renderAmmoList();"></td>
       <td style="padding:5px 8px"><button class="btn btn-danger btn-sm" onclick="ammoDelete(${i})">✕</button></td>
     </tr>`).join('')}
     </tbody>
@@ -2486,8 +2498,7 @@ async function saveQuickFlight(){
   };
   geoApplyToFlight(f);  // дистанции если есть гео и точка старта
   applyLossIfNeeded(f);
-  state.flights.unshift(f);
-  saveLocal();
+  await syncAddFlight(f);   // unshift + saveLocal + pendingQueue (гарантия доставки)
   renderFlights();renderDashboard();
   // Сбрасываем форму частично
   document.getElementById('qf-target').value='';
@@ -2561,12 +2572,12 @@ function renderActLog(){
   el.innerHTML=`<table style="width:100%;font-size:12px">
     <thead><tr><th>Дата/Время</th><th>Пользователь</th><th>Роль</th><th>Тип</th><th>Действие</th><th>Детали</th></tr></thead>
     <tbody>${entries.map(e=>`<tr>
-      <td style="padding:5px 8px;white-space:nowrap">${e.date} ${e.time}</td>
-      <td style="padding:5px 8px;font-weight:700;color:var(--green)">${e.user}</td>
-      <td style="padding:5px 8px;color:var(--muted)">${e.role}</td>
-      <td style="padding:5px 8px"><span class="tag tag-gray">${e.type}</span></td>
-      <td style="padding:5px 8px">${e.action}</td>
-      <td style="padding:5px 8px;color:var(--text2)">${e.details||''}</td>
+      <td style="padding:5px 8px;white-space:nowrap">${esc(e.date)} ${esc(e.time)}</td>
+      <td style="padding:5px 8px;font-weight:700;color:var(--green)">${esc(e.user)}</td>
+      <td style="padding:5px 8px;color:var(--muted)">${esc(e.role)}</td>
+      <td style="padding:5px 8px"><span class="tag tag-gray">${esc(e.type)}</span></td>
+      <td style="padding:5px 8px">${esc(e.action)}</td>
+      <td style="padding:5px 8px;color:var(--text2)">${esc(e.details||'')}</td>
     </tr>`).join('')}
     </tbody>
   </table>`;
@@ -2788,8 +2799,8 @@ fillDataLists();
 // Дефолтные даты в отчётах — первое число текущего месяца и сегодня
 (function(){
   const now=new Date();
-  const today=now.toISOString().slice(0,10);
-  const firstDay=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10);
+  const today=localISO(now);
+  const firstDay=localISO(new Date(now.getFullYear(),now.getMonth(),1));
   const repFrom=document.getElementById('repFrom');
   const repTo=document.getElementById('repTo');
   if(repFrom&&!repFrom.value)repFrom.value=firstDay;

@@ -54,12 +54,17 @@ async function syncDecryptRows(rows, key){
 }
 
 async function syncPost(url, body){
-  // Всегда cors+redirect:follow; при ошибке — no-cors
+  // Всегда cors+redirect:follow; при ошибке/таймауте — no-cors
   try{
-    const r = await fetch(url, {
-      method:'POST', headers:{'Content-Type':'text/plain'},
-      body, mode:'cors', redirect:'follow'
-    });
+    const ctrl = new AbortController();
+    const tid = setTimeout(()=>ctrl.abort(), 30000); // 30с — иначе зависший запрос держит индикатор/очередь
+    let r;
+    try{
+      r = await fetch(url, {
+        method:'POST', headers:{'Content-Type':'text/plain'},
+        body, mode:'cors', redirect:'follow', signal:ctrl.signal
+      });
+    } finally { clearTimeout(tid); }
     const d = await r.json();
     if(d.error) throw new Error(d.error);
     return { ok:true, data:d };
@@ -314,9 +319,13 @@ async function syncPushStockSquads(){
   if(!url||!token) return;
   syncBumpStockVersion();
   const ts = Date.now();
+  // Пишем актуальные id/_sv ОБРАТНО в объекты state — чтобы любые последующие
+  // операции и чтения несли корректный штамп версии (раньше _sv ставился только
+  // в шифруемую копию, объекты state хранили устаревший _sv из последней загрузки).
   const encRow = async (obj,i) => {
-    const o = {...obj, id:obj.id||(ts+i), _sv:_stockVersion};
-    return syncEncrypt(o, key);
+    if(!obj.id) obj.id = ts+i;
+    obj._sv = _stockVersion;
+    return syncEncrypt(obj, key);
   };
   const stock  = await Promise.all(state.stock.map((d,i)=>encRow(d,i)));
   const squads = await Promise.all(state.squads.map((sq,i)=>encRow(sq,i)));
@@ -374,15 +383,18 @@ async function syncPushAll(silent=false){
     }
   }
 
+  // Склад/расчёты (stock/squads) НЕ пишем здесь — только flights/transfers.
+  // Версионируемые листы выгружает исключительно syncPushStockSquads (с актуальным
+  // _sv). Раньше ambient-syncPushAll писал stock/squads с устаревшим _sv из объектов
+  // state и откатывал версию → гейт remoteVersion>_stockVersion отвергал изменение
+  // на других устройствах. writeAll пропускает undefined-листы → склад не трогаем.
   const ts = Date.now();
   const encRow = async (obj,i) => syncEncrypt({...obj, id:obj.id||(ts+i)}, key);
-  const [flights,stock,squads,transfers] = await Promise.all([
+  const [flights,transfers] = await Promise.all([
     Promise.all(state.flights.map((f,i)=>encRow(f,i))),
-    Promise.all(state.stock.map((d,i)=>encRow(d,i))),
-    Promise.all(state.squads.map((sq,i)=>encRow(sq,i))),
     Promise.all((state.transfers||[]).map((t,i)=>encRow(t,i)))
   ]);
-  const data = geoStripFromSync({flights,stock,squads,transfers}); // ГЕО НИКОГДА не уходит в облако
+  const data = geoStripFromSync({flights,transfers}); // ГЕО НИКОГДА не уходит в облако; stock/squads не трогаем
   const body = JSON.stringify({action:'write', token, data});
   console.log('[SYNC] pushAll flights:', state.flights.length, 'size:', body.length);
   const res = await syncPost(url, body);
@@ -496,8 +508,28 @@ async function syncPullOnLogin(){
   const remoteStockVersion = Math.max(0,...loaded.stock.map(s=>s._sv||0));
   const stockNewer = remoteStockVersion > _stockVersion;
   if(!hasPending){
-    state.flights   = loaded.flights;
-    state.transfers = loaded.transfers;
+    // Защита от потери только что добавленных вылетов/передач: полная замена
+    // допустима ТОЛЬКО если локальный массив является подмножеством облачного
+    // (все локальные id есть в облаке). Иначе локально есть запись, ещё не
+    // доехавшая до облака (напр. отправка не подтверждена при пустой очереди) —
+    // сливаем: облачные ∪ локальные, которых нет в облаке.
+    const cloudFIds = new Set(loaded.flights.map(f=>f.id).filter(Boolean));
+    if(state.flights.every(f=>!f.id || cloudFIds.has(f.id))){
+      state.flights = loaded.flights;
+    } else {
+      const localOnlyF = state.flights.filter(f=>f.id && !cloudFIds.has(f.id));
+      state.flights = [...loaded.flights, ...localOnlyF]
+        .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
+      console.warn('[SYNC] syncPullOnLogin: сохранено '+localOnlyF.length+' локальных вылетов вне облака');
+    }
+    const cloudTIds = new Set(loaded.transfers.map(t=>t.id).filter(Boolean));
+    if((state.transfers||[]).every(t=>!t.id || cloudTIds.has(t.id))){
+      state.transfers = loaded.transfers;
+    } else {
+      const localOnlyT = (state.transfers||[]).filter(t=>t.id && !cloudTIds.has(t.id));
+      state.transfers = [...loaded.transfers, ...localOnlyT]
+        .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
+    }
     if(stockNewer){
       state.stock   = loaded.stock;
       state.squads  = loaded.squads;
@@ -575,6 +607,7 @@ async function pollCloud(){
     _lastPollTs = Date.now();
 
     let changed = false;
+    let newFlights = 0;      // фактически добавленные чужие вылеты (для тоста — не вся дельта)
     let lossFlagSet = false; // выставили _lossWritten при приёме чужой потери — надо вернуть в облако
     const tb = tombstones.load();
     const deliveredIds = new Set(); // id, вернувшиеся из облака — подтверждение доставки
@@ -588,6 +621,7 @@ async function pollCloud(){
       if(!state.flights.some(f=>f.id===obj.id)){
         state.flights.unshift(obj);
         changed = true;
+        newFlights++;
         // Списываем дрон если потеря — но только если списание ещё не зафиксировано
         // на устройстве-источнике (флаг приходит вместе с вылетом).
         if(obj.returned==='no' && obj.drone && !obj._lossWritten){
@@ -657,8 +691,7 @@ async function pollCloud(){
     if(changed){
       saveLocal();
       renderDashboard(); renderFlights(); renderInventory(); rebuildRoleSelector();
-      const newF = (d.flights||[]).length;
-      if(newF>0) showSyncToast('↓ '+newF+' новых вылетов');
+      if(newFlights>0) showSyncToast('↓ '+newFlights+' '+ruPlural(newFlights,'новый вылет','новых вылета','новых вылетов'));
     }
     // Risk 4: вернуть выставленный _lossWritten в облако, чтобы другие устройства
     // не списали тот же борт повторно. Точечный write листа flights сразу после
