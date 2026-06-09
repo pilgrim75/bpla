@@ -372,7 +372,7 @@ function reportSummary(out,f){
 }
 
 function reportIssued(out,from,to,filterPilot,filterDrones){
-    let transList=(state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад');
+    let transList=(state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад'&&t.to!=='не бг'&&t.to!=='списан');
     if(from) transList=transList.filter(t=>t.date>=from);
     if(to)   transList=transList.filter(t=>t.date<=to);
     if(filterPilot) transList=transList.filter(t=>t.to===filterPilot);

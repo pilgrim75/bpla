@@ -1237,8 +1237,57 @@ function saveTransfer(){
   if(!drone){alert('Укажите БПЛА');return;}
   if(from===to){alert('Отправитель и получатель совпадают');return;}
 
+  // Спецприёмники: перевод в Не БГ или списание (всегда со склада)
+  if(to==='не бг'||to==='списан'){
+    const role=state.role||authUser.role||'';
+    if(!(role==='admin'||role==='cmd'||role==='tech')){alert('Недостаточно прав');return;}
+    const bg=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='bg');
+    if(!bg||bg.qty<qty){
+      if(!confirm(`На складе недостаточно боеготовых "${drone}". Всё равно оформить?`))return;
+    }
+    if(to==='не бг'){
+      // bg -= qty
+      if(bg){bg.qty-=qty;if(bg.qty===0)state.stock=state.stock.filter(d=>d!==bg);}
+      else{state.stock.push({name:drone,qty:-qty,status:'bg'});}
+      // nbg += qty
+      const nbg=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='nbg');
+      if(nbg){nbg.qty+=qty;}
+      else{state.stock.push({name:drone,qty,status:'nbg'});}
+    } else { // списан: уменьшить qty, при 0 запись оставить
+      if(bg){bg.qty=Math.max(0,bg.qty-qty);}
+      else{state.stock.push({name:drone,qty:0,status:'bg'});}
+    }
+    if(!state.transfers)state.transfers=[];
+    const op=makeTransfer('transfer',{from:'склад',to,drone,qty,note});
+    state.transfers.unshift(op);
+    syncBumpStockVersion();
+    saveLocal();
+    syncAddTransfer(op);
+    syncPushStockSquads();
+    renderInventory();
+    renderDashboard();
+    document.getElementById('transferCard').style.display='none';
+    document.getElementById('transDrone').value='';
+    document.getElementById('transNote').value='';
+    logAction('transfer','add','склад → '+to+': '+drone+' ×'+qty);
+    return;
+  }
+
   // Списать у отправителя
-  if(from==='склад'){
+  if(from==='не бг'){
+    // Возврат из ремонта: списываем из не боеготовых
+    const role=state.role||authUser.role||'';
+    if(!(role==='admin'||role==='cmd'||role==='tech')){alert('Недостаточно прав');return;}
+    const nbg=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='nbg');
+    if(!nbg||nbg.qty<qty){
+      if(!confirm(`Не боеготовых "${drone}" недостаточно. Всё равно оформить?`))return;
+      if(nbg){nbg.qty-=qty;}
+      else{state.stock.push({name:drone,qty:-qty,status:'nbg'});}
+    } else {
+      nbg.qty-=qty;
+      if(nbg.qty===0)state.stock=state.stock.filter(d=>d!==nbg);
+    }
+  } else if(from==='склад'){
     const item=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='bg');
     if(!item||item.qty<qty){
       if(!confirm(`На складе недостаточно "${drone}". Всё равно оформить?`))return;
@@ -1508,11 +1557,13 @@ function fillDataLists(){
   const pilotNames=state.squads.map(sq=>sq.pilot);
   const fromSel=document.getElementById('transFrom');
   const toSel=document.getElementById('transTo');
+  const _r=state.role||authUser.role||'';
+  const _canStatus=(_r==='admin'||_r==='cmd'||_r==='tech');
   if(fromSel){
-    fromSel.innerHTML='<option value="склад">Склад</option>'+pilotNames.map(p=>`<option value="${esc(p)}">Пилот ${esc(p)}</option>`).join('');
+    fromSel.innerHTML='<option value="склад">Склад</option>'+pilotNames.map(p=>`<option value="${esc(p)}">Пилот ${esc(p)}</option>`).join('')+(_canStatus?'<option value="не бг">Не БГ (из ремонта)</option>':'');
   }
   if(toSel){
-    toSel.innerHTML='<option value="склад">На склад</option>'+pilotNames.map(p=>`<option value="${esc(p)}">Пилот ${esc(p)}</option>`).join('');
+    toSel.innerHTML='<option value="склад">На склад</option>'+pilotNames.map(p=>`<option value="${esc(p)}">Пилот ${esc(p)}</option>`).join('')+(_canStatus?'<option value="не бг">Не БГ (не боеготов)</option><option value="списан">Списан</option>':'');
   }
   rebuildRoleSelector();
   // Обновляем фильтр пилотов в журнале
