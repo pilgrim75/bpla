@@ -198,14 +198,31 @@
       <div><label>Дата операции</label><input type="date" id="exDate"></div>
       <div><label>Подразделение</label><input id="exUnit" placeholder="Рота разведки / 3-й батальон"></div>
     </div>
+    <div style="margin-bottom:10px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="exOneWay" onchange="exToggleOneWay()" style="width:auto;margin:0">
+        Односторонняя передача (без обмена)
+      </label>
+    </div>
+    <div id="exDirRow" style="display:none;margin-bottom:10px">
+      <label>Направление</label>
+      <div style="display:flex;gap:16px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+          <input type="radio" name="exDir" value="give" checked onchange="exToggleOneWay()" style="width:auto;margin:0"> Отдаём (со склада)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+          <input type="radio" name="exDir" value="get" onchange="exToggleOneWay()" style="width:auto;margin:0"> Получаем (на склад)
+        </label>
+      </div>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:8px;align-items:end;margin-bottom:10px">
-      <div>
+      <div id="exGiveBlock">
         <label>Отдали (списать со склада)</label>
         <input id="exGive" list="dl-drones-smart" placeholder="Гамаюн13т" autocomplete="off">
         <input type="number" id="exGiveQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">
       </div>
-      <div style="text-align:center;font-size:18px;padding-bottom:8px;color:var(--muted)">⇄</div>
-      <div>
+      <div id="exArrow" style="text-align:center;font-size:18px;padding-bottom:8px;color:var(--muted)">⇄</div>
+      <div id="exGetBlock">
         <label>Получили (оприходовать на склад)</label>
         <input id="exGet" list="dl-drones-smart" placeholder="Гамаюн13д" autocomplete="off">
         <input type="number" id="exGetQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">

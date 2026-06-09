@@ -1211,6 +1211,21 @@ function openExchangeForm(){
   document.getElementById('exchangeCard').style.display='block';
   document.getElementById('transferCard').style.display='none';
   document.getElementById('exDate').value=todayISO();
+  document.getElementById('exOneWay').checked=false;
+  const giveRadio=document.querySelector('input[name="exDir"][value="give"]');
+  if(giveRadio)giveRadio.checked=true;
+  exToggleOneWay();
+}
+
+// Переключение режима обмен / односторонняя передача
+function exToggleOneWay(){
+  const oneWay=document.getElementById('exOneWay').checked;
+  const dir=(document.querySelector('input[name="exDir"]:checked')||{}).value||'give';
+  document.getElementById('exDirRow').style.display=oneWay?'block':'none';
+  document.getElementById('exArrow').style.display=oneWay?'none':'';
+  // В обычном обмене показаны оба блока; в односторонней — только по направлению
+  document.getElementById('exGiveBlock').style.display=(!oneWay||dir==='give')?'':'none';
+  document.getElementById('exGetBlock').style.display=(!oneWay||dir==='get')?'':'none';
 }
 
 function saveTransfer(){
@@ -1278,26 +1293,43 @@ function saveTransfer(){
 function saveExchange(){
   const date=document.getElementById('exDate').value||todayISO();
   const unit=document.getElementById('exUnit').value.trim();
-  const give=document.getElementById('exGive').value.trim();
-  const giveQty=parseInt(document.getElementById('exGiveQty').value)||1;
-  const get=document.getElementById('exGet').value.trim();
-  const getQty=parseInt(document.getElementById('exGetQty').value)||1;
   const note=document.getElementById('exNote').value.trim();
-  if(!unit||!give||!get){alert('Заполните подразделение, отданный и полученный борт');return;}
+  const oneWay=document.getElementById('exOneWay').checked;
+  const dir=(document.querySelector('input[name="exDir"]:checked')||{}).value||'give';
+  let give='',giveQty=0,get='',getQty=0;
+  if(!oneWay||dir==='give'){
+    give=document.getElementById('exGive').value.trim();
+    giveQty=parseInt(document.getElementById('exGiveQty').value)||1;
+  }
+  if(!oneWay||dir==='get'){
+    get=document.getElementById('exGet').value.trim();
+    getQty=parseInt(document.getElementById('exGetQty').value)||1;
+  }
+  if(!unit){alert('Укажите подразделение');return;}
+  if(oneWay){
+    if(dir==='give'&&!give){alert('Укажите отданный борт');return;}
+    if(dir==='get'&&!get){alert('Укажите полученный борт');return;}
+  } else if(!give||!get){
+    alert('Заполните отданный и полученный борт');return;
+  }
 
   // Списать отданный борт со склада
-  const giveItem=state.stock.find(d=>d.name.toLowerCase()===give.toLowerCase()&&d.status==='bg');
-  if(giveItem){
-    giveItem.qty=Math.max(0,giveItem.qty-giveQty);
-    if(giveItem.qty===0)state.stock=state.stock.filter(d=>d!==giveItem);
-  } else {
-    if(!confirm(`"${give}" не найден на складе. Всё равно оформить?`))return;
+  if(give){
+    const giveItem=state.stock.find(d=>d.name.toLowerCase()===give.toLowerCase()&&d.status==='bg');
+    if(giveItem){
+      giveItem.qty=Math.max(0,giveItem.qty-giveQty);
+      if(giveItem.qty===0)state.stock=state.stock.filter(d=>d!==giveItem);
+    } else {
+      if(!confirm(`"${give}" не найден на складе. Всё равно оформить?`))return;
+    }
   }
 
   // Оприходовать полученный борт на склад
-  const getItem=state.stock.find(d=>d.name.toLowerCase()===get.toLowerCase()&&d.status==='bg');
-  if(getItem){getItem.qty+=getQty;}
-  else{state.stock.push({name:get,qty:getQty,status:'bg'});}
+  if(get){
+    const getItem=state.stock.find(d=>d.name.toLowerCase()===get.toLowerCase()&&d.status==='bg');
+    if(getItem){getItem.qty+=getQty;}
+    else{state.stock.push({name:get,qty:getQty,status:'bg'});}
+  }
 
   // Записать в историю
   if(!state.transfers)state.transfers=[];
@@ -1312,6 +1344,7 @@ function saveExchange(){
   ['exUnit','exGive','exGet','exNote'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('exGiveQty').value='1';
   document.getElementById('exGetQty').value='1';
+  document.getElementById('exOneWay').checked=false;
 }
 
 function renderTransfersLog(){
@@ -1333,9 +1366,17 @@ function renderTransfersLog(){
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else if(op.type==='exchange'){
+      let exDetail;
+      if(op.give&&op.get){
+        exDetail=`отдали: ${esc(op.give)} × ${op.giveQty} → получили: ${esc(op.get)} × ${op.getQty}`;
+      } else if(op.give){
+        exDetail=`отдали: ${esc(op.give)} × ${op.giveQty}`;
+      } else {
+        exDetail=`получили: ${esc(op.get)} × ${op.getQty}`;
+      }
       return `<div class="change-row">
-        <div class="badge-warn">Обмен</div>
-        <div class="change-detail"><span>${esc(op.unit)}</span> · отдали: ${esc(op.give)} × ${op.giveQty} → получили: ${esc(op.get)} × ${op.getQty}${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="badge-warn">${op.give&&op.get?'Обмен':'Передача'}</div>
+        <div class="change-detail"><span>${esc(op.unit)}</span> · ${exDetail}${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else {

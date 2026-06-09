@@ -181,7 +181,13 @@ function reportStock(out){
       const prefix=datePrefix(op);
       const pfx=prefix?'('+prefix+') ':'';
       if(op.type==='loss') return pfx+'✈ Потеря: '+op.drone+' — пилот '+op.pilot;
-      if(op.type==='exchange') return pfx+'⇄ Обмен с '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт., получили '+op.get+' — '+op.getQty+' шт.'+(op.note?' ('+op.note+')':'');
+      if(op.type==='exchange'){
+        let exTxt;
+        if(op.give&&op.get) exTxt='⇄ Обмен с '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт., получили '+op.get+' — '+op.getQty+' шт.';
+        else if(op.give) exTxt='→ Передача '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт.';
+        else exTxt='← Получено от '+op.unit+': '+op.get+' — '+op.getQty+' шт.';
+        return pfx+exTxt+(op.note?' ('+op.note+')':'');
+      }
       if(op.type==='arrival') return pfx+'📦 Поступление: '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
       return pfx+'→ '+op.from+' → '+op.to+': '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
     };
