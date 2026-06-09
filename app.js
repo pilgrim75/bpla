@@ -898,6 +898,7 @@ const ABS_RECORDS = {
   bestday:   {icon:'🌟', name:'Лучший день'},
   sniper:    {icon:'🥇', name:'Снайпер'},
   thrifty:   {icon:'🛡️', name:'Бережливый'},
+  streak:    {icon:'🔥', name:'На волне'},
   veteran:   {icon:'💎', name:'Ветеран'},
 };
 
@@ -974,6 +975,18 @@ function computeAbsoluteRecords(){
     const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=20?a.filter(x=>x.returned==='no').length/a.length*100:null}; });
     const r=_absWinner(c,false,'pct');
     if(r){ const a=at(r.pilot); const lost=a.filter(x=>x.returned==='no').length; res.thrifty={pilot:r.pilot, desc:`Минимальный % потерь за всё время: ${Math.round(r.value)}% (${lost} из ${a.length}).`}; }
+  }
+  // 🔥 На волне — самая длинная серия вылетов без потерь за всё время (мин. 5).
+  // Считаем хронологически: returned==='no' обнуляет серию, остальные продолжают.
+  {
+    const c=pilots.map(p=>{
+      const fs=at(p).slice().sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
+      let cur=0, best=0;
+      fs.forEach(f=>{ if(f.returned==='no'){ cur=0; } else { cur++; if(cur>best) best=cur; } });
+      return {pilot:p, value:best>=5?best:null};
+    });
+    const r=_absWinner(c,true,'ratio');
+    if(r) res.streak={pilot:r.pilot, desc:`Самая длинная серия вылетов без потерь за всё время: ${r.value} подряд.`};
   }
   // 💎 Ветеран — наибольшее общее число вылетов за всё время
   {
