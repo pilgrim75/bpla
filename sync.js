@@ -115,10 +115,14 @@ const pendingQueue = {
   markTried(id){ const q=this.load(); const it=q.find(x=>_qid(x)===id); if(it){ it.lastTryTs=Date.now(); this.save(q); } },
   // Подтверждение доставки: элементы, чьи id вернулись из облака, удаляем из кэша
   confirmDelivered(ids){
-    if(!ids||!ids.size) return;
-    const q=this.load();
-    const kept=q.filter(x=>!ids.has(_qid(x)));
-    if(kept.length!==q.length){ console.log('[SYNC] подтверждено доставкой:', q.length-kept.length); this.save(kept); }
+    if(ids&&ids.size){
+      const q=this.load();
+      const kept=q.filter(x=>!ids.has(_qid(x)));
+      if(kept.length!==q.length){ console.log('[SYNC] подтверждено доставкой:', q.length-kept.length); this.save(kept); }
+    }
+    // Всегда обновляем индикатор после подтверждения — чтобы «в очереди N» не «висел»:
+    // save() вызывает updateQueueIndicator лишь при фактическом удалении записей.
+    updateQueueIndicator();
   },
   clear(){ this.save([]); },
   all(){ return this.load(); },
@@ -433,7 +437,7 @@ async function syncPushFlightsOnly(){
 // Не удаляет элементы — удаление только после подтверждения поллингом.
 // Повторно шлёт лишь те, что давно не пробовали (или ещё ни разу), чтобы
 // не плодить дубли между отправкой и подтверждением.
-const QUEUE_RETRY_MS = 60000;
+const QUEUE_RETRY_MS = 25000;
 async function syncFlushQueue(){
   const q = pendingQueue.all();
   if(!q.length) return;
@@ -683,8 +687,10 @@ async function pollCloud(){
       }catch(e){ console.warn('[POLL] stock sync error:', e.message); }
     }
 
-    // Подтверждаем доставку отправленного: всё, что вернулось из облака, убираем из очереди
+    // Подтверждаем доставку отправленного: весь полный список id из ответа read_since
+    // убираем из очереди СРАЗУ и обновляем индикатор (не ждём re-send/QUEUE_RETRY).
     pendingQueue.confirmDelivered(deliveredIds);
+    updateQueueIndicator();
     // Досылаем то, что ещё не подтверждено (с защитой от частых повторов)
     syncFlushQueue();
 

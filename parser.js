@@ -306,10 +306,7 @@ async function confirmParsed(i){
   f.id=f.id||genId('f');
   geoApplyToFlight(f);  // дистанции если есть гео и точка старта
   applyLossIfNeeded(f);
-  await syncAddFlight(f);   // unshift + saveLocal + pendingQueue (гарантия доставки)
-  checkNet();
-  renderDashboard();
-  renderInventory();
+  // 1. Скрываем карточку сразу — не дожидаясь отправки вылета на сервер
   const card=document.getElementById(`pcard-${i}`);
   const src=document.getElementById(`psrc-${i}`);
   if(src)src.style.display='none';
@@ -319,6 +316,13 @@ async function confirmParsed(i){
   btn.textContent='✓ Сохранено';btn.disabled=true;
   card.style.pointerEvents='none';
   setTimeout(()=>{card.style.display='none';},800);
+  // 2. Добавляем в локальное состояние и 3. отправляем на сервер в фоне.
+  // syncAddFlight выполняет unshift+saveLocal+pendingQueue синхронно (гарантия
+  // доставки сохраняется), а сетевую отправку — асинхронно; UI её НЕ ждёт (без await).
+  syncAddFlight(f);
+  checkNet();
+  renderDashboard();
+  renderInventory();
 }
 
 function clearParse(){

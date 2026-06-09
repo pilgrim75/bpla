@@ -660,6 +660,11 @@ function adminImportJSON(input){
       if(!confirm('Заменить все текущие данные данными из файла?'))return;
       state=imported;
       saveLocal();
+      // Импортированные склад/расчёты выгружаем явно: syncPushAll после Дефекта B
+      // (09.06) их не пишет — только flights/transfers. syncToCloud догоняет flights/transfers.
+      syncBumpStockVersion();
+      syncPushStockSquads();
+      syncToCloud(true);
       renderDashboard();
       renderAdminFlights();
       renderAdminStock();
@@ -2081,7 +2086,11 @@ async function createUser(){
       });
       if(changed){
         saveLocal();
-        await syncToCloud(true);
+        // squads-переименование выгружаем явно: syncToCloud/syncPushAll после
+        // Дефекта B (09.06) склад/расчёты НЕ пишет — только flights/transfers.
+        syncBumpStockVersion();
+        syncPushStockSquads();
+        await syncToCloud(true); // flights/transfers (переименование пилота в них)
         renderInventory();renderFlights();renderDashboard();
         showSyncToast('✓ Позывной «'+callsign+'» → логин «'+login+'»');
       }
@@ -2498,7 +2507,9 @@ async function saveQuickFlight(){
   };
   geoApplyToFlight(f);  // дистанции если есть гео и точка старта
   applyLossIfNeeded(f);
-  await syncAddFlight(f);   // unshift + saveLocal + pendingQueue (гарантия доставки)
+  // unshift+saveLocal+pendingQueue выполняются синхронно (гарантия доставки),
+  // сетевая отправка — в фоне; UI (статус/сброс формы) её НЕ ждёт (без await).
+  syncAddFlight(f);
   renderFlights();renderDashboard();
   // Сбрасываем форму частично
   document.getElementById('qf-target').value='';
