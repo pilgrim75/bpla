@@ -785,11 +785,18 @@ async function pollCloud(){
 
 function startPolling(){
   if(window._pollInterval) clearInterval(window._pollInterval);
-  window._pollInterval = setInterval(()=>{
-    const {url,token} = syncGetCfg();
-    if(url&&token&&navigator.onLine) pollCloud();
-  }, 30000);
   if(window._fullSyncInterval) clearInterval(window._fullSyncInterval);
+  // Viewer: быстрый поллинг (30с) не запускаем — наблюдателю хватает полной тихой
+  // синхронизации раз в 5 минут (первое полное обновление уже сделал syncPullOnLogin
+  // при входе). Снижает нагрузку на Apps Script: ~10 запросов за 5 мин → 1.
+  // Остальные роли — без изменений: дельта 30с + полная 5 мин.
+  const viewer = syncReadOnly();
+  if(!viewer){
+    window._pollInterval = setInterval(()=>{
+      const {url,token} = syncGetCfg();
+      if(url&&token&&navigator.onLine&&!syncReadOnly()) pollCloud();
+    }, 30000);
+  }
   window._fullSyncInterval = setInterval(()=>{
     const {url,token} = syncGetCfg();
     if(url&&token&&navigator.onLine){
@@ -797,6 +804,7 @@ function startPolling(){
       syncPullOnLogin();
     }
   }, 5*60*1000);
+  console.log('[SYNC] Поллинг запущен: '+(viewer?'viewer — только полная синхронизация раз в 5 мин':'дельта 30с + полная 5 мин'));
 }
 
 // Отправка в облако по имени листа. actlog шлём напрямую, остальное — как transfer.
