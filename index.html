@@ -577,8 +577,8 @@
 <div class="page" id="page-settings">
   <div class="section-head"><div class="section-title">⚙ Настройки</div></div>
 
-  <!-- СИНХРОНИЗАЦИЯ -->
-  <div class="card" style="margin-bottom:10px">
+  <!-- СИНХРОНИЗАЦИЯ (только admin — applySettingsVisibility) -->
+  <div class="card" style="margin-bottom:10px" id="cfg-sync-card">
     <div class="card-title">Синхронизация с Google Sheets</div>
     <div class="form-row cols2">
       <div>
@@ -609,12 +609,14 @@
       </div>
       <div style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px">
         <button class="btn btn-sm" onclick="document.getElementById('cfg-key').type=document.getElementById('cfg-key').type==='password'?'text':'password'" style="color:var(--muted)">Показать / скрыть</button>
+        <button class="btn btn-success btn-sm" id="cfg-key-save-btn" style="display:none" onclick="cfgSaveKeyOnly()">💾 Сохранить ключ</button>
       </div>
     </div>
     <div id="cfg-encrypt-on" style="display:none;margin-top:4px">
       <span class="tag tag-ok">🔒 Шифрование включено</span>
     </div>
-    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)" id="cfg-reencrypt-block" style="display:none">
+    <!-- ВАЖНО: не дублировать атрибут style — браузер игнорирует второй (display:none не работал) -->
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:none" id="cfg-reencrypt-block">
       <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:8px">⚠ Смена ключа (только для Администратора)</div>
       <div class="form-row cols2">
         <div><label>Новый ключ</label><input id="cfg-newkey" type="password" placeholder="Новый секретный ключ" autocomplete="off"></div>
@@ -626,8 +628,9 @@
     </div>
   </div>
 
-  <!-- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ -->
-  <div class="card" style="margin-bottom:10px" id="usersCard" style="display:none">
+  <!-- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только admin — applySettingsVisibility).
+       Был дубль атрибута style — display:none игнорировался браузером, карточку видели ВСЕ роли -->
+  <div class="card" style="margin-bottom:10px;display:none" id="usersCard">
     <div class="card-title">Пользователи (только Администратор)</div>
     <div id="usersList" style="margin-bottom:12px"></div>
     <div style="padding-top:10px;border-top:1px solid var(--border)">
@@ -674,7 +677,7 @@
   <div class="card" style="margin-bottom:10px">
     <div class="card-title">Статус</div>
     <div id="cfg-last-sync" style="font-size:12px;color:var(--muted)">Синхронизация не настроена</div>
-    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap" id="cfg-status-actions">
       <button class="btn btn-primary btn-sm" onclick="syncToCloud()">⬆ Синхронизировать сейчас</button>
       <button class="btn btn-sm" style="color:var(--muted)" onclick="renderSettingsStatus()">Обновить статус</button>
     </div>

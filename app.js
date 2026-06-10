@@ -36,6 +36,13 @@ function guardWrite(){
   alert('Роль «Наблюдатель» — только просмотр');
   return false;
 }
+// Guard операций администратора (создание пользователей, смена токенов и т.п.).
+// Проверка по УЧЁТКЕ (authUser), а не по переключателю — admin в роли cmd сохраняет права.
+function guardAdmin(){
+  if(authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin')return true;
+  alert('Доступно только администратору');
+  return false;
+}
 
 // Затемнённый модальный оверлей. Возвращает контейнер (.appendChild уже сделан).
 function modalOverlay(innerHTML){
@@ -203,9 +210,11 @@ function showPage(id,btn){
   if(id==='inventory')renderInventory();
   if(id==='report'){fillReportFilters();buildReport();}
   if(id==='settings'){
+    applySettingsVisibility(); // секции по ролям: admin — всё, остальные — ключ+статус
+    const isAdminAcc=authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin';
     const nuke=document.getElementById('nu-enckey');
-    if(nuke)nuke.value=cfg.key||localStorage.getItem('cfg_key')||'';
-    if(authToken)loadUsersList();
+    if(nuke&&isAdminAcc)nuke.value=cfg.key||localStorage.getItem('cfg_key')||'';
+    if(authToken&&isAdminAcc)loadUsersList(); // список пользователей не грузим не-админам
     renderSettingsStatus();
     if(typeof nuRoleChange==='function')nuRoleChange();
   }
@@ -254,6 +263,7 @@ function switchRole(r){
     }
   }
   applyViewerUI(r); // скрытие вкладок Склад/Импорт и форм для наблюдателя
+  applySettingsVisibility(); // секции страницы Настройки по роли
   try{localStorage.setItem('role',r);}catch(e){}
   // Обновляем форму вылета — скрываем/показываем поле пилота
   setTimeout(()=>{
@@ -2246,6 +2256,7 @@ function nuRoleChange(){
 }
 
 async function createUser(){
+  if(!guardAdmin())return; // клиентский guard; сервер (Backend v7) проверяет роль admin сам
   const {url}=syncGetCfg();
   if(!url){alert('URL не настроен');return;}
   if(!authToken){alert('Нет прав администратора');return;}
@@ -2317,6 +2328,8 @@ function copyUserLink(){
 }
 
 async function loadUsersList(){
+  // Список пользователей (логины/роли/токен-операции) — только админской учётке
+  if(!(authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin'))return;
   const {url}=syncGetCfg();
   if(!url||!authToken)return;
   try{
@@ -2342,6 +2355,7 @@ async function loadUsersList(){
 }
 
 async function regenerateToken(login){
+  if(!guardAdmin())return;
   const {url,key}=syncGetCfg();
   if(!url||!authToken)return;
   try{
@@ -2368,6 +2382,7 @@ async function regenerateToken(login){
 }
 
 async function toggleUser(login,active){
+  if(!guardAdmin())return;
   const {url}=syncGetCfg();
   if(!url||!authToken)return;
   try{
@@ -2825,6 +2840,22 @@ function actlogClearFilters(){
 }
 
 // ============ ПРАВА ДОСТУПА ============
+// Видимость секций страницы Настройки по ролям. Вызывается из switchRole и showPage('settings').
+//  admin            — всё (Синхронизация/URL, Шифрование+смена ключа, Пользователи, Статус);
+//  cmd/tech/pilot   — ключ шифрования (со своей кнопкой сохранения) + Статус с «Синхронизировать сейчас»;
+//  viewer           — ключ шифрования + только текст статуса (без кнопок).
+function applySettingsVisibility(){
+  const role=state.role||authUser.role||'';
+  const isAdmin=role==='admin';
+  const isViewer=isViewerRole(role)||isViewerRole(authUser.role);
+  const show=(id,v)=>{ const el=document.getElementById(id); if(el)el.style.display=v?'':'none'; };
+  show('cfg-sync-card',isAdmin);        // URL Apps Script, проверка, загрузка/выгрузка
+  show('usersCard',isAdmin);            // список пользователей + создание (ключ в открытом виде)
+  show('cfg-key-save-btn',!isAdmin);    // не-админам — своя кнопка сохранения ключа (общая «Сохранить настройки» скрыта вместе с картой синхронизации)
+  show('cfg-status-actions',!isViewer); // viewer — только текст последней синхронизации
+  updateEncryptBadge();                 // блок смены ключа — только admin (и только при заданном ключе)
+}
+
 // Видимость вкладок/форм для роли только-чтение (viewer). Вызывается из switchRole.
 function applyViewerUI(r){
   const v=isViewerRole(r);
@@ -2916,6 +2947,19 @@ function cfgSaveSettings(){
   const nuke2=document.getElementById('nu-enckey');if(nuke2)nuke2.value=cfg.key||'';
   const st=document.getElementById('cfg-conn-status');
   st.textContent='✓ Настройки сохранены';st.style.color='var(--green2)';
+  renderSettingsStatus();
+}
+
+// Сохранение ТОЛЬКО ключа шифрования — для не-админских ролей (cmd/tech/pilot/viewer):
+// карточка синхронизации с общей кнопкой «Сохранить настройки» у них скрыта.
+// Локальная операция (localStorage), в облако ничего не пишет — guard не нужен.
+function cfgSaveKeyOnly(){
+  const keyField=(document.getElementById('cfg-key').value||'').trim();
+  if(!keyField){ showSyncToast('⚠ Введите ключ шифрования'); return; }
+  cfg.key=keyField;
+  try{ localStorage.setItem('cfg_key',cfg.key); }catch(e){}
+  updateEncryptBadge();
+  showSyncToast('✓ Ключ сохранён');
   renderSettingsStatus();
 }
 
