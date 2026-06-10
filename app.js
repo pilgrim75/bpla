@@ -372,6 +372,8 @@ function adminEditFlight(idx,field,val){
     }
   }
   syncEditFlight(idx,field,val);
+  const fl=state.flights[idx];
+  logAction('flight','edit','Адм: '+(fl?(fl.pilot||'')+' '+(fl.date||'')+' '+(fl.time||''):'#'+idx)+' — '+field+' = '+String(val??'').slice(0,40));
 }
 
 // Пересчёт списания при смене борта в вылете-потере (returned='no').
@@ -405,6 +407,7 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
   // syncPullOnLogin (5 мин) успевал откатить их облачной версией. Склад — точечно.
   saveLocal();
   if(apply) syncPushStockSquads();
+  logAction('flight','edit','Адм: смена борта в потере '+oldDrone+' → '+newDrone+' у '+(pilot||'')+(apply?'':' — без пересчёта склада'));
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
@@ -475,6 +478,7 @@ async function adminEditReturned(idx, newReturned){
   // Склад точечно: для потери — здесь (writeDroneLoss не пушит сам), для возврата — returnLossDrone.
   saveLocal();
   if(apply && loss) syncPushStockSquads(); // syncPushStockSquads сам бампит версию
+  logAction('flight','edit','Адм: '+(loss?'вернул → потерян':'потерян → вернул')+' '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||'')+' ('+drone+')'+(apply?'':' — без пересчёта склада'));
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
@@ -572,7 +576,9 @@ function adminEditStock(idx,field,val){
 function adminDeleteStock(idx){
   if(!guardWrite())return;
   if(!confirm('Удалить позицию со склада?'))return;
+  const it=state.stock[idx];
   state.stock.splice(idx,1);
+  logAction('stock','delete','Удалена позиция склада: '+(it?it.name+' ×'+it.qty+' ('+it.status+')':'#'+idx));
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -629,7 +635,9 @@ function _logAdminTransfer(pilot,drone,delta,note){
 
 function adminEditSquadPilot(si,val){
   if(!guardWrite())return;
+  const old=state.squads[si]?state.squads[si].pilot:'';
   if(state.squads[si])state.squads[si].pilot=val;
+  if(old!==val)logAction('squad','edit','Переименован пилот '+old+' → '+val);
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -638,9 +646,11 @@ function adminEditSquadDrone(si,di,field,val){
   if(!guardWrite())return;
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
+    const old=d[field];
     if(field==='qty'){const delta=(parseInt(val)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'адм');}
     else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'адм');
     d[field]=val;
+    if(old!==val)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': '+(field==='name'?('борт '+(old||'(новый)')+' → '+val):('борт '+(d.name||'?')+' — кол-во '+old+' → '+val)));
   }
   saveLocal();
   syncBumpStockVersion();
@@ -649,7 +659,9 @@ function adminEditSquadDrone(si,di,field,val){
 function adminDeleteSquad(si){
   if(!guardWrite())return;
   if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
+  const pName=state.squads[si].pilot;
   state.squads.splice(si,1);
+  logAction('squad','delete','Удалён расчёт '+pName);
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -663,6 +675,7 @@ function adminAddSquad(){
   if(!p)return;
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
   ds.forEach(n=>_logAdminTransfer(p,n,1,'адм: новый расчёт'));
+  logAction('squad','add','Создан расчёт '+p+(ds.length?' ('+ds.join(', ')+')':''));
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -708,6 +721,7 @@ function adminImportJSON(input){
       renderAdminFlights();
       renderAdminStock();
       renderAdminSquads();
+      logAction('admin','import','Импорт из файла '+file.name+': вылетов '+(state.flights||[]).length+', передач '+(state.transfers||[]).length);
       setStatus('saveStatus','✓ Данные загружены из файла: '+file.name,'ok');
     }catch(err){
       alert('Ошибка загрузки файла: '+err.message);
@@ -722,8 +736,10 @@ function adminClearFlights(){
   if(!confirm('Удалить ВСЕ вылеты из базы? Это действие необратимо.'))return;
   // tombstone на каждый id — иначе неразрушающий merge (syncPushAll) и поллинг
   // вернут все вылеты из облака в течение секунд, и «удаление» не сработает
+  const _cnt=state.flights.length;
   tombstones.addMany(state.flights.map(f=>f.id).filter(Boolean));
   state.flights=[];
+  logAction('flight','clear','Удалены ВСЕ вылеты ('+_cnt+' зап.)');
   saveLocal();
   renderAdminFlights();
   renderDashboard();
@@ -734,6 +750,9 @@ function adminResetAll(){
   if(!guardWrite())return;
   if(!confirm('ПОЛНЫЙ СБРОС всех данных? Склад, расчёты и вылеты будут удалены. Необратимо.'))return;
   if(!confirm('Вы уверены? Данные будут потеряны.'))return;
+  // Запись попадает в pendingQueue (свой ключ localStorage, переживает сброс droneState)
+  // и уйдёт в облако после перезагрузки
+  logAction('admin','reset','ПОЛНЫЙ СБРОС локальных данных');
   localStorage.removeItem('droneState');
   location.reload();
 }
@@ -1479,6 +1498,7 @@ function saveExchange(){
   saveLocal();
   syncAddTransfer(exOp);
   syncPushStockSquads();
+  logAction('transfer','exchange','Обмен с '+unit+': '+[give?('отдали '+give+' ×'+giveQty):'',get?('получили '+get+' ×'+getQty):''].filter(Boolean).join(', '));
   renderInventory();
   renderDashboard();
   document.getElementById('exchangeCard').style.display='none';
@@ -1712,7 +1732,13 @@ function squadCleanZeros(si){
   renderSquadEditor();
   renderInventory();
 }
-function squadEditPilot(si,val){if(!guardWrite())return;state.squads[si].pilot=val;saveLocal();syncBumpStockVersion();syncPushStockSquads();renderInventory();}
+function squadEditPilot(si,val){
+  if(!guardWrite())return;
+  const old=state.squads[si].pilot;
+  state.squads[si].pilot=val;
+  if(old!==val)logAction('squad','edit','Переименован пилот '+old+' → '+val);
+  saveLocal();syncBumpStockVersion();syncPushStockSquads();renderInventory();
+}
 // Сколько вылетов пилота без посчитанной дистанции
 function geoPilotMissingCount(pilot){
   const lo=(pilot||'').toLowerCase();
@@ -1817,14 +1843,18 @@ function squadEditDrone(si,di,field,val){
   if(!guardWrite())return;
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
+    const old=d[field];
     if(field==='qty'){const delta=(parseInt(val,10)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'инв');}
     else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'инв');
     d[field]=val;
+    if(old!==val)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': '+(field==='name'?('борт '+(old||'(новый)')+' → '+val):('борт '+(d.name||'?')+' — кол-во '+old+' → '+val)));
   }
   saveLocal();syncPushStockSquads();renderInventory(); // версионируем — иначе поллинг затрёт правку (last-write-wins по _sv)
 }
 function squadDeleteDrone(si,di){
   if(!guardWrite())return;
+  const sq=state.squads[si];const d=sq&&sq.drones[di];
+  if(d&&d.name)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': удалён борт '+d.name+' ×'+d.qty);
   state.squads[si].drones.splice(di,1);
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();
 }
@@ -1836,7 +1866,9 @@ function squadAddDrone(si){
 function squadDeletePilot(si){
   if(!guardWrite())return;
   if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
+  const pName=state.squads[si].pilot;
   state.squads.splice(si,1);
+  logAction('squad','delete','Удалён расчёт '+pName);
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();rebuildRoleSelector();
 }
 function squadAddPilot(){
@@ -1846,6 +1878,7 @@ function squadAddPilot(){
   if(!p){alert('Укажите имя пилота');return;}
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
   ds.forEach(n=>_logAdminTransfer(p,n,1,'инв: новый расчёт'));
+  logAction('squad','add','Создан расчёт '+p+(ds.length?' ('+ds.join(', ')+')':''));
   saveLocal();
   syncPushStockSquads();
   renderSquadEditor();
@@ -2163,6 +2196,16 @@ async function initAuth(){
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
+      // Логируем вход по сохранённому токену. Раньше логировался ТОЛЬКО первый вход
+      // по ссылке (ветка 1) — отсюда «все login-записи одной датой»: ежедневные входы
+      // не записывались вовсе. Дата/время — из todayISO()/nowHM() в момент вызова.
+      // Не чаще раза в сутки на устройство: эта ветка срабатывает на каждый F5.
+      try{
+        if(localStorage.getItem('login_logged_date')!==todayISO()){
+          logAction('auth','login','Вход: '+(authUser.login||'')+' (сохранённый токен)');
+          localStorage.setItem('login_logged_date',todayISO());
+        }
+      }catch(e){}
       return;
     } else {
       authToken='';
@@ -2272,7 +2315,7 @@ async function createUser(){
     await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'create_user',admin_token:authToken,login,password:pass,role})});
     await new Promise(r=>setTimeout(r,2500));
-    const rList=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
+    const rList=await fetch(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now());
     const dList=await rList.json();
     const newUser=(dList.users||[]).find(u=>u.login===login);
     if(!newUser||!newUser.token){
@@ -2281,6 +2324,7 @@ async function createUser(){
       return;
     }
     const token=newUser.token;
+    logAction('user','create','Создан пользователь '+login+' ('+role+(callsign?', позывной '+callsign:'')+')');
 
     // Если пилот — переименовываем позывной в расчётах и вылетах на логин
     if(role==='pilot'&&callsign&&callsign!==login){
@@ -2333,7 +2377,7 @@ async function loadUsersList(){
   const {url}=syncGetCfg();
   if(!url||!authToken)return;
   try{
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now());
     const d=await r.json();
     const users=d.users||[];
     const el=document.getElementById('usersList');
@@ -2365,7 +2409,7 @@ async function regenerateToken(login){
     // Ждём пока Apps Script обработает
     await new Promise(r=>setTimeout(r,2000));
     // Читаем обновлённый список пользователей
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken));
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now());
     const d=await r.json();
     const updUser=(d.users||[]).find(u=>u.login===login);
     if(!updUser||!updUser.token){
@@ -2376,6 +2420,7 @@ async function regenerateToken(login){
     const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(key)+'&s='+encodeURIComponent(url);
     document.getElementById('nu-link-text').textContent=link;
     document.getElementById('nu-link-result').style.display='block';
+    logAction('user','token','Новая ссылка (смена токена) для '+login);
     showSyncToast('✓ Новая ссылка сгенерирована');
     loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
@@ -2389,6 +2434,7 @@ async function toggleUser(login,active){
     await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify({action:'update_user',admin_token:authToken,login,active})});
     await new Promise(r=>setTimeout(r,1000));
+    logAction('user',active?'unblock':'block',(active?'Разблокирован':'Заблокирован')+' пользователь '+login);
     loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
 }
@@ -2792,7 +2838,8 @@ async function loadActLogFromCloud(){
   const {url,key,token}=syncGetCfg();
   if(!url||!token)return;
   try{
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token));
+    // cache-buster — иначе Apps Script может отдать закэшированный журнал без свежих чужих записей
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now());
     const d=await r.json();
     if(d.error||!d.actlog)return;
     const entries=await Promise.all(d.actlog.map(async row=>{

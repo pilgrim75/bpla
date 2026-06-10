@@ -324,6 +324,7 @@ async function confirmParsed(i){
   // syncAddFlight выполняет unshift+saveLocal+pendingQueue синхронно (гарантия
   // доставки сохраняется), а сетевую отправку — асинхронно; UI её НЕ ждёт (без await).
   syncAddFlight(f);
+  logAction('flight','add','Импорт: вылет '+(f.flightnum?'#'+f.flightnum+' ':'')+f.pilot+' '+(f.drone||'')+(f.returned==='no'?' [потеря]':''));
   checkNet();
   renderDashboard();
   renderInventory();
