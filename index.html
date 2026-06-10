@@ -26,7 +26,7 @@
 <div class="app">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
-  <div class="version">v0.17</div>
+  <div class="version">v0.18</div>
   <select id="roleSwitch" style="width:auto;padding:4px 10px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -55,10 +55,10 @@
 
 <div class="navbar" id="nav">
   <button class="nav-tab active" onclick="showPage('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Обзор</button>
-  <button class="nav-tab" onclick="showPage('inventory',this)"><i class="ti ti-building-warehouse"></i>Склад</button>
+  <button class="nav-tab" id="invNavBtn" onclick="showPage('inventory',this)"><i class="ti ti-building-warehouse"></i>Склад</button>
   <button class="nav-tab" onclick="showPage('flights',this)"><i class="ti ti-plane-departure"></i>Вылеты</button>
   <button class="nav-tab" onclick="showPage('report',this)"><i class="ti ti-chart-bar"></i>Отчёты</button>
-  <button class="nav-tab" onclick="showPage('import',this)"><i class="ti ti-file-import"></i>Импорт</button>
+  <button class="nav-tab" id="importNavBtn" onclick="showPage('import',this)"><i class="ti ti-file-import"></i>Импорт</button>
   <button class="nav-tab" id="adminNavBtn" onclick="showPage('admin',this)" style="display:none"><i class="ti ti-shield"></i>Администратор</button>
   <button class="nav-tab" onclick="showPage('settings',this)" style="margin-left:auto"><i class="ti ti-settings"></i>Настройки</button>
 </div>
@@ -509,6 +509,7 @@
         <button class="btn btn-primary" onclick="document.getElementById('importJSONInput').click()">📤 Загрузить из файла .json</button>
         <input type="file" id="importJSONInput" accept=".json" style="display:none" onchange="adminImportJSON(this)">
         <button class="btn btn-sm" style="color:var(--amber);border-color:var(--amber)" onclick="adminCleanOrphanLosses()" title="Удалить записи о потерях без соответствующего вылета">🧹 Очистить журнал потерь</button>
+        <button class="btn btn-sm" style="color:var(--amber);border-color:var(--amber)" onclick="adminDedupeLossTransfers()" title="Удалить повторные записи о потерях с одинаковыми дата+время+пилот+борт (наследие бага двойного списания)">🧹 Удалить дубли потерь</button>
       </div>
       <div id="saveStatus" style="font-size:12px;color:var(--muted)">Данные хранятся в localStorage. Для переноса на другое устройство — экспортируйте в файл.</div>
     </div>
@@ -640,6 +641,7 @@
             <option value="tech">Техник</option>
             <option value="cmd">Командир</option>
             <option value="admin">Администратор</option>
+            <option value="viewer">Наблюдатель (только просмотр)</option>
           </select>
         </div>
       </div>

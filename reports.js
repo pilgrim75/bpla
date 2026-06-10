@@ -219,16 +219,17 @@ function reportStock(out){
       ...(moveKeys.length?['','Изменения (последние 24ч):',...moveKeys]:[]),
     ].join('\n');
 
+    // Все пользовательские/облачные данные (пилоты, борта, заметки передач) — через esc()
     const movementsBlock=moveKeys.length
       ?'<div style="margin:10px 0 4px;font-weight:700">Изменения (последние 24ч):</div>'
-        +moveKeys.map((k,i)=>'<div class="rb-line"'+(moveIsRed(k,i)?' style="color:var(--red)"':'')+'>'+k+'</div>').join('')
+        +moveKeys.map((k,i)=>'<div class="rb-line"'+(moveIsRed(k,i)?' style="color:var(--red)"':'')+'>'+esc(k)+'</div>').join('')
       :'<div style="color:var(--muted);font-size:11px;margin-top:8px">Изменений за последние 24ч нет</div>';
     out.innerHTML='<div class="report-block">'
       +'<div class="rb-head">ФПВ ИСР</div>'
-      +state.squads.map(sq=>'<div style="margin:8px 0 4px;font-weight:700">✅ Пилот '+sq.pilot+'</div>'+sq.drones.filter(d=>d.qty!==0).map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')).join('')
+      +state.squads.map(sq=>'<div style="margin:8px 0 4px;font-weight:700">✅ Пилот '+esc(sq.pilot)+'</div>'+sq.drones.filter(d=>d.qty!==0).map(d=>'<div class="rb-line">'+esc(d.name)+' — '+d.qty+' шт.</div>').join('')).join('')
       +'<div style="margin:10px 0 4px;font-weight:700">✅ Склад:</div>'
-      +stockBG.filter(d=>d.qty>0).map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join('')
-      +(stockNBG.length?'<div style="margin:10px 0 4px;font-weight:700">Не БГ:</div>'+stockNBG.map(d=>'<div class="rb-line">'+d.name+' — '+d.qty+' шт.</div>').join(''):'')
+      +stockBG.filter(d=>d.qty>0).map(d=>'<div class="rb-line">'+esc(d.name)+' — '+d.qty+' шт.</div>').join('')
+      +(stockNBG.length?'<div style="margin:10px 0 4px;font-weight:700">Не БГ:</div>'+stockNBG.map(d=>'<div class="rb-line">'+esc(d.name)+' — '+d.qty+' шт.</div>').join(''):'')
       +movementsBlock
       +'</div>';
 
@@ -614,6 +615,7 @@ function copyReport(){
 function printReport(){
   const content=document.getElementById('reportOutput').innerHTML;
   const win=window.open('','_blank','width=800,height=600');
+  if(!win){ alert('Браузер заблокировал окно печати — разрешите всплывающие окна для этого сайта'); return; }
   win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Отчёт</title>
   <style>
     body{font-family:'Courier New',monospace;font-size:13px;color:#000;background:#fff;padding:20px;margin:0}
@@ -909,6 +911,7 @@ function vrPrint(){
   const ta=document.getElementById('vrResult'); if(!ta) return;
   window._vrText=ta.value;
   const win=window.open('','_blank','width=800,height=600');
+  if(!win){ alert('Браузер заблокировал окно печати — разрешите всплывающие окна для этого сайта'); return; }
   win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Устный доклад</title>'
     +'<style>body{font-family:Georgia,serif;font-size:14px;line-height:1.6;color:#000;background:#fff;padding:24px;white-space:pre-wrap}@media print{body{padding:12px}}</style>'
     +'</head><body>'+esc(ta.value)+'</body></html>');
@@ -1120,6 +1123,8 @@ async function rpgGenerate(){
     let txt=(data.content||[]).map(i=>i.text||'').join('').trim();
     if(!txt) throw new Error('пустой ответ API');
     txt=rpgDeanon(txt,maps);
+    // Ссылка на статичную справку о медалях (medals.html на GitHub Pages)
+    txt+='\n\n───────────────\nℹ️ Что означают медали: https://pilgrim75.github.io/bpla/medals.html';
     rpgShowText(txt);
     rpgSetStatus('✓ Готово','var(--green2)');
   }catch(e){

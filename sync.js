@@ -34,6 +34,16 @@ function syncGetCfg(){
   };
 }
 
+// Роль только-чтение: устройство наблюдателя (viewer) НЕ пишет данные в облако.
+// Защита на уровне sync-слоя — все точки записи проходят через эти функции,
+// поэтому работает независимо от скрытия кнопок в UI. Исключение — actlog
+// (appendToCloud): аудит входов наблюдателя должен фиксироваться.
+function syncReadOnly(){
+  try{
+    return ((typeof state!=='undefined'&&state.role)||(window.authUser&&authUser.role)||'')==='viewer';
+  }catch(e){ return false; }
+}
+
 async function syncEncrypt(obj, key){
   const json = JSON.stringify(obj);
   if(!key) return { id: obj.id, data: json };
@@ -53,8 +63,15 @@ async function syncDecryptRows(rows, key){
   return results.filter(Boolean);
 }
 
+// Дедупликация по id: в облаке возможны дубль-строки одного id (повторный append
+// очереди при неподтверждённой доставке). Первое вхождение выигрывает.
+function syncDedupeById(rows){
+  const seen=new Set();
+  return rows.filter(x=>{ if(!x.id) return true; if(seen.has(x.id)) return false; seen.add(x.id); return true; });
+}
+
 async function syncPost(url, body){
-  // Всегда cors+redirect:follow; при ошибке/таймауте — no-cors
+  // Всегда cors+redirect:follow; при сетевой ошибке/таймауте — no-cors
   try{
     const ctrl = new AbortController();
     const tid = setTimeout(()=>ctrl.abort(), 30000); // 30с — иначе зависший запрос держит индикатор/очередь
@@ -65,7 +82,13 @@ async function syncPost(url, body){
         body, mode:'cors', redirect:'follow', signal:ctrl.signal
       });
     } finally { clearTimeout(tid); }
-    const d = await r.json();
+    let d;
+    try{ d = await r.json(); }
+    catch(je){
+      // Ответ получен, но это не JSON (редирект/HTML-страница): запрос ДОШЁЛ до
+      // сервера — повторная отправка через no-cors создала бы дубль-строку (append_one).
+      return { ok:true, data:null, unverified:true };
+    }
     if(d.error) throw new Error(d.error);
     return { ok:true, data:d };
   }catch(e){
@@ -187,14 +210,46 @@ function syncQueueStartupCheck(){
   updateQueueIndicator();
 }
 
-// --- Tombstones (удалённые вылеты) ---
+// --- Tombstones (удалённые вылеты/loss-передачи) ---
+// Хранение: [{id,ts}] — ts нужен для чистки старых записей (раньше — массив id,
+// рос бесконечно; старый формат мигрируется на лету с ts=сейчас).
 const tombstones = {
   _key: 'sync_tombstones',
-  load(){ try{ return new Set(JSON.parse(localStorage.getItem(this._key)||'[]')); }catch(e){ return new Set(); } },
-  add(id){ const s=this.load(); s.add(id); try{ localStorage.setItem(this._key, JSON.stringify([...s])); }catch(e){} },
+  _load(){
+    try{
+      const raw=JSON.parse(localStorage.getItem(this._key)||'[]');
+      if(!Array.isArray(raw)) return [];
+      const now=Date.now();
+      return raw.map(x=>(x&&typeof x==='object'&&'id' in x)?x:{id:x,ts:now});
+    }catch(e){ return []; }
+  },
+  _save(list){ try{ localStorage.setItem(this._key, JSON.stringify(list)); }catch(e){} },
+  load(){ return new Set(this._load().map(x=>x.id)); },
+  add(id){ this.addMany([id]); },
+  // Массовое добавление одним чтением/записью localStorage (adminClearFlights и т.п.)
+  addMany(ids){
+    const list=this._load();
+    const have=new Set(list.map(x=>x.id));
+    const now=Date.now();
+    let changed=false;
+    ids.forEach(id=>{ if(id!=null&&id!==''&&!have.has(id)){ list.push({id,ts:now}); have.add(id); changed=true; } });
+    if(changed) this._save(list);
+  },
   has(id){ return this.load().has(id); },
-  all(){ return [...this.load()]; }
+  all(){ return [...this.load()]; },
+  // Чистка записей старше maxAgeMs (по умолчанию 90 дней). За это время удаление
+  // гарантированно дошло до облака ambient-write'ом — tombstone больше не нужен.
+  prune(maxAgeMs){
+    const cutoff=Date.now()-(maxAgeMs||90*864e5);
+    const list=this._load();
+    const kept=list.filter(x=>(x.ts||0)>=cutoff);
+    if(kept.length!==list.length){
+      console.log('[SYNC] tombstones: удалено '+(list.length-kept.length)+' записей старше 90 дней');
+      this._save(kept);
+    }
+  }
 };
+tombstones.prune(); // при каждом запуске
 
 // --- Версия склада ---
 let _stockVersion = parseInt(localStorage.getItem('sync_stock_version')||'0');
@@ -213,6 +268,7 @@ let _lastStockTs = Date.now(); // Инициализируем текущим в
 
 // Добавить вылет — кэшируем в очередь, сразу пробуем отправить (если есть сеть)
 async function syncAddFlight(flight){
+  if(syncReadOnly()) return; // viewer не добавляет вылеты
   if(!flight.id) flight.id = genId('f');
   state.flights.unshift(flight);
   saveLocal();
@@ -300,14 +356,16 @@ async function syncDeleteFlight(idx){
 // Обновить поле вылета
 function syncEditFlight(idx, field, val){
   if(state.flights[idx]) state.flights[idx][field] = val;
-  // Risk 3: правка поля вылета не должна тянуть полный write массива flights.
-  // Сохраняем локально без авто-выгрузки; правка попадёт в облако при ближайшем
-  // ambient-полном write (у бэкенда нет update_one для точечного обновления строки).
-  saveLocalQuiet();
+  // Дефект C (10.06.2026): раньше saveLocalQuiet оставлял правку только локально —
+  // если до следующего ambient-write успевал плановый syncPullOnLogin (5 мин),
+  // полная замена flights откатывала правку облачной версией. syncPushAll теперь
+  // неразрушающий (merge), поэтому правка безопасно уходит обычным debounce-write.
+  saveLocal();
 }
 
 // Добавить transfer/arrival/loss — кэшируем в очередь, сразу пробуем отправить
 async function syncAddTransfer(op){
+  if(syncReadOnly()) return; // viewer не пишет передачи
   if(!op.id) op.id = genId('t');
   if(op && (op.geo_points_db||op.geo||op.color_key)) return; // ГЕО не синхронизируется
   const {url,key,token} = syncGetCfg();
@@ -319,6 +377,7 @@ async function syncAddTransfer(op){
 
 // Отправить склад и расчёты (last-write-wins)
 async function syncPushStockSquads(){
+  if(syncReadOnly()) return; // viewer не выгружает склад
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;
   syncBumpStockVersion();
@@ -349,6 +408,7 @@ async function syncPushStockSquads(){
 // записи, ещё не полученные поллингом. Локальные данные при этом не теряются:
 // итоговый снимок = (локальное) ∪ (облачное) − (удалённое локально).
 async function syncPushAll(silent=false){
+  if(syncReadOnly()) return; // viewer не пишет в облако (ambient-write в т.ч.)
   const {url,key,token} = syncGetCfg();
   if(!url) return;
   if(!silent) syncIndicator('syncing');
@@ -361,10 +421,12 @@ async function syncPushAll(silent=false){
       const d = await r.json();
       if(d.error) throw new Error(d.error);
       const tb = tombstones.load();
-      const [cloudF, cloudT] = await Promise.all([
+      const [cloudFRaw, cloudTRaw] = await Promise.all([
         syncDecryptRows(d.flights||[], key),
         syncDecryptRows(d.transfers||[], key)
       ]);
+      // Дедуп дубль-строк облака — иначе обе копии одного id пройдут фильтр !localFIds
+      const cloudF=syncDedupeById(cloudFRaw), cloudT=syncDedupeById(cloudTRaw);
       const localFIds = new Set(state.flights.map(f=>f.id).filter(Boolean));
       const addF = cloudF.filter(f=>f.id && !localFIds.has(f.id) && !tb.has(f.id));
       const localTIds = new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
@@ -392,11 +454,13 @@ async function syncPushAll(silent=false){
   // _sv). Раньше ambient-syncPushAll писал stock/squads с устаревшим _sv из объектов
   // state и откатывал версию → гейт remoteVersion>_stockVersion отвергал изменение
   // на других устройствах. writeAll пропускает undefined-листы → склад не трогаем.
-  const ts = Date.now();
-  const encRow = async (obj,i) => syncEncrypt({...obj, id:obj.id||(ts+i)}, key);
+  // id безыдных записей пишем ОБРАТНО в объект state (как в syncPushStockSquads):
+  // раньше id генерировался только в шифруемой копии, при каждой выгрузке был новым,
+  // и другие устройства накапливали копии одной записи через поллинг.
+  const encRow = async (obj) => { if(!obj.id) obj.id = genId('x'); return syncEncrypt(obj, key); };
   const [flights,transfers] = await Promise.all([
-    Promise.all(state.flights.map((f,i)=>encRow(f,i))),
-    Promise.all((state.transfers||[]).map((t,i)=>encRow(t,i)))
+    Promise.all(state.flights.map(f=>encRow(f))),
+    Promise.all((state.transfers||[]).map(t=>encRow(t)))
   ]);
   const data = geoStripFromSync({flights,transfers}); // ГЕО НИКОГДА не уходит в облако; stock/squads не трогаем
   const body = JSON.stringify({action:'write', token, data});
@@ -423,10 +487,11 @@ async function syncPushAll(silent=false){
 // Используется для возврата флага _lossWritten в облако (Risk 4) — у бэкенда нет
 // update_one, обновить строку вылета можно только перезаписью листа flights.
 async function syncPushFlightsOnly(){
+  if(syncReadOnly()) return; // viewer не пишет в облако
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;
-  const ts = Date.now();
-  const flights = await Promise.all(state.flights.map((f,i)=>syncEncrypt({...f, id:f.id||(ts+i)}, key)));
+  // id безыдных вылетов пишем обратно в state (см. комментарий в syncPushAll)
+  const flights = await Promise.all(state.flights.map(f=>{ if(!f.id) f.id=genId('x'); return syncEncrypt(f, key); }));
   const data = geoStripFromSync({flights});
   const body = JSON.stringify({action:'write', token, data});
   const res = await syncPost(url, body);
@@ -465,10 +530,12 @@ async function syncPullAll(confirm_=false){
     const d = await r.json();
     if(d.error) throw new Error(d.error);
     const loaded = {
-      flights:   await syncDecryptRows(d.flights||[], key),
+      // flights/transfers — дедуп по id: дубль-строки облака иначе попадут в журнал
+      // парой при полной замене (pollCloud дедупит сам, полная загрузка — нет)
+      flights:   syncDedupeById(await syncDecryptRows(d.flights||[], key)),
       stock:     await syncDecryptRows(d.stock||[], key),
       squads:    (await syncDecryptRows(d.squads||[], key)).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]})),
-      transfers: await syncDecryptRows(d.transfers||[], key),
+      transfers: syncDedupeById(await syncDecryptRows(d.transfers||[], key)),
       users: d.users||[]
     };
     // Фильтруем tombstones (и удалённые вылеты, и удалённые loss-передачи)
@@ -591,6 +658,7 @@ async function syncFromCloud(){
 
 // Принудительная выгрузка вручную (кнопка)
 async function syncToCloud(silent=false){
+  if(syncReadOnly()){ if(!silent) alert('Роль «Наблюдатель» — только просмотр, выгрузка недоступна'); return; }
   const ok = await syncPushAll(silent);
   if(!ok && !silent) alert('Ошибка синхронизации. Проверьте соединение.');
 }
@@ -627,8 +695,9 @@ async function pollCloud(){
         changed = true;
         newFlights++;
         // Списываем дрон если потеря — но только если списание ещё не зафиксировано
-        // на устройстве-источнике (флаг приходит вместе с вылетом).
-        if(obj.returned==='no' && obj.drone && !obj._lossWritten){
+        // на устройстве-источнике (флаг приходит вместе с вылетом). Viewer не участвует:
+        // не списывает и не пушит — ждёт авторитетный склад от пишущего устройства.
+        if(obj.returned==='no' && obj.drone && !obj._lossWritten && !syncReadOnly()){
           writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id);
           obj._lossWritten=true;
           lossFlagSet = true;                       // Risk 4: вернём флаг в облако ниже

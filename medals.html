@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Доска почёта — медали и достижения</title>
+<link rel="icon" href="favicon.ico">
+<style>
+  :root{
+    --bg:#0a0e0a; --card:#101510; --card2:#141a14;
+    --border:#1f4d1f; --border2:#2a5d2a;
+    --text:#d8e8d8; --muted:#7e937e;
+    --green:#39ff14; --gold:#FFD700; --gold-dim:#d99a00;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:28px 16px 60px;
+  }
+  .paper{max-width:1060px;margin:0 auto}
+
+  /* ===== Газетная шапка ===== */
+  .masthead{text-align:center;padding-bottom:16px;margin-bottom:22px;border-bottom:4px double var(--border2)}
+  .masthead .over{font-size:11px;letter-spacing:4px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .masthead h1{
+    font-size:clamp(26px,5.4vw,46px); font-weight:700; letter-spacing:1px;
+    color:var(--green); text-shadow:0 0 18px rgba(57,255,20,.25);
+  }
+  .masthead .under{
+    display:flex;justify-content:center;gap:14px;align-items:center;
+    font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);
+    margin-top:12px;padding-top:10px;border-top:1px solid var(--border);
+  }
+
+  /* ===== Вводный текст в колонках ===== */
+  .lede{
+    font-size:15px;color:var(--text);margin:0 auto 30px;max-width:920px;
+    column-count:2;column-gap:36px;column-rule:1px solid var(--border);
+    text-align:justify;
+  }
+  .lede p{margin-bottom:10px;break-inside:avoid}
+  .lede .drop::first-letter{
+    float:left;font-size:46px;line-height:.85;padding:4px 8px 0 0;color:var(--green);font-weight:700;
+  }
+  @media(max-width:640px){.lede{column-count:1}}
+
+  /* ===== Заголовки разделов ===== */
+  .section-head{
+    display:flex;align-items:center;gap:14px;margin:34px 0 6px;
+    font-size:clamp(17px,3vw,24px);font-weight:700;letter-spacing:2px;text-transform:uppercase;
+  }
+  .section-head::before,.section-head::after{content:'';flex:1;border-top:1px solid var(--border2)}
+  .section-sub{text-align:center;font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:20px}
+  .gold-head{color:var(--gold)}
+
+  /* ===== Сетка карточек ===== */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+
+  .medal{
+    background:var(--card);border:1px solid var(--border);border-radius:8px;
+    padding:18px 16px 16px;text-align:center;
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+  }
+  .medal .icon{font-size:44px;line-height:1;filter:drop-shadow(0 2px 10px rgba(57,255,20,.18))}
+  .medal h3{font-size:16px;letter-spacing:1px;color:var(--green)}
+  .medal p{font-size:13px;color:var(--text);opacity:.92}
+  .medal .fine{font-size:11px;color:var(--muted);font-style:italic;margin-top:auto}
+
+  /* ===== Золотые щиты ===== */
+  .medal.gold{background:var(--card2);border-color:#5a4500}
+  .medal.gold h3{color:var(--gold)}
+  .shield{
+    width:64px;height:72px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(160deg,#ffe066 0%,var(--gold) 45%,#b8860b 100%);
+    clip-path:polygon(50% 0,100% 16%,100% 58%,50% 100%,0 58%,0 16%);
+    filter:drop-shadow(0 2px 8px rgba(255,215,0,.35));
+  }
+  .shield span{font-size:30px;line-height:1}
+
+  /* ===== Врезка о правиле 1% ===== */
+  .rulebox{
+    border:1px solid #5a4500;border-left:4px solid var(--gold-dim);border-radius:6px;
+    background:var(--card2);padding:14px 18px;margin:0 auto 22px;max-width:860px;
+    font-size:14px;
+  }
+  .rulebox b{color:var(--gold)}
+
+  .divider{border:none;border-top:3px double var(--border2);margin:38px auto;max-width:420px}
+
+  footer{
+    margin-top:46px;padding-top:14px;border-top:4px double var(--border2);
+    text-align:center;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);
+  }
+</style>
+</head>
+<body>
+<div class="paper">
+
+  <header class="masthead">
+    <div class="over">АСУ БПЛА · Журнал вылетов</div>
+    <h1>Доска почёта — медали и достижения</h1>
+    <div class="under"><span>Специальный выпуск</span><span>★</span><span>Награды присуждаются автоматически по данным журнала</span></div>
+  </header>
+
+  <div class="lede">
+    <p class="drop">Медали присуждает беспристрастный счётчик: никаких комиссий и ходатайств — только цифры из журнала вылетов. Обычные медали разыгрываются по результатам <b>последних десяти дней</b> и переходят из рук в руки: сегодня ты «Трудяга», а завтра уже догоняешь.</p>
+    <p>Сравнительную медаль получает <b>только один пилот</b> — и только с явным отрывом от второго места (правило 10&nbsp;%). При ничьей медаль не достаётся никому: равных не награждают, равных обгоняют. Исключения — 🔥&nbsp;«На волне» и 🎯&nbsp;«Дальний рейд»: это абсолютные условия, выполнил — носишь, сколько бы вас таких ни было.</p>
+    <p>Высшая лига — <b>золотые щиты</b>: те же номинации, но за абсолютный рекорд за всю историю подразделения. Щит — вещь штучная и хрупкая: достаточно кому-то подобраться к рекорду ближе чем на один процент — и достижение перестаёт быть уникальным.</p>
+  </div>
+
+  <h2 class="section-head">Медали недели</h2>
+  <div class="section-sub">присуждаются по результатам последних 10 дней (скользящее окно) и пересчитываются автоматически</div>
+
+  <div class="grid">
+    <article class="medal">
+      <div class="icon">🚀</div>
+      <h3>Дальнобойщик</h3>
+      <p>Самый дальний вылет за последние 10 дней — рекордная дальность до цели.</p>
+      <div class="fine">нужны геоданные · один носитель</div>
+    </article>
+    <article class="medal">
+      <div class="icon">⚡</div>
+      <h3>Трудяга</h3>
+      <p>Больше всего вылетов за последние 10 дней.</p>
+      <div class="fine">один носитель · отрыв &gt;10 %</div>
+    </article>
+    <article class="medal">
+      <div class="icon">🥇</div>
+      <h3>Снайпер</h3>
+      <p>Лучший процент выполненных задач за 10 дней.</p>
+      <div class="fine">минимум 5 вылетов · один носитель</div>
+    </article>
+    <article class="medal">
+      <div class="icon">🛡️</div>
+      <h3>Бережливый</h3>
+      <p>Наименьший процент потерь бортов за 10 дней.</p>
+      <div class="fine">минимум 5 вылетов · один носитель</div>
+    </article>
+    <article class="medal">
+      <div class="icon">🔥</div>
+      <h3>На волне</h3>
+      <p>Текущая серия из 5 и более вылетов подряд без единой потери.</p>
+      <div class="fine">абсолютное условие — носителей может быть несколько</div>
+    </article>
+    <article class="medal">
+      <div class="icon">💎</div>
+      <h3>Ветеран</h3>
+      <p>Наибольшее число вылетов за всё время службы.</p>
+      <div class="fine">носят лидер и все, кто в пределах 10 % от него</div>
+    </article>
+    <article class="medal">
+      <div class="icon">📈</div>
+      <h3>Прогресс</h3>
+      <p>Наибольший рост числа вылетов по сравнению с прошлой неделей.</p>
+      <div class="fine">минимум +3 вылета · один носитель</div>
+    </article>
+    <article class="medal">
+      <div class="icon">🌟</div>
+      <h3>Лучший день</h3>
+      <p>Рекорд вылетов за один календарный день.</p>
+      <div class="fine">минимум 2 вылета за день · один носитель</div>
+    </article>
+    <article class="medal">
+      <div class="icon">🎯</div>
+      <h3>Дальний рейд</h3>
+      <p>Вылет на дальность свыше 20 км за последние 10 дней.</p>
+      <div class="fine">абсолютное условие — носителей может быть несколько</div>
+    </article>
+  </div>
+
+  <hr class="divider">
+
+  <h2 class="section-head gold-head">Золотые щиты</h2>
+  <div class="section-sub">абсолютные рекорды за всю историю подразделения</div>
+
+  <div class="rulebox">
+    Золотой щит — та же медаль, но <b>на золотом щите</b>: присуждается за абсолютный рекорд за всё время.
+    Действует <b>правило 1&nbsp;%</b>: рекордсмен носит щит, только пока его результат превосходит второй
+    более чем на один процент. Стоит кому-то приблизиться к рекорду ближе чем на 1&nbsp;% — щит снимается
+    у всех: достижение перестало быть уникальным. Ничья — щита нет ни у кого. Щит носится рядом с именем
+    пилота и переходит к новому рекордсмену автоматически.
+  </div>
+
+  <div class="grid">
+    <article class="medal gold">
+      <div class="shield"><span>🚀</span></div>
+      <h3>Дальнобойщик</h3>
+      <p>Самый дальний одиночный вылет за всю историю.</p>
+      <div class="fine">нужны геоданные</div>
+    </article>
+    <article class="medal gold">
+      <div class="shield"><span>⚡</span></div>
+      <h3>Трудяга</h3>
+      <p>Максимум вылетов за одну неделю (любые 7 дней подряд) за всё время.</p>
+      <div class="fine">правило 1 %</div>
+    </article>
+    <article class="medal gold">
+      <div class="shield"><span>🌟</span></div>
+      <h3>Лучший день</h3>
+      <p>Максимум вылетов за один календарный день за всю историю.</p>
+      <div class="fine">правило 1 %</div>
+    </article>
+    <article class="medal gold">
+      <div class="shield"><span>🥇</span></div>
+      <h3>Снайпер</h3>
+      <p>Лучший процент выполнения задач за всё время.</p>
+      <div class="fine">минимум 20 вылетов · правило 1 %</div>
+    </article>
+    <article class="medal gold">
+      <div class="shield"><span>🛡️</span></div>
+      <h3>Бережливый</h3>
+      <p>Минимальный процент потерь бортов за всё время.</p>
+      <div class="fine">минимум 20 вылетов · правило 1 %</div>
+    </article>
+    <article class="medal gold">
+      <div class="shield"><span>🔥</span></div>
+      <h3>На волне</h3>
+      <p>Самая длинная серия вылетов без потерь за всю историю.</p>
+      <div class="fine">минимум 5 подряд · правило 1 %</div>
+    </article>
+    <article class="medal gold">
+      <div class="shield"><span>💎</span></div>
+      <h3>Ветеран</h3>
+      <p>Наибольшее общее число вылетов за всю историю.</p>
+      <div class="fine">правило 1 %</div>
+    </article>
+  </div>
+
+  <footer>Доска почёта · награды считает машина — заслуживают люди</footer>
+
+</div>
+</body>
+</html>

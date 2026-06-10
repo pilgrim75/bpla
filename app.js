@@ -1,7 +1,6 @@
 
 // ============ STATE ============
-const ROLES_BASE={admin:'Администратор',cmd:'Командир',tech:'Техник'};
-const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','Упырь11','Упырь18','Курьер21'];
+const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16'];
 
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
@@ -26,6 +25,17 @@ function setStatus(elId,text,kind){
 
 // Единая проверка роли пилота (формы: 'pilot', 'pilot_0', 'pilot1' и т.п.)
 function isPilotRole(role){return !!role&&role.startsWith('pilot');}
+
+// Роль только-чтение: наблюдатель (viewer) — видит Обзор/Вылеты/Отчёты, ничего не меняет
+function isViewerRole(role){return role==='viewer';}
+// Guard мутирующих операций: для viewer блокируем изменение данных на уровне функций,
+// а не только скрытием кнопок (защита от вызова из консоли/обходных путей UI).
+// Запись в облако дополнительно блокирует sync-слой (syncReadOnly в sync.js).
+function guardWrite(){
+  if(!isViewerRole(state.role)&&!isViewerRole(authUser.role))return true;
+  alert('Роль «Наблюдатель» — только просмотр');
+  return false;
+}
 
 // Затемнённый модальный оверлей. Возвращает контейнер (.appendChild уже сделан).
 function modalOverlay(innerHTML){
@@ -182,6 +192,8 @@ checkNet();
 
 // ============ NAV ============
 function showPage(id,btn){
+  // Наблюдателю недоступны Склад/Импорт/Администратор (вкладки скрыты + guard от прямого вызова)
+  if((isViewerRole(state.role)||isViewerRole(authUser.role))&&(id==='inventory'||id==='import'||id==='admin'))return;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
   document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
@@ -211,12 +223,17 @@ function showPage(id,btn){
 }
 
 function switchRole(r){
+  // Не-админская учётка не может переключить роль (защита от вызова из консоли) —
+  // принудительно возвращаем роль учётки. Пустой login = до авторизации/локальный режим.
+  const _adminAcc=!authUser.login||authUser.login==='local'||authUser.login==='admin'||authUser.role==='admin';
+  if(!_adminAcc){const fixed=accountRole();if(fixed&&r!==fixed)r=fixed;}
   state.role=r;
   let label='';
   let pilotName='';
   if(r==='admin')label='Администратор';
   else if(r==='cmd')label='Командир';
   else if(r==='tech')label='Техник';
+  else if(r==='viewer')label='Наблюдатель';
   else if(r.startsWith('pilot_')){
     const idx=parseInt(r.split('_')[1]);
     pilotName=state.squads[idx]?state.squads[idx].pilot:'?';
@@ -236,6 +253,7 @@ function switchRole(r){
       showPage('dashboard',document.querySelector('#nav button'));
     }
   }
+  applyViewerUI(r); // скрытие вкладок Склад/Импорт и форм для наблюдателя
   try{localStorage.setItem('role',r);}catch(e){}
   // Обновляем форму вылета — скрываем/показываем поле пилота
   setTimeout(()=>{
@@ -322,6 +340,7 @@ function renderAdminFlights(){
 }
 
 function adminEditFlight(idx,field,val){
+  if(!guardWrite())return;
   // Смена статуса «вернул ↔ потерян» → списать/вернуть борт у пилота
   if(field==='returned'){
     const f=state.flights[idx];
@@ -371,10 +390,10 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
     syncBumpStockVersion();
   }
 
-  // Risk 3/1: без полного syncPushAll (затирал чужие несполленные вылеты).
-  // Склад/расчёт выгружаем точечно; правка f.drone и записи о потере попадут
-  // в облако при ближайшем ambient-write (syncPushAll теперь неразрушающий).
-  saveLocalQuiet();
+  // Дефект C (10.06.2026): saveLocal вместо saveLocalQuiet — правка f.drone и запись
+  // о потере уходят debounce-write'ом (syncPushAll неразрушающий), иначе плановый
+  // syncPullOnLogin (5 мин) успевал откатить их облачной версией. Склад — точечно.
+  saveLocal();
   if(apply) syncPushStockSquads();
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
@@ -440,10 +459,11 @@ async function adminEditReturned(idx, newReturned){
     }
   }
 
-  // Risk 3: без полного syncPushAll. Склад выгружаем точечно — для потери (writeDroneLoss
-  // не пушит склад сам), для возврата это делает returnLossDrone. Смена статуса/флага
-  // _lossWritten уйдёт в облако ближайшим ambient-write (syncPushAll неразрушающий).
-  saveLocalQuiet();
+  // Дефект C (10.06.2026): saveLocal вместо saveLocalQuiet — статус и флаг _lossWritten
+  // уходят debounce-write'ом (syncPushAll неразрушающий), иначе плановый syncPullOnLogin
+  // откатывал их облачной версией (и другое устройство списывало борт повторно).
+  // Склад точечно: для потери — здесь (writeDroneLoss не пушит сам), для возврата — returnLossDrone.
+  saveLocal();
   if(apply && loss) syncPushStockSquads(); // syncPushStockSquads сам бампит версию
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
@@ -507,6 +527,7 @@ function confirmReturnedChange(msgHtml){
 }
 
 function adminDeleteFlight(idx){
+  if(!guardWrite())return;
   if(!confirm('Удалить этот вылет?'))return;
   syncDeleteFlight(idx);
 }
@@ -530,6 +551,7 @@ function renderAdminStock(){
 }
 
 function adminEditStock(idx,field,val){
+  if(!guardWrite())return;
   if(state.stock[idx])state.stock[idx][field]=val;
   saveLocal();
   syncBumpStockVersion();   // версионируем — иначе поллинг затрёт правку
@@ -538,6 +560,7 @@ function adminEditStock(idx,field,val){
 }
 
 function adminDeleteStock(idx){
+  if(!guardWrite())return;
   if(!confirm('Удалить позицию со склада?'))return;
   state.stock.splice(idx,1);
   saveLocal();
@@ -548,6 +571,7 @@ function adminDeleteStock(idx){
 }
 
 function adminAddStock(){
+  if(!guardWrite())return;
   const n=document.getElementById('adm-newName').value.trim();
   const q=parseInt(document.getElementById('adm-newQty').value)||1;
   const s=document.getElementById('adm-newStatus').value;
@@ -594,12 +618,14 @@ function _logAdminTransfer(pilot,drone,delta,note){
 }
 
 function adminEditSquadPilot(si,val){
+  if(!guardWrite())return;
   if(state.squads[si])state.squads[si].pilot=val;
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
 }
 function adminEditSquadDrone(si,di,field,val){
+  if(!guardWrite())return;
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
     if(field==='qty'){const delta=(parseInt(val)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'адм');}
@@ -611,6 +637,7 @@ function adminEditSquadDrone(si,di,field,val){
   syncPushStockSquads();
 }
 function adminDeleteSquad(si){
+  if(!guardWrite())return;
   if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
   state.squads.splice(si,1);
   saveLocal();
@@ -620,6 +647,7 @@ function adminDeleteSquad(si){
   renderDashboard();
 }
 function adminAddSquad(){
+  if(!guardWrite())return;
   const p=document.getElementById('adm-newPilot').value.trim();
   const ds=document.getElementById('adm-newPilotDrones').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!p)return;
@@ -650,6 +678,7 @@ function adminExportJSON(){
 }
 
 function adminImportJSON(input){
+  if(!guardWrite())return;
   const file=input.files[0];
   if(!file)return;
   const reader=new FileReader();
@@ -657,7 +686,7 @@ function adminImportJSON(input){
     try{
       const imported=JSON.parse(e.target.result);
       if(!imported.flights||!imported.stock)throw new Error('Неверный формат');
-      if(!confirm('Заменить все текущие данные данными из файла?'))return;
+      if(!confirm('Заменить все текущие данные данными из файла?\n\nВнимание: импорт НЕ удаляет данные из облака — записи, которые есть в облаке, но отсутствуют в файле, вернутся при ближайшей синхронизации.'))return;
       state=imported;
       saveLocal();
       // Импортированные склад/расчёты выгружаем явно: syncPushAll после Дефекта B
@@ -679,7 +708,11 @@ function adminImportJSON(input){
 }
 
 function adminClearFlights(){
+  if(!guardWrite())return;
   if(!confirm('Удалить ВСЕ вылеты из базы? Это действие необратимо.'))return;
+  // tombstone на каждый id — иначе неразрушающий merge (syncPushAll) и поллинг
+  // вернут все вылеты из облака в течение секунд, и «удаление» не сработает
+  tombstones.addMany(state.flights.map(f=>f.id).filter(Boolean));
   state.flights=[];
   saveLocal();
   renderAdminFlights();
@@ -688,6 +721,7 @@ function adminClearFlights(){
 }
 
 function adminResetAll(){
+  if(!guardWrite())return;
   if(!confirm('ПОЛНЫЙ СБРОС всех данных? Склад, расчёты и вылеты будут удалены. Необратимо.'))return;
   if(!confirm('Вы уверены? Данные будут потеряны.'))return;
   localStorage.removeItem('droneState');
@@ -697,6 +731,7 @@ function adminResetAll(){
 // Удаляет записи о потерях, у которых нет соответствующего вылета
 // (остаются когда вылет удаляют или меняют returned: no → yes без очистки)
 function adminCleanOrphanLosses(){
+  if(!guardWrite())return;
   const losses=(state.transfers||[]).filter(t=>t.type==='loss');
   if(!losses.length){
     setStatus('saveStatus','Записей о потерях в журнале нет','muted');
@@ -709,12 +744,17 @@ function adminCleanOrphanLosses(){
       .map(f=>(f.pilot||'').toLowerCase()+'|'+(f.drone||'').toLowerCase()+'|'+(f.date||''))
   );
   const before=(state.transfers||[]).length;
+  const removedIds=[];
   state.transfers=(state.transfers||[]).filter(t=>{
     if(t.type!=='loss')return true;
     const key=(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase()+'|'+(t.date||'');
-    return lostFlightKeys.has(key);
+    if(lostFlightKeys.has(key))return true;
+    if(t.id)removedIds.push(t.id);
+    return false;
   });
   const removed=before-(state.transfers||[]).length;
+  // tombstone удалённых loss-записей — иначе неразрушающий merge/поллинг вернёт их из облака
+  tombstones.addMany(removedIds);
   saveLocal();
   if(removed>0){
     syncPushStockSquads();
@@ -725,6 +765,45 @@ function adminCleanOrphanLosses(){
       ?`✓ Удалено ${removed} осирот. ${removed===1?'запись':'записей'} о потерях — ${new Date().toLocaleString('ru')}`
       :'✓ Осиротевших записей не найдено — журнал чистый',
     removed>0?'ok':'muted');
+}
+
+// Удаляет ДУБЛИ записей о потерях: type='loss' с одинаковыми date+time+pilot+drone
+// (наследие бага двойного списания до Risk 4 — каждое устройство писало свою
+// loss-запись, пока флаг _lossWritten не возвращался в облако; в бэкапах находили
+// до 100+ копий одной потери). Первая запись в массиве остаётся, id остальных
+// уходят в tombstones — иначе неразрушающий merge/поллинг вернёт их из облака.
+function adminDedupeLossTransfers(){
+  const role=state.role||authUser.role||'';
+  if(role!=='admin'){alert('Доступно только администратору');return;}
+  if(!(state.transfers||[]).some(t=>t.type==='loss')){
+    setStatus('saveStatus','Записей о потерях в журнале нет','muted');
+    return;
+  }
+  // Сначала считаем (без мутации) — чтобы показать число в подтверждении
+  const seen=new Set();
+  const removedIds=[];
+  const kept=[];
+  let removed=0;
+  (state.transfers||[]).forEach(t=>{
+    if(t.type!=='loss'){kept.push(t);return;}
+    const key=(t.date||'')+'|'+(t.time||'')+'|'+(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase();
+    if(seen.has(key)){removed++;if(t.id)removedIds.push(t.id);return;}
+    seen.add(key);kept.push(t);
+  });
+  if(!removed){
+    setStatus('saveStatus','✓ Дублей потерь не найдено — журнал чистый','muted');
+    return;
+  }
+  if(!confirm('Найдено '+removed+' дублей записей о потерях (одинаковые дата+время+пилот+борт).\nОставить по одной записи в каждой группе, остальные удалить?'))return;
+  tombstones.addMany(removedIds);
+  state.transfers=kept;
+  // Немедленная выгрузка полным write (merge исключит tombstoned-записи);
+  // saveLocalQuiet — чтобы не плодить второй отложенный push через debounce
+  saveLocalQuiet();
+  syncToCloud(true);
+  renderInventory();
+  logAction('transfer','dedupe','Удалено '+removed+' дублей записей о потерях');
+  setStatus('saveStatus','✓ Удалено '+removed+' дублей потерь — '+new Date().toLocaleString('ru'),'ok');
 }
 
 // ============ DASHBOARD ============
@@ -775,15 +854,15 @@ function computeMedalWinners(){
     const r=nomRatioTop(c);
     if(r) w.workhorse={pilot:r.pilot, desc:`${r.value} вылетов за 10 дней — больше всех с явным отрывом.`};
   }
-  // 🥇 Снайпер — наибольший % выполнения (мин. 3 вылета)
+  // 🥇 Снайпер — наибольший % выполнения (мин. 5 вылетов; ужесточено с 3 — 10.06.2026)
   {
-    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=3?a.filter(x=>x.result==='yes').length/a.length*100:null}; });
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=5?a.filter(x=>x.result==='yes').length/a.length*100:null}; });
     const r=nomPctTop(c, true);
     if(r){ const a=at(r.pilot); const done=a.filter(x=>x.result==='yes').length; w.sniper={pilot:r.pilot, desc:`${Math.round(r.value)}% выполненных задач (${done} из ${a.length}) за 10 дней — лучший результат.`}; }
   }
-  // 🛡️ Бережливый — наименьший % потерь (мин. 3 вылета)
+  // 🛡️ Бережливый — наименьший % потерь (мин. 5 вылетов; ужесточено с 3 — 10.06.2026)
   {
-    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=3?a.filter(x=>x.returned==='no').length/a.length*100:null}; });
+    const c=pilots.map(p=>{ const a=at(p); return {pilot:p, value:a.length>=5?a.filter(x=>x.returned==='no').length/a.length*100:null}; });
     const r=nomPctTop(c, false);
     if(r){ const a=at(r.pilot); const lost=a.filter(x=>x.returned==='no').length; w.thrifty={pilot:r.pilot, desc:`Потерь всего ${Math.round(r.value)}% (${lost} из ${a.length}) за 10 дней — меньше всех.`}; }
   }
@@ -1183,6 +1262,7 @@ function toggleAddDrone(){
 }
 
 function addDrone(){
+  if(!guardWrite())return;
   const n=document.getElementById('newDroneName').value.trim();
   const q=parseInt(document.getElementById('newDroneQty').value)||1;
   if(!n)return;
@@ -1229,6 +1309,7 @@ function exToggleOneWay(){
 }
 
 function saveTransfer(){
+  if(!guardWrite())return;
   const from=document.getElementById('transFrom').value;
   const to=document.getElementById('transTo').value;
   const drone=document.getElementById('transDrone').value.trim();
@@ -1340,6 +1421,7 @@ function saveTransfer(){
 }
 
 function saveExchange(){
+  if(!guardWrite())return;
   const date=document.getElementById('exDate').value||todayISO();
   const unit=document.getElementById('exUnit').value.trim();
   const note=document.getElementById('exNote').value.trim();
@@ -1613,13 +1695,14 @@ function renderSquadEditor(){
 }
 
 function squadCleanZeros(si){
+  if(!guardWrite())return;
   state.squads[si].drones=state.squads[si].drones.filter(d=>d.qty!==0);
   saveLocal();
   syncPushStockSquads();
   renderSquadEditor();
   renderInventory();
 }
-function squadEditPilot(si,val){state.squads[si].pilot=val;saveLocal();syncBumpStockVersion();syncPushStockSquads();renderInventory();}
+function squadEditPilot(si,val){if(!guardWrite())return;state.squads[si].pilot=val;saveLocal();syncBumpStockVersion();syncPushStockSquads();renderInventory();}
 // Сколько вылетов пилота без посчитанной дистанции
 function geoPilotMissingCount(pilot){
   const lo=(pilot||'').toLowerCase();
@@ -1638,6 +1721,7 @@ function geoUpdateRecalcBtn(si){
 }
 
 function squadEditStartPoint(si,val){
+  if(!guardWrite())return;
   const sq=state.squads[si];
   if(!sq)return;
   sq.start_point=(val||'').trim();
@@ -1720,6 +1804,7 @@ function geoRecalcAllResetLocks(){
   });
 }
 function squadEditDrone(si,di,field,val){
+  if(!guardWrite())return;
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
     if(field==='qty'){const delta=(parseInt(val,10)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'инв');}
@@ -1729,19 +1814,23 @@ function squadEditDrone(si,di,field,val){
   saveLocal();syncPushStockSquads();renderInventory(); // версионируем — иначе поллинг затрёт правку (last-write-wins по _sv)
 }
 function squadDeleteDrone(si,di){
+  if(!guardWrite())return;
   state.squads[si].drones.splice(di,1);
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();
 }
 function squadAddDrone(si){
+  if(!guardWrite())return;
   state.squads[si].drones.push({name:'',qty:1});
   saveLocal();syncPushStockSquads();renderSquadEditor();
 }
 function squadDeletePilot(si){
+  if(!guardWrite())return;
   if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
   state.squads.splice(si,1);
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();rebuildRoleSelector();
 }
 function squadAddPilot(){
+  if(!guardWrite())return;
   const p=document.getElementById('sq-newPilot').value.trim();
   const ds=document.getElementById('sq-newDrones').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!p){alert('Укажите имя пилота');return;}
@@ -2087,6 +2176,17 @@ function showLoginError(msg){
   if(err)err.textContent=msg;
 }
 
+// Фиксированная роль учётной записи (для не-админов; '' если не определена)
+function accountRole(){
+  const ar=authUser.role;
+  if(ar==='admin'||ar==='cmd'||ar==='tech'||ar==='viewer')return ar;
+  if(ar==='pilot'){
+    const idx=state.squads.findIndex(sq=>sq.pilot===authUser.login);
+    return idx>=0?'pilot_'+idx:'cmd';
+  }
+  return '';
+}
+
 function applyRoleFromAuth(){
   const lb=document.getElementById('logoutBtn');
   if(lb)lb.style.display='';
@@ -2098,23 +2198,18 @@ function applyRoleFromAuth(){
     // Администратор — показываем переключатель, применяем текущую выбранную роль
     if(roleSwitch)roleSwitch.style.display='';
     const savedRole=localStorage.getItem('role')||'admin';
-    const r=(['admin','cmd','tech','pilot1','pilot2','pilot3'].includes(savedRole))?savedRole:'admin';
+    // Роли пилотов имеют вид pilot_N (раньше список содержал несуществующие pilot1..3 —
+    // сохранённый «взгляд пилота» никогда не восстанавливался)
+    const r=(savedRole==='admin'||savedRole==='cmd'||savedRole==='tech'||/^pilot_\d+$/.test(savedRole))?savedRole:'admin';
     if(roleSwitch){
       const optExists=[...roleSwitch.options].some(o=>o.value===r);
       roleSwitch.value=optExists?r:'admin';
     }
     switchRole(r);
   } else {
-    // Остальные — скрываем переключатель, роль из учётной записи
+    // Остальные — скрываем переключатель, роль из учётной записи (включая viewer)
     if(roleSwitch)roleSwitch.style.display='none';
-    let r='cmd';
-    if(authUser.role==='admin')r='admin';
-    else if(authUser.role==='cmd')r='cmd';
-    else if(authUser.role==='tech')r='tech';
-    else if(authUser.role==='pilot'){
-      const idx=state.squads.findIndex(sq=>sq.pilot===authUser.login);
-      r=idx>=0?'pilot_'+idx:'cmd';
-    }
+    const r=accountRole()||'cmd';
     if(roleSwitch){
       rebuildRoleSelector();
       const optExists=[...roleSwitch.options].some(o=>o.value===r);
@@ -2122,7 +2217,7 @@ function applyRoleFromAuth(){
     }
     switchRole(r);
     const badge=document.getElementById('roleBadge');
-    if(badge)badge.innerHTML='<b>'+esc(authUser.login)+'</b>';
+    if(badge)badge.innerHTML='<b>'+esc(authUser.login)+'</b>'+(authUser.role==='viewer'?' · Наблюдатель':'');
   }
   setTimeout(applyRoleRestrictions,100);
   setTimeout(initQuickForm,150);
@@ -2286,6 +2381,8 @@ async function toggleUser(login,active){
 
 // ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА (10 минут для пилота) ============
 function canEditFlight(f){
+  // Наблюдатель — только просмотр, окно редактирования не показываем
+  if(isViewerRole(state.role)||isViewerRole(authUser.role))return false;
   // Администратор редактирует через свой раздел — в общем журнале полоса не нужна
   if(state.role==='admin'||authUser.role==='admin')return false;
   // Проверяем 10-минутное окно
@@ -2320,6 +2417,7 @@ function renderFlightEditRow(x, realIdx){
 function saveFlightEdit(idx){
   const f=state.flights[idx];
   if(!f||!canEditFlight(f))return;
+  const oldReturned=f.returned;
   f.ammo=document.getElementById('edit-ammo-'+idx)?.value||f.ammo;
   f.drone=document.getElementById('edit-drone-'+idx)?.value||f.drone;
   f.result=document.getElementById('edit-result-'+idx)?.value||f.result;
@@ -2328,10 +2426,26 @@ function saveFlightEdit(idx){
   const fn=document.getElementById('edit-flightnum-'+idx)?.value;
   if(fn)f.flightnum=parseInt(fn);
   f._edited=true;
+  // Смена статуса борта в окне редактирования — пересчёт склада, как в админском пути
+  // (раньше «вернул↔потерян» здесь менял только текст и склад расходился с журналом)
+  if(oldReturned!==f.returned&&(f.drone||'').trim()){
+    if(f.returned==='no'){
+      applyLossIfNeeded(f);             // списание ровно один раз (_lossWritten) + push склада
+    } else {
+      returnLossDrone(f);               // возврат борта + удаление loss-записи (сам пушит склад)
+      f._lossWritten=false;
+    }
+  }
+  // Дистанции зависят от returned (×2 при возврате, ×1 при потере) — пересчитываем
+  if(oldReturned!==f.returned){
+    if(f.result==='no'&&f.returned==='no'){ delete f.range_km; delete f.distance_km; } // борт не долетел
+    else { const r=geoComputeFlight(f); if(r){ f.range_km=r.range_km; f.distance_km=r.distance_km; f.geo_locked=true; } }
+  }
   saveLocal();
   renderFlights();
   renderDashboard();
-  logAction('flight','edit','Вылет #'+f.flightnum+' '+f.pilot+' отредактирован');
+  renderInventory();
+  logAction('flight','edit','Вылет #'+f.flightnum+' '+f.pilot+' отредактирован'+(oldReturned!==f.returned?' [смена статуса борта]':''));
 }
 // Умный список точек — часто используемые вверху, не используемые 7 дней скрыты
 function getSmartTargets(){
@@ -2507,6 +2621,7 @@ function ammoQuickAdd(rawName){
 }
 
 function ammoAdd(){
+  if(!guardWrite())return;
   const name=document.getElementById('ammo-new-name').value.trim();
   const cat=document.getElementById('ammo-new-cat').value;
   const aliases=document.getElementById('ammo-new-aliases').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -2520,6 +2635,7 @@ function ammoAdd(){
 }
 
 function ammoDelete(i){
+  if(!guardWrite())return;
   if(!confirm('Удалить "'+ammoCatalog[i].name+'"?'))return;
   ammoCatalog.splice(i,1);
   ammoSave();
@@ -2527,6 +2643,7 @@ function ammoDelete(i){
 }
 
 function ammoNormalize(){
+  if(!guardWrite())return;
   let count=0;
   state.flights.forEach(f=>{
     if(!f.ammo)return;
@@ -2542,6 +2659,7 @@ function ammoNormalize(){
 }
 
 async function ammoSaveToCloud(){
+  if(!guardWrite())return;
   const {url,token}=syncGetCfg();
   if(!url||!token){alert('Нет подключения к облаку');return;}
   const st=document.getElementById('ammo-status');
@@ -2579,6 +2697,7 @@ function initQuickForm(){
 }
 
 async function saveQuickFlight(){
+  if(!guardWrite())return;
   const pilot=(document.getElementById('qf-pilot').value||'').trim();
   // Автонумерация: считаем вылеты пилота за сегодня
   const date=todayISO();
@@ -2706,6 +2825,24 @@ function actlogClearFilters(){
 }
 
 // ============ ПРАВА ДОСТУПА ============
+// Видимость вкладок/форм для роли только-чтение (viewer). Вызывается из switchRole.
+function applyViewerUI(r){
+  const v=isViewerRole(r);
+  ['invNavBtn','importNavBtn'].forEach(id=>{
+    const b=document.getElementById(id);
+    if(b)b.style.display=v?'none':'';
+  });
+  const qfc=document.getElementById('quickFlightCard');
+  if(qfc)qfc.style.display=v?'none':'';
+  // Если наблюдатель оказался на скрытой странице — уводим на Обзор
+  if(v){
+    const active=document.querySelector('.page.active');
+    if(active&&['page-inventory','page-import','page-admin'].includes(active.id)){
+      showPage('dashboard',document.querySelector('#nav button'));
+    }
+  }
+}
+
 function applyRoleRestrictions(){
   const role=state.role||authUser.role||'';
   const isPilot=isPilotRole(role);

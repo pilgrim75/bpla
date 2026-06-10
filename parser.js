@@ -16,6 +16,7 @@ function loadApiKey(){
 
 // ============ IMPORT / PARSE ============
 async function parseMessages(){
+  if(!guardWrite())return; // viewer — только просмотр (вкладка Импорт и так скрыта)
   const raw=document.getElementById('rawMsg').value.trim();
   if(!raw)return;
   const apiKey=(document.getElementById('apiKeyInput').value||'').trim();
@@ -243,6 +244,7 @@ function showDuplicateDialog(date,time,pilot){
 }
 
 async function confirmParsed(i){
+  if(!guardWrite())return; // viewer — только просмотр
   const droneInput=document.getElementById(`p${i}-drone`);
   const pilotInput=document.getElementById(`p${i}-pilot`);
   const srcEl=document.getElementById(`psrc-${i}`);
@@ -282,6 +284,8 @@ async function confirmParsed(i){
 
   const fn=document.getElementById(`p${i}-flightnum`).value;
   const f={
+    _savedTs:Date.now(),                  // окно редактирования и атрибуция —
+    _submittedBy:authUser.login||'',      // как в saveQuickFlight
     date:document.getElementById(`p${i}-date`).value,
     time:document.getElementById(`p${i}-time`).value,
     pilot:pilotInput.value,
