@@ -321,6 +321,20 @@ function geoDiagDist(pilot, target){
   return {pilot, start_point:startQ, start, target:tgt, range_km:dist};
 }
 
+// Цель из нескольких точек ("647 лиловая, 695 лиловая" — разделители , ; /):
+// каждая часть ищется отдельно, берётся ДАЛЬНЯЯ от старта (борт долетал до самой дальней).
+function geoFindFarthestTarget(target, start){
+  const parts=(target||'').split(/[,;\/]+/).map(s=>s.trim()).filter(Boolean);
+  let best=null, bestDist=-1;
+  for(const p of parts){
+    const pt=findGeoPoint(p);
+    if(!pt) continue;
+    const d=calcDistance(start.lat,start.lon,pt.lat,pt.lon);
+    if(d>bestDist){ bestDist=d; best=pt; }
+  }
+  return best;
+}
+
 // Расчёт дистанций вылета → {range_km, distance_km} | null
 function geoComputeFlight(f){
   if(!geoDB.length) return null;
@@ -331,8 +345,9 @@ function geoComputeFlight(f){
   const startQ=sq&&sq.start_point;
   if(!startQ) return null;
   const start=findGeoPoint(startQ);
-  const tgt=findGeoPoint(f.target);
-  if(!start||!tgt) return null;
+  if(!start) return null;
+  const tgt=geoFindFarthestTarget(f.target, start);
+  if(!tgt) return null;
   const range=calcDistance(start.lat,start.lon,tgt.lat,tgt.lon);
   let distance;
   if(f.returned==='yes'){
