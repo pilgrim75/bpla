@@ -651,8 +651,8 @@
     <div style="padding-top:10px;border-top:1px solid var(--border)">
       <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text2)">Добавить пользователя</div>
       <div class="form-row cols3">
-        <div><label>Логин</label><input id="nu-login" placeholder="pop"></div>
-        <div><label>Пароль</label><input id="nu-password" type="password" placeholder="пароль"></div>
+        <div><label>Логин</label><input id="nu-login" placeholder="pop" autocomplete="off"></div>
+        <div><label>Пароль</label><input id="nu-password" type="password" placeholder="пароль" autocomplete="new-password"></div>
         <div><label>Роль</label>
           <select id="nu-role" onchange="nuRoleChange()">
             <option value="pilot">Пилот</option>
