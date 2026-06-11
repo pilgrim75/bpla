@@ -2173,7 +2173,11 @@ async function initAuth(){
     if(ok){
       applyRoleFromAuth();
       hideLoginScreen();
+      // ВАЖНО: logAction — только ПОСЛЕ установки cfg.url/authToken (строки выше),
+      // иначе appendToCloud не увидит облако. Штамп даты — чтобы F5 в тот же день
+      // не дал дубль login-записи из ветки 2 (сохранённый токен).
       logAction('auth','login','Вход по ссылке: '+(urlUser||''));
+      try{ localStorage.setItem('login_logged_date',todayISO()); }catch(e){}
       if(cfg.url)await syncPullOnLogin();
       return;
     } else {

@@ -175,9 +175,10 @@ function updateQueueIndicator(){
 async function trySendQueueItem(item, url, key, token){
   try{
     const enc = await syncEncrypt(item.data, key);
+    const sheet = item.type==='flight'?'flights':(item.type==='actlog'?'actlog':'transfers');
     const body = JSON.stringify({
       action:'append_one', token,
-      sheet: item.type==='flight'?'flights':'transfers',
+      sheet,
       row: enc
     });
     const res = await syncPost(url, body);
@@ -549,6 +550,9 @@ async function syncPullAll(confirm_=false){
       actLog.sort((a,b)=>b.ts-a.ts);
       if(actLog.length>500) actLog=actLog.slice(0,500);
       try{ localStorage.setItem('act_log',JSON.stringify(actLog)); }catch(e){}
+      // Подтверждение доставки actlog-записей очереди по полному снимку — критично
+      // для viewer: у него нет 30-секундного поллинга, только эта полная загрузка.
+      pendingQueue.confirmDelivered(new Set(entries.map(e=>e.id).filter(Boolean)));
     }
     if(d.stock&&d.stock.length){
       const remoteStockVersion = Math.max(...(await syncDecryptRows(d.stock,key)).map(s=>s._sv||0));
@@ -723,6 +727,7 @@ async function pollCloud(){
     for(const row of (d.actlog||[])){
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
+      deliveredIds.add(obj.id); // подтверждение доставки записей очереди (actlog тоже в pendingQueue)
       if(!actLog.some(e=>e.id===obj.id)){
         actLog.unshift(obj); changed=true;
       }
@@ -807,17 +812,27 @@ function startPolling(){
   console.log('[SYNC] Поллинг запущен: '+(viewer?'viewer — только полная синхронизация раз в 5 мин':'дельта 30с + полная 5 мин'));
 }
 
-// Отправка в облако по имени листа. actlog шлём напрямую, остальное — как transfer.
+// Отправка в облако по имени листа. actlog — через pendingQueue (раньше слался
+// напрямую без очереди: офлайн-действия терялись безвозвратно — самые интересные
+// для аудита записи). Подтверждение доставки — поллингом/полной загрузкой по id,
+// как у flights/transfers. Остальное — как transfer.
 function appendToCloud(sheet, obj){
   if(sheet==='actlog'){
-    // Журнал действий — отправляем отдельно напрямую
+    if(!obj.id) obj.id=genId('a');
     const {url,key,token}=syncGetCfg();
-    if(!url||!token)return;
-    (async()=>{
-      const enc=await syncEncrypt({...obj,id:obj.id||genId('a')},key);
-      const body=JSON.stringify({action:'append_one',token,sheet:'actlog',row:enc});
-      await syncPost(url,body);
-    })();
+    if(!url||!token){
+      // cfg ещё не загружен (ранний вызов до/во время initAuth)? Раньше запись молча
+      // ТЕРЯЛАСЬ (локально была, в облако не попадала — например login-записи).
+      // Откладываем в очередь — досыл когда cfg появится (syncFlushQueue).
+      // В реально локальном режиме (file:// / ?local=1) облака нет вообще — не кэшируем,
+      // иначе очередь копится вечно; страховка — syncQueueStartupCheck чистит при старте.
+      const isLocal=location.protocol==='file:'||new URLSearchParams(location.search).get('local')==='1';
+      if(!isLocal) pendingQueue.add({type:'actlog', data:obj});
+      return;
+    }
+    pendingQueue.add({type:'actlog', data:obj});  // кэш до подтверждения доставки
+    if(!navigator.onLine)return;                  // нет сети — досыл при восстановлении
+    trySendQueueItem({type:'actlog', data:obj}, url, key, token);
     return;
   }
   // transfers, flights и т.д.
