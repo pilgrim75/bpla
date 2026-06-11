@@ -2097,12 +2097,21 @@ function applyFontSize(sz){
 let authToken='';
 let authUser={login:'',role:''};
 
+// Заставка (#splashScreen, index.html) показана с первой отрисовки страницы;
+// прячется при любом исходе initAuth — вместе со снятием скрытия .app либо
+// при показе экрана входа.
+function hideSplash(){
+  const sp=document.getElementById('splashScreen');
+  if(sp)sp.style.display='none';
+}
 function showLoginScreen(){
+  hideSplash();
   const ls=document.getElementById('loginScreen');
   if(ls)ls.style.display='flex';
   document.querySelector('.app').style.display='none';
 }
 function hideLoginScreen(){
+  hideSplash();
   const ls=document.getElementById('loginScreen');
   if(ls)ls.style.display='none';
   const app=document.querySelector('.app');
