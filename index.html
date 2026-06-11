@@ -23,7 +23,10 @@
   <div style="font-size:10px;color:var(--muted)">или войдите по ссылке от администратора</div>
 </div>
 
-<div class="app">
+<!-- visibility:hidden до применения роли (снимается в hideLoginScreen ПОСЛЕ applyRoleFromAuth) —
+     иначе до ограничений viewer/pilot на долю секунды мелькает полный админский интерфейс.
+     visibility вместо display:none — чтобы не ломать layout при измерении размеров. -->
+<div class="app" style="visibility:hidden">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
   <div class="version">v0.18</div>

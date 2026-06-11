@@ -2105,7 +2105,12 @@ function showLoginScreen(){
 function hideLoginScreen(){
   const ls=document.getElementById('loginScreen');
   if(ls)ls.style.display='none';
-  document.querySelector('.app').style.display='flex';
+  const app=document.querySelector('.app');
+  app.style.display='flex';
+  // Снятие стартового скрытия (index.html: visibility:hidden на .app). К этому
+  // моменту роль уже применена — applyRoleFromAuth в ветках входа initAuth
+  // вызывается ДО hideLoginScreen (в локальном режиме роль admin, скрывать нечего).
+  app.style.visibility='visible';
 }
 
 // Вход логином/паролем не реализован — авторизация только по ссылке от
@@ -2179,6 +2184,12 @@ async function initAuth(){
       logAction('auth','login','Вход по ссылке: '+(urlUser||''));
       try{ localStorage.setItem('login_logged_date',todayISO()); }catch(e){}
       if(cfg.url)await syncPullOnLogin();
+      // Повторное применение роли ПОСЛЕ загрузки данных: accountRole() для учётки
+      // pilot ищет позывной в state.squads, которые на чистом устройстве пусты до
+      // syncPullOnLogin — switchRole выше получал 'cmd', и пилотский вид с медалями
+      // появлялся только после F5. Плюс контрольная перерисовка Обзора (медали/щиты).
+      applyRoleFromAuth();
+      renderDashboard();
       return;
     } else {
       showLoginError('Ссылка недействительна или устарела');
@@ -2274,7 +2285,13 @@ function applyRoleFromAuth(){
     }
     switchRole(r);
     const badge=document.getElementById('roleBadge');
-    if(badge)badge.innerHTML='<b>'+esc(authUser.login)+'</b>'+(authUser.role==='viewer'?' · Наблюдатель':'');
+    if(badge){
+      // Золотые щиты и у самой учётки пилота: switchRole ставит их в label, но бейдж
+      // здесь перезаписывается логином — без добавки щиты видел только админ во
+      // «взгляде пилота» (через переключатель, где бейдж не перезаписывается).
+      const tbShields=r.startsWith('pilot_')?goldShieldsHtml(authUser.login,{inline:true}):'';
+      badge.innerHTML='<b>'+esc(authUser.login)+'</b>'+tbShields+(authUser.role==='viewer'?' · Наблюдатель':'');
+    }
   }
   setTimeout(applyRoleRestrictions,100);
   setTimeout(initQuickForm,150);
@@ -3176,4 +3193,7 @@ ammoLoad();
 actLogLoad();
 document.getElementById('nu-enckey').value=cfg.key||'';
 // initAuth вызываем последним — он использует cfg.url и cfg.key
-initAuth().then(()=>{ startPolling(); syncQueueStartupCheck(); });
+// catch — страховка от вечно скрытого .app (visibility:hidden в index.html):
+// при неожиданной ошибке initAuth показываем интерфейс, а не пустую страницу.
+initAuth().catch(e=>{ console.error('[AUTH] initAuth error:', e); hideLoginScreen(); })
+  .then(()=>{ startPolling(); syncQueueStartupCheck(); });
