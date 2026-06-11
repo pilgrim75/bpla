@@ -10,7 +10,8 @@
 // ===== ХРАНИЛИЩЕ =====
 // writeoff_hints: { поле: [{value,count}] }  — словарь подсказок с частотой (взрыватель — по типам: 'взрыватель_<ammo>')
 // writeoff_last:  { approver,unit,subunit,settlement,square, models:{модель:{vtx,rx,battCap,battQty}} }
-// writeoff_last_crew_<пилот>: { sapper, tech }   — состав расчёта запоминается по пилоту
+// writeoff_last_crew_<пилот>: { rank, fio, sapper, tech } — состав расчёта запоминается по пилоту
+//   (rank/fio — звание и «Фамилия И.О.» пилота; их подсказки персональные: 'пилот_звание_<пилот>'/'пилот_фио_<пилот>')
 // writeoff_last_signers: [ {role,rank,name} ]    — последний список подписантов
 function woLoadHints(){ try{return JSON.parse(localStorage.getItem('writeoff_hints')||'{}')||{};}catch(e){return {};} }
 function woSaveHints(h){ try{localStorage.setItem('writeoff_hints',JSON.stringify(h));}catch(e){} }
@@ -107,11 +108,15 @@ function woModelBlock(name,mc){
   `</div>`;
 }
 
-// Состав расчёта — отдельный блок на пилота (сапёр/техник запоминаются по пилоту)
+// Состав расчёта — отдельный блок на пилота (все поля запоминаются по пилоту).
+// Звание/ФИО пилота — подсказки персональные (ключ с позывным: 'пилот_звание_Поп'),
+// в документе тогда пишется «пилот <звание> <Фамилия И.О.>» вместо позывного (woBuildDocx).
 function woCrewBlock(pilot,crew){
   crew=crew||{};
   return `<div class="wo-crew" data-pilot="${esc(pilot)}">`+
     `<div class="wo-dronehead">Пилот: <b>${esc(pilot)}</b></div>`+
+    woHintField('пилот_звание_'+pilot,'Звание',crew.rank,{ph:'напр. сержант'})+
+    woHintField('пилот_фио_'+pilot,'Фамилия И.О.',crew.fio,{ph:'напр. Иванов И.И.'})+
     woHintField('sapper','Сапёр',crew.sapper,{ph:'звание, фамилия'})+
     woHintField('tech','Техник/пилот (необязательно)',crew.tech,{ph:'звание, фамилия'})+
   `</div>`;
@@ -237,7 +242,7 @@ function woCollectDay(){
   ov.querySelectorAll('#wo-crews .wo-crew').forEach(b=>{
     const p=b.dataset.pilot;
     const v=k=>{ const el=b.querySelector('[data-wo-key="'+k+'"]'); return el?el.value.trim():''; };
-    crew[p]={ sapper:v('sapper'), tech:v('tech') };
+    crew[p]={ rank:v('пилот_звание_'+p), fio:v('пилот_фио_'+p), sapper:v('sapper'), tech:v('tech') };
   });
 
   const fuzes={};
@@ -268,7 +273,7 @@ function woCollectDay(){
   last.models=last.models||{};
   Object.entries(models).forEach(([m,c])=>{ last.models[m]=c; woRecordHint(hints,'vtx',c.vtx); woRecordHint(hints,'rx',c.rx); woRecordHint(hints,'battCap',c.battCap); });
   woSaveLast(last);
-  Object.entries(crew).forEach(([p,c])=>{ woSaveCrew(p,c); woRecordHint(hints,'sapper',c.sapper); woRecordHint(hints,'tech',c.tech); });
+  Object.entries(crew).forEach(([p,c])=>{ woSaveCrew(p,c); woRecordHint(hints,'пилот_звание_'+p,c.rank); woRecordHint(hints,'пилот_фио_'+p,c.fio); woRecordHint(hints,'sapper',c.sapper); woRecordHint(hints,'tech',c.tech); });
   Object.entries(fuzes).forEach(([ammo,fz])=>{ if(fz)woRecordHint(hints,'взрыватель_'+ammo,fz); });
   woSaveHints(hints);
   woSaveSigners(signers.filter(s=>s.role||s.rank||s.name));
@@ -328,9 +333,17 @@ function woBuildDocx(flow){
       const lostWord=grp.count===1?'Потеряна':'Потеряны';
       const ptak=ruPlural(grp.count,'птица','птицы','птиц');
       const ammoSfx=grp.ammo?` (с ${grp.ammo})`:'';
-      // состав расчёта — по пилотам со своими сапёром/техником
+      // состав расчёта — по пилотам со своими сапёром/техником.
+      // Пилот: «звание Фамилия И.О.» вместо позывного; ФИО обязательна для замены
+      // (одно звание без фамилии обезличило бы запись), звание — при наличии.
       const comp=[];
-      grp.pilots.forEach(p=>{ comp.push('пилот '+p); const cr=crew[p]||{}; if(cr.sapper)comp.push('сапёр '+cr.sapper); if(cr.tech)comp.push('техник '+cr.tech); });
+      grp.pilots.forEach(p=>{
+        const cr=crew[p]||{};
+        const disp=cr.fio?[cr.rank,cr.fio].filter(Boolean).join(' '):p;
+        comp.push('пилот '+disp);
+        if(cr.sapper)comp.push('сапёр '+cr.sapper);
+        if(cr.tech)comp.push('техник '+cr.tech);
+      });
       const primenil=grp.pilots.length>1?'применили':'применил';
       const battTotal=grp.count*(parseInt(mc.battQty,10)||1);
 
