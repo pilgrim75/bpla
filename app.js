@@ -844,8 +844,10 @@ function adminDedupeLossTransfers(){
 //  • Никакого spread на больших массивах (String.fromCharCode(...buf) и т.п.).
 //
 // Баланс: intake = arrival.qty + exchange.getQty; выбытие = exchange.giveQty + loss
-// (qty или 1). type='transfer' — внутреннее перемещение, баланс не меняет (игнор;
-// учтите: передача в «списан» уменьшает qty без следа в балансе — даст расхождение).
+// (qty или 1). type='transfer' — внутреннее перемещение, баланс не меняет, КРОМЕ
+// передачи в «списан» (saveTransfer уменьшает qty — фактическое выбытие): она
+// считается отдельно (writeoff_t) и входит в diff_adj; перевод в «не бг» — внутреннее
+// (nbg_t — справочно, в баланс не входит).
 // Две гипотезы о stock-строках со статусом lost/«списан» (формулы расходятся ровно
 // на их сумму, колонка lost): diff_A — независимое наличие (intake − (всё наличие +
 // give + loss)); diff_B — дубль учёта loss-передач, игнорируются (intake − (наличие
@@ -858,7 +860,7 @@ function syncAuditStock(){
   const get=name=>{
     const k=norm(name);
     if(!k)return null;
-    if(!models[k])models[k]={model:String(name).trim(),intake:0,onhandAll:0,onhandActive:0,lost:0,exGive:0,lossSum:0};
+    if(!models[k])models[k]={model:String(name).trim(),intake:0,onhandAll:0,onhandActive:0,lost:0,exGive:0,lossSum:0,writeoffT:0,nbgT:0};
     return models[k];
   };
 
@@ -884,14 +886,23 @@ function syncAuditStock(){
       if(t.give){ const m=get(t.give); if(m)m.exGive+=t.giveQty||0; }
     }
     else if(t.type==='loss'){ const m=get(t.drone); if(m)m.lossSum+=t.qty||1; }
+    else if(t.type==='transfer'){
+      // Внутреннее перемещение — игнор, кроме спецприёмников saveTransfer:
+      // «списан» = фактическое выбытие (qty уменьшен без loss-записи), «не бг» — справочно
+      const to=norm(t.to);
+      if(to==='списан'){ const m=get(t.drone); if(m)m.writeoffT+=t.qty||0; }
+      else if(to==='не бг'){ const m=get(t.drone); if(m)m.nbgT+=t.qty||0; }
+    }
   });
 
   const summary=Object.values(models).map(m=>{
     const outflow=m.exGive+m.lossSum;
     return {
       model:m.model, intake:m.intake, onhand:m.onhandAll, lost:m.lost, outflow,
+      writeoff_t:m.writeoffT, nbg_t:m.nbgT,
       diff_A:m.intake-(m.onhandAll+outflow),      // lost-строки = наличие
-      diff_B:m.intake-(m.onhandActive+outflow)    // lost-строки = дубль loss-передач
+      diff_B:m.intake-(m.onhandActive+outflow),   // lost-строки = дубль loss-передач
+      diff_adj:m.intake-(m.onhandAll+outflow+m.writeoffT) // как diff_A + списания через форму передачи
     };
   }).sort((a,b)=>a.model.localeCompare(b.model,'ru'));
 
@@ -929,6 +940,13 @@ function syncAuditStock(){
   console.log('[AUDIT] Сходится моделей: гипотеза A (lost = наличие) — '+okA+' из '+summary.length+', гипотеза B (lost = дубль loss) — '+okB+' из '+summary.length);
   const off=summary.filter(s=>s.diff_A!==0&&s.diff_B!==0);
   if(off.length)console.log('[AUDIT] Расхождение по обеим гипотезам (легаси-приход до складского учёта либо баг): '+off.map(s=>s.model+' (A: '+s.diff_A+', B: '+s.diff_B+')').join('; '));
+  // Классификация по diff_adj (учитывает списания через форму передачи в «списан»)
+  const adjOk=summary.filter(s=>s.diff_adj===0);
+  const legacy=summary.filter(s=>s.diff_adj<0&&s.intake===0);
+  const manual=summary.filter(s=>s.diff_adj!==0&&!legacy.includes(s));
+  console.log('[AUDIT] С учётом списаний через форму (diff_adj=0) сходится: '+adjOk.length+' из '+summary.length);
+  if(legacy.length)console.log('[AUDIT] Легаси-приход (intake=0, поступили до складского учёта): '+legacy.map(s=>s.model+' ('+s.diff_adj+')').join('; '));
+  if(manual.length)console.log('[AUDIT] ⚠ Требуют ручной проверки (расхождение при ненулевом приходе): '+manual.map(s=>s.model+' (adj: '+s.diff_adj+')').join('; '));
   return {summary, negatives, orphans, dupes};
 }
 
