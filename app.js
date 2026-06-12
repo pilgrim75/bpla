@@ -984,6 +984,69 @@ function syncStockLegacyPlan(){
   return plan;
 }
 
+// Оформление недостающего стартового прихода (легаси) явными arrival-записями в
+// журнале движений — БЕЗ изменения наличия. Вызов: syncStockFixLegacy() — сухой
+// прогон (план, ничего не создаёт); syncStockFixLegacy(true) — выполнить. Только admin.
+//
+// Смысл: legacy-борта физически есть и учтены в qty, но поступили до ведения журнала —
+// arrival-записей нет, и intake не сходится с наличием (diff_adj<0 в syncAuditStock).
+// Дописываем приход честными arrival-записями (ранняя дата '2000-01-01', как
+// «начальные данные» migrateSquadsToTransfers, и говорящий note) — записи видны в
+// журнале поступлений как обычные, никакой скрытой логики.
+//
+// ОТЛИЧИЕ ОТ adminAddStock: тот увеличивает stock.qty — здесь это НЕДОПУСТИМО
+// (наличие верное, раздувать нельзя). Создаются ТОЛЬКО записи в state.transfers;
+// stock/squads qty не трогаются ни при каком сценарии.
+// Количества — только из живого расчёта _stockAuditCompute() на текущем state
+// (никакого хардкода). Идемпотентность: модель, по которой легаси-arrival уже
+// существует (note со «стартовый учёт (легаси)»), пропускается с предупреждением;
+// плюс после успешного прогона diff_adj=0 и план сам становится пустым.
+function syncStockFixLegacy(confirm){
+  const role=state.role||authUser.role||'';
+  if(role!=='admin'){alert('Доступно только администратору');return;}
+  const LEGACY_NOTE='стартовый учёт (легаси), принято до ведения журнала';
+  const LEGACY_DATE='2000-01-01';
+  const norm=s=>(s||'').toLowerCase().trim();
+
+  const {summary}=_stockAuditCompute();
+  const plan=summary.filter(s=>s.diff_adj<0)
+    .map(s=>({model:s.model, qty:-s.diff_adj, note:LEGACY_NOTE, date:LEGACY_DATE}));
+  if(!plan.length){ console.log('[FIX] Легаси-расхождений нет (моделей с diff_adj < 0 не найдено) — делать нечего'); return []; }
+
+  // Идемпотентность: повторный вызов не задваивает приход
+  const already=new Set(
+    (state.transfers||[]).filter(t=>t.type==='arrival'&&(t.note||'').includes('стартовый учёт (легаси)'))
+      .map(t=>norm(t.drone))
+  );
+  const todo=plan.filter(p=>!already.has(norm(p.model)));
+  const skippedDone=plan.filter(p=>already.has(norm(p.model)));
+  if(skippedDone.length)console.warn('[FIX] ⚠ Пропущены — легаси-arrival уже существует, повтор не задваиваем (diff_adj у них всё ещё <0 — разбираться вручную): '+skippedDone.map(p=>p.model+' ('+p.qty+')').join(', '));
+  if(!todo.length){ console.log('[FIX] Создавать нечего'); return []; }
+
+  if(!confirm){
+    // ФАЗА 1: сухой прогон — только показать план
+    console.table(todo);
+    console.log('[FIX] СУХОЙ ПРОГОН — ничего не создано. Это ЗАПИСЬ в журнал движений (arrival). Наличие (qty) НЕ изменится. Для выполнения вызови syncStockFixLegacy(true)');
+    return todo;
+  }
+
+  // ФАЗА 2: одна arrival-запись на модель; только transfers — qty наличия не трогаем.
+  // Синхронизация — как у arrival в adminAddStock, но без stock-части:
+  // unshift + saveLocal + syncAddTransfer (штатная очередь).
+  const created=[];
+  todo.forEach(p=>{
+    const op=makeTransfer('arrival',{date:LEGACY_DATE,time:'00:00',drone:p.model,qty:p.qty,note:LEGACY_NOTE});
+    if(!state.transfers)state.transfers=[];
+    state.transfers.unshift(op);
+    created.push(op);
+  });
+  saveLocal();
+  created.forEach(op=>syncAddTransfer(op));
+  logAction('stock','legacy_fix','Оформлен стартовый приход (легаси), наличие не менялось: '+created.map(o=>o.drone+' ×'+o.qty).join(', '));
+  console.log('[FIX] Создано arrival-записей: '+created.length+' (бортов: '+created.reduce((a,o)=>a+(o.qty||0),0)+'). Наличие (qty) не изменено. Проверка: syncAuditStock() — diff_adj по этим моделям должен стать 0');
+  return created;
+}
+
 // ============ DASHBOARD ============
 // ===== МЕДАЛИ ПИЛОТОВ (Обзор → Расчёты) =====
 // Каталог: id → {icon, name, color}. Текст описания (desc) формируется
