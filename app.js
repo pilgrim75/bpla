@@ -835,6 +835,103 @@ function adminDedupeLossTransfers(){
   setStatus('saveStatus','✓ Удалено '+removed+' дублей потерь — '+new Date().toLocaleString('ru'),'ok');
 }
 
+// Аудит целостности склада: закон сохранения бортов по моделям — «поступило» против
+// «есть сейчас + выбыло». Вызов из консоли: syncAuditStock() (синхронная, await не нужен).
+//
+// ОГРАНИЧЕНИЯ (не нарушать при доработке) — по образцу syncAuditEncryption (sync.js):
+//  • ТОЛЬКО ЧТЕНИЕ — не мутирует state/actLog/pendingQueue, не пишет в localStorage
+//    и облако, ничего не удаляет. После вызова перезагрузка не нужна.
+//  • Никакого spread на больших массивах (String.fromCharCode(...buf) и т.п.).
+//
+// Баланс: intake = arrival.qty + exchange.getQty; выбытие = exchange.giveQty + loss
+// (qty или 1). type='transfer' — внутреннее перемещение, баланс не меняет (игнор;
+// учтите: передача в «списан» уменьшает qty без следа в балансе — даст расхождение).
+// Две гипотезы о stock-строках со статусом lost/«списан» (формулы расходятся ровно
+// на их сумму, колонка lost): diff_A — независимое наличие (intake − (всё наличие +
+// give + loss)); diff_B — дубль учёта loss-передач, игнорируются (intake − (наличие
+// без lost + give + loss)). По коду верна A: writeDroneLoss lost-строк НЕ создаёт.
+// Ненулевой diff при verdict обеих гипотез — легаси-приход до складского учёта
+// (transfers ведутся с 01.06.2026, начальный склад без arrival-записей) либо баг.
+function syncAuditStock(){
+  const norm=s=>(s||'').toLowerCase().trim();
+  const models={};
+  const get=name=>{
+    const k=norm(name);
+    if(!k)return null;
+    if(!models[k])models[k]={model:String(name).trim(),intake:0,onhandAll:0,onhandActive:0,lost:0,exGive:0,lossSum:0};
+    return models[k];
+  };
+
+  // Наличие: склад (все статусы; lost/«списан» — отдельно) + расчёты
+  (state.stock||[]).forEach(d=>{
+    const m=get(d.name); if(!m)return;
+    const q=d.qty||0;
+    m.onhandAll+=q;
+    const st=norm(d.status);
+    if(st==='lost'||st==='списан') m.lost+=q;
+    else m.onhandActive+=q;
+  });
+  (state.squads||[]).forEach(sq=>(sq.drones||[]).forEach(d=>{
+    const m=get(d.name); if(!m)return;
+    m.onhandAll+=d.qty||0; m.onhandActive+=d.qty||0;
+  }));
+
+  // Журнал операций: приход/выбытие (transfer — внутреннее, игнор)
+  (state.transfers||[]).forEach(t=>{
+    if(t.type==='arrival'){ const m=get(t.drone); if(m)m.intake+=t.qty||0; }
+    else if(t.type==='exchange'){
+      if(t.get){ const m=get(t.get); if(m)m.intake+=t.getQty||0; }
+      if(t.give){ const m=get(t.give); if(m)m.exGive+=t.giveQty||0; }
+    }
+    else if(t.type==='loss'){ const m=get(t.drone); if(m)m.lossSum+=t.qty||1; }
+  });
+
+  const summary=Object.values(models).map(m=>{
+    const outflow=m.exGive+m.lossSum;
+    return {
+      model:m.model, intake:m.intake, onhand:m.onhandAll, lost:m.lost, outflow,
+      diff_A:m.intake-(m.onhandAll+outflow),      // lost-строки = наличие
+      diff_B:m.intake-(m.onhandActive+outflow)    // lost-строки = дубль loss-передач
+    };
+  }).sort((a,b)=>a.model.localeCompare(b.model,'ru'));
+
+  // Отрицательные количества — явные баги (расхождение учёта)
+  const negatives=[];
+  (state.stock||[]).forEach(d=>{ if((d.qty||0)<0)negatives.push({where:'склад ('+(d.status||'?')+')',model:d.name,qty:d.qty}); });
+  (state.squads||[]).forEach(sq=>(sq.drones||[]).forEach(d=>{ if((d.qty||0)<0)negatives.push({where:'расчёт '+sq.pilot,model:d.name,qty:d.qty}); }));
+
+  // Осиротевшие loss-записи — ключ pilot|drone|date, как в adminCleanOrphanLosses (только счёт)
+  const lostFlightKeys=new Set(
+    (state.flights||[]).filter(f=>f.returned==='no')
+      .map(f=>norm(f.pilot)+'|'+norm(f.drone)+'|'+(f.date||''))
+  );
+  const orphans=(state.transfers||[]).filter(t=>
+    t.type==='loss'&&!lostFlightKeys.has(norm(t.pilot)+'|'+norm(t.drone)+'|'+(t.date||''))
+  ).length;
+
+  // Дубли loss — ключ date|time|pilot|drone, как в adminDedupeLossTransfers (только счёт)
+  const seen=new Set();
+  let dupes=0;
+  (state.transfers||[]).forEach(t=>{
+    if(t.type!=='loss')return;
+    const k=(t.date||'')+'|'+(t.time||'')+'|'+norm(t.pilot)+'|'+norm(t.drone);
+    if(seen.has(k))dupes++; else seen.add(k);
+  });
+
+  // Отчёт
+  console.table(summary);
+  if(negatives.length){ console.log('[AUDIT] ⚠ Отрицательные количества ('+negatives.length+'):'); console.table(negatives); }
+  else console.log('[AUDIT] Отрицательных количеств нет');
+  console.log('[AUDIT] Осиротевших loss-записей (без вылета-потери): '+orphans);
+  console.log('[AUDIT] Дублей loss-записей (date|time|pilot|drone): '+dupes);
+  const okA=summary.filter(s=>s.diff_A===0).length;
+  const okB=summary.filter(s=>s.diff_B===0).length;
+  console.log('[AUDIT] Сходится моделей: гипотеза A (lost = наличие) — '+okA+' из '+summary.length+', гипотеза B (lost = дубль loss) — '+okB+' из '+summary.length);
+  const off=summary.filter(s=>s.diff_A!==0&&s.diff_B!==0);
+  if(off.length)console.log('[AUDIT] Расхождение по обеим гипотезам (легаси-приход до складского учёта либо баг): '+off.map(s=>s.model+' (A: '+s.diff_A+', B: '+s.diff_B+')').join('; '));
+  return {summary, negatives, orphans, dupes};
+}
+
 // ============ DASHBOARD ============
 // ===== МЕДАЛИ ПИЛОТОВ (Обзор → Расчёты) =====
 // Каталог: id → {icon, name, color}. Текст описания (desc) формируется

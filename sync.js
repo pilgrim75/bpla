@@ -57,10 +57,38 @@ async function syncDecrypt(row, key){
   }catch(e){ console.warn('[SYNC] decrypt error:', e.message, row.id); return null; }
 }
 
-async function syncDecryptRows(rows, key){
+// Листы, где отброшенная при расшифровке запись = потеря реальных данных.
+// actlog здесь намеренно нет (журнал аудита, битые записи допустимы — тихо).
+const SYNC_VALUABLE_SHEETS=['flights','stock','squads','transfers'];
+// Дедуп журнальных записей о потере на сессию по сигнатуре «лист|количество»:
+// syncDecryptRows для flights зовётся из ambient-merge (debounce 2с после каждого
+// сохранения) — без дедупа одна битая запись залила бы actLog одинаковыми
+// строками (паттерн login_logged_date). Тост дедупа не имеет — показывается всегда.
+const _syncLossLogged=new Set();
+async function syncDecryptRows(rows, key, sheet=''){
   if(!rows||!rows.length) return [];
   const results = await Promise.all(rows.map(r => syncDecrypt(r, key)));
-  return results.filter(Boolean);
+  const ok = results.filter(Boolean);
+  // Нерасшифрованные записи по-прежнему отбрасываются (приложение не падает),
+  // но для ценных листов — заметная сигнализация вместо тихого console.warn:
+  // пользователь должен узнать о потере данных (битая запись/неверный ключ).
+  // Инвентаризация битых записей — syncAuditEncryption() из консоли.
+  const dropped = rows.length - ok.length;
+  if(dropped>0 && SYNC_VALUABLE_SHEETS.includes(sheet)){
+    console.error('[SYNC] ⚠ ПОТЕРЯ ДАННЫХ: отброшено '+dropped+' нерасшифрованных записей из листа '+sheet);
+    try{ showSyncToast('⚠ Потеря данных: не расшифровано '+dropped+' зап. листа «'+sheet+'»', 8000); }catch(e){}
+    // Постоянный след в журнале действий (тост гаснет через 8с): logAction (app.js,
+    // вызов в рантайме) сохраняет локально и шлёт в облако штатной очередью actlog.
+    // Петли нет: сбои расшифровки самого actlog тихие (лист не в SYNC_VALUABLE_SHEETS).
+    try{
+      const sig=sheet+'|'+dropped;
+      if(!_syncLossLogged.has(sig)){
+        _syncLossLogged.add(sig);
+        logAction('sync','decrypt_loss','⚠ Потеря данных: не удалось расшифровать '+dropped+' записей из листа '+sheet);
+      }
+    }catch(e){}
+  }
+  return ok;
 }
 
 // Дедупликация по id: в облаке возможны дубль-строки одного id (повторный append
@@ -423,8 +451,8 @@ async function syncPushAll(silent=false){
       if(d.error) throw new Error(d.error);
       const tb = tombstones.load();
       const [cloudFRaw, cloudTRaw] = await Promise.all([
-        syncDecryptRows(d.flights||[], key),
-        syncDecryptRows(d.transfers||[], key)
+        syncDecryptRows(d.flights||[], key, 'flights'),
+        syncDecryptRows(d.transfers||[], key, 'transfers')
       ]);
       // Дедуп дубль-строк облака — иначе обе копии одного id пройдут фильтр !localFIds
       const cloudF=syncDedupeById(cloudFRaw), cloudT=syncDedupeById(cloudTRaw);
@@ -533,10 +561,10 @@ async function syncPullAll(confirm_=false){
     const loaded = {
       // flights/transfers — дедуп по id: дубль-строки облака иначе попадут в журнал
       // парой при полной замене (pollCloud дедупит сам, полная загрузка — нет)
-      flights:   syncDedupeById(await syncDecryptRows(d.flights||[], key)),
-      stock:     await syncDecryptRows(d.stock||[], key),
-      squads:    (await syncDecryptRows(d.squads||[], key)).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]})),
-      transfers: syncDedupeById(await syncDecryptRows(d.transfers||[], key)),
+      flights:   syncDedupeById(await syncDecryptRows(d.flights||[], key, 'flights')),
+      stock:     await syncDecryptRows(d.stock||[], key, 'stock'),
+      squads:    (await syncDecryptRows(d.squads||[], key, 'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]})),
+      transfers: syncDedupeById(await syncDecryptRows(d.transfers||[], key, 'transfers')),
       users: d.users||[]
     };
     // Фильтруем tombstones (и удалённые вылеты, и удалённые loss-передачи)
@@ -545,7 +573,7 @@ async function syncPullAll(confirm_=false){
     loaded.transfers = loaded.transfers.filter(t=>!tb.has(t.id));
     // Актлог
     if(d.actlog&&d.actlog.length){
-      const entries = await syncDecryptRows(d.actlog, key);
+      const entries = await syncDecryptRows(d.actlog, key, 'actlog');
       entries.forEach(e=>{ if(!actLog.some(x=>x.id===e.id)) actLog.unshift(e); });
       actLog.sort((a,b)=>b.ts-a.ts);
       if(actLog.length>500) actLog=actLog.slice(0,500);
@@ -555,6 +583,7 @@ async function syncPullAll(confirm_=false){
       pendingQueue.confirmDelivered(new Set(entries.map(e=>e.id).filter(Boolean)));
     }
     if(d.stock&&d.stock.length){
+      // без имени листа (тихо): те же строки d.stock уже просигналили при сборке loaded выше
       const remoteStockVersion = Math.max(...(await syncDecryptRows(d.stock,key)).map(s=>s._sv||0));
       _lastStockTs = remoteStockVersion;
     }
@@ -746,8 +775,8 @@ async function pollCloud(){
         const r2 = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
         const d2 = await r2.json();
         if(!d2.error){
-          const remoteStock  = await syncDecryptRows(d2.stock||[], key);
-          const remoteSquads = (await syncDecryptRows(d2.squads||[], key)).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
+          const remoteStock  = await syncDecryptRows(d2.stock||[], key, 'stock');
+          const remoteSquads = (await syncDecryptRows(d2.squads||[], key, 'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
           // Берём только если версия новее нашей
           const remoteVersion = Math.max(0,...remoteStock.map(s=>s._sv||0));
           if(remoteVersion > _stockVersion){
