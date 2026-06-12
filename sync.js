@@ -838,3 +838,48 @@ function appendToCloud(sheet, obj){
   // transfers, flights и т.д.
   return syncAddTransfer(obj);
 }
+
+// ============================================================
+// ДИАГНОСТИКА (вызов из консоли)
+// ============================================================
+
+// Инвентаризация битых (нерасшифровываемых) записей в облаке.
+// Появилась после бага aesEncrypt 12.06.2026 (spread в String.fromCharCode →
+// битый base64 у длинных записей, см. CLAUDE.md §6): показывает, сколько таких
+// записей осталось в каждом листе. Вызов из консоли: await syncAuditEncryption()
+//
+// ОГРАНИЧЕНИЯ (не нарушать при доработке):
+//  • ТОЛЬКО ЧТЕНИЕ — никаких write/syncPushAll/localStorage.setItem; state,
+//    actLog, pendingQueue не мутируются. После вызова перезагрузка не нужна.
+//  • Никакого spread на больших массивах (String.fromCharCode(...buf) и т.п.) —
+//    общий принцип проекта после бага с base64.
+async function syncAuditEncryption(){
+  const {url,key,token}=syncGetCfg();
+  if(!url||!token){ console.warn('[AUDIT] Облако не настроено (нет url/token)'); return null; }
+  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
+  const d=await r.json();
+  if(d.error){ console.warn('[AUDIT]', d.error); return null; }
+  const sheets=['flights','stock','squads','transfers','actlog'];
+  const summary=[], bad=[];
+  for(const sheet of sheets){
+    const rows=d[sheet]||[];
+    let ok=0;
+    for(const row of rows){
+      // null → битая запись (сам decrypt error syncDecrypt уже вывел в консоль).
+      // id облачной строки открытый (не шифруется) — по формату <ts>_<суффикс>
+      // видно тип и время создания записи.
+      const obj=await syncDecrypt(row,key);
+      if(obj) ok++;
+      else bad.push({sheet, id:row.id||'(без id)'});
+    }
+    summary.push({sheet, total:rows.length, ok, bad:rows.length-ok});
+  }
+  console.table(summary);
+  if(bad.length){
+    console.log('[AUDIT] Битых записей: '+bad.length);
+    console.table(bad);
+  } else {
+    console.log('[AUDIT] Битых записей нет — все строки расшифровались');
+  }
+  return {summary, bad};
+}

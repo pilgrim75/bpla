@@ -3155,7 +3155,12 @@ async function aesEncrypt(text,password){
   const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(text));
   const buf=new Uint8Array(iv.length+cipher.byteLength);
   buf.set(iv,0);buf.set(new Uint8Array(cipher),iv.length);
-  return btoa(String.fromCharCode(...buf));
+  // Поблочно (по 32 КБ): spread в String.fromCharCode(...buf) на длинных записях
+  // (большой actlog-payload) переполнял стек аргументов → битый base64,
+  // который aesDecrypt не мог прочитать («not correctly encoded»)
+  let bin='';
+  for(let i=0;i<buf.length;i+=0x8000){ bin+=String.fromCharCode.apply(null,buf.subarray(i,i+0x8000)); }
+  return btoa(bin);
 }
 async function aesDecrypt(b64,password){
   const key=await getKey(password);
