@@ -854,7 +854,10 @@ function adminDedupeLossTransfers(){
 // без lost + give + loss)). По коду верна A: writeDroneLoss lost-строк НЕ создаёт.
 // Ненулевой diff при verdict обеих гипотез — легаси-приход до складского учёта
 // (transfers ведутся с 01.06.2026, начальный склад без arrival-записей) либо баг.
-function syncAuditStock(){
+// План фиксации легаси-остатка — syncStockLegacyPlan() (ниже, тот же расчёт).
+
+// Чистый расчёт аудита (без вывода) — общий для syncAuditStock и syncStockLegacyPlan
+function _stockAuditCompute(){
   const norm=s=>(s||'').toLowerCase().trim();
   const models={};
   const get=name=>{
@@ -929,7 +932,12 @@ function syncAuditStock(){
     if(seen.has(k))dupes++; else seen.add(k);
   });
 
-  // Отчёт
+  return {summary, negatives, orphans, dupes};
+}
+
+// Отчёт аудита в консоль (модель учёта и ограничения — в комментарии выше)
+function syncAuditStock(){
+  const {summary, negatives, orphans, dupes}=_stockAuditCompute();
   console.table(summary);
   if(negatives.length){ console.log('[AUDIT] ⚠ Отрицательные количества ('+negatives.length+'):'); console.table(negatives); }
   else console.log('[AUDIT] Отрицательных количеств нет');
@@ -948,6 +956,32 @@ function syncAuditStock(){
   if(legacy.length)console.log('[AUDIT] Легаси-приход (intake=0, поступили до складского учёта): '+legacy.map(s=>s.model+' ('+s.diff_adj+')').join('; '));
   if(manual.length)console.log('[AUDIT] ⚠ Требуют ручной проверки (расхождение при ненулевом приходе): '+manual.map(s=>s.model+' (adj: '+s.diff_adj+')').join('; '));
   return {summary, negatives, orphans, dupes};
+}
+
+// План фиксации легаси-остатка: сколько стартовых бортов по каждой модели не хватает
+// в журнале операций (diff_adj < 0 → legacy = −diff_adj). Вызов: syncStockLegacyPlan().
+// ПЛАНИРОВЩИК, НЕ ИСПОЛНИТЕЛЬ — только чтение и вывод: ничего не создаёт и не мутирует
+// (никаких makeTransfer/arrival/saveLocal/sync). Записи пользователь вносит вручную
+// через Администратор → Склад (adminAddStock сам создаст arrival-передачу, после
+// чего diff_adj модели уйдёт в 0 при следующем syncAuditStock).
+function syncStockLegacyPlan(){
+  const {summary}=_stockAuditCompute();
+  const plan=[], skipped=[];
+  summary.forEach(s=>{
+    if(s.diff_adj<0) plan.push({model:s.model, legacy_qty:-s.diff_adj});
+    else if(s.diff_adj>0) skipped.push(s.model+' (+'+s.diff_adj+')');
+  });
+  if(plan.length){
+    console.table(plan);
+    const total=plan.reduce((a,p)=>a+p.legacy_qty,0);
+    console.log('[PLAN] Итого: '+total+' легаси-бортов, моделей: '+plan.length);
+    console.log('[PLAN] Для ручного ввода (Администратор → Склад, поступление):');
+    console.log(plan.map(p=>p.model+' ×'+p.legacy_qty+' — статус bg, note: легаси/стартовый учёт').join('\n'));
+  } else {
+    console.log('[PLAN] Легаси-остатка нет — все модели сходятся');
+  }
+  if(skipped.length)console.log('[PLAN] Пропущены (diff_adj > 0 — положительного легаси не бывает, см. «ручную проверку» в syncAuditStock): '+skipped.join('; '));
+  return plan;
 }
 
 // ============ DASHBOARD ============
