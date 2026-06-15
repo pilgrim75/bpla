@@ -343,7 +343,7 @@
   <div class="card" style="margin-bottom:12px">
     <div class="form-row cols3">
       <div><label>Тип отчёта</label>
-        <select id="repType" onchange="buildReport()">
+        <select id="repType" onchange="onRepTypeChange()">
           <option value="stock">Складской учёт</option>
           <option value="flights">Вылеты за период</option>
           <option value="losses">Потери</option>
@@ -354,8 +354,24 @@
           <option value="reportage" id="repTypeReportage">Репортаж недели (AI)</option>
         </select>
       </div>
-      <div><label>С даты</label><input type="date" id="repFrom" onchange="buildReport()"></div>
-      <div><label>По дату</label><input type="date" id="repTo" onchange="buildReport()"></div>
+      <div id="repFromCol"><label>С даты</label><input type="date" id="repFrom" onchange="buildReport()"></div>
+      <div id="repToCol"><label>По дату</label><input type="date" id="repTo" onchange="buildReport()"></div>
+      <!-- Адаптивный период для устного доклада (скользящие окна) — показывается только для type=verbal -->
+      <div id="vrPeriodCol" style="display:none"><label>Период доклада</label>
+        <select id="vrPeriod" onchange="vrPeriodChange()">
+          <option value="week">Неделя</option>
+          <option value="month">Месяц</option>
+          <option value="year">Год</option>
+          <option value="custom">Произвольный</option>
+        </select>
+      </div>
+      <!-- Адаптивный период для репортажа (календарный) — показывается только для type=reportage -->
+      <div id="rpgPeriodCol" style="display:none"><label>Период репортажа</label>
+        <select id="rpgPeriod" onchange="rpgPeriodChange()">
+          <option value="week">Календарная неделя (пн–вс)</option>
+          <option value="month">Календарный месяц</option>
+        </select>
+      </div>
     </div>
     <div class="form-row cols2">
       <div><label>Пилот (все если не выбран)</label>
@@ -379,7 +395,7 @@
       </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" onclick="buildReport()">Сформировать</button>
+      <button class="btn btn-primary" id="repRunBtn" onclick="runReport()">Сформировать</button>
       <button class="btn btn-sm" style="color:var(--muted)" onclick="copyReport()">Копировать текст</button>
       <button class="btn btn-sm" style="color:var(--muted)" onclick="printReport()">Печать / PDF</button>
     </div>

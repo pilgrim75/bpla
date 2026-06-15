@@ -13,6 +13,41 @@ function fillReportFilters(){
   }
   renderDroneFilter();
   repToggleReportageOption();
+  repAdaptPeriodFields();
+}
+
+// Адаптивное поле периода в верхнем блоке: под тип отчёта показываем нужные элементы.
+// stock/flights/losses/issued/summary/detailed → поля «С даты»/«По дату» (repFrom/repTo).
+// verbal → селектор vrPeriod (Неделя/Месяц/Год/Произвольный); даты только в режиме «Произвольный».
+// reportage → селектор rpgPeriod (календарная неделя/месяц), даты скрыты.
+function repAdaptPeriodFields(){
+  const type=(document.getElementById('repType')||{}).value||'stock';
+  const isVerbal=type==='verbal', isRpg=type==='reportage';
+  const set=(id,show)=>{ const el=document.getElementById(id); if(el) el.style.display=show?'':'none'; };
+  set('vrPeriodCol', isVerbal);
+  set('rpgPeriodCol', isRpg);
+  // Поля дат: обычные отчёты — всегда; verbal — только «Произвольный»; reportage — никогда
+  let showDates=true;
+  if(isVerbal){ const vp=(document.getElementById('vrPeriod')||{}).value||'week'; showDates=(vp==='custom'); }
+  else if(isRpg){ showDates=false; }
+  set('repFromCol', showDates);
+  set('repToCol', showDates);
+}
+
+// Смена типа отчёта: подстроить поля периода и перерисовать вывод (для AI — только пустую
+// панель результата, БЕЗ обращения к API; платный вызов — только по «Сформировать»).
+function onRepTypeChange(){
+  repAdaptPeriodFields();
+  buildReport();
+}
+
+// Кнопка «Сформировать» — единая точка запуска. Для AI-типов здесь (и только здесь)
+// инициируется сетевой вызов: verbal с авто-фолбэком на шаблон, reportage через API.
+function runReport(){
+  buildReport(); // отрисовать панель/отчёт (для AI — область результата со статусом)
+  const type=(document.getElementById('repType')||{}).value;
+  if(type==='verbal') vrGenerate();
+  else if(type==='reportage') rpgGenerate();
 }
 
 // Список бортов, реально использованных в выбранном периоде (вылеты + перемещения)
@@ -639,23 +674,11 @@ const VR_PROMPT = 'Составь устный военный доклад на 
 // чтобы не теряться при перерисовке отчёта.
 function reportVerbal(out){
   window._reportText=null;
-  const per=window._vrPeriod||'week';
   const txt=window._vrText||'';
   out.innerHTML=`<div class="report-block">
     <div class="rb-head">Устный доклад (AI)</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Перед отправкой в Claude API имена расчётов, точки, борта и грузы заменяются условными номерами и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт».</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-      <select id="vrPeriod" onchange="vrPeriodChange()" style="width:auto">
-        <option value="week">Неделя</option>
-        <option value="month">Месяц</option>
-        <option value="year">Год</option>
-        <option value="custom">Произвольный</option>
-      </select>
-      <span id="vrCustomHint" style="display:${per==='custom'?'inline':'none'};font-size:11px;color:var(--muted)">↑ используются поля «С даты» / «По дату» вверху</span>
-      <button class="btn btn-primary" id="vrGenBtn" onclick="vrGenerate()">Сформировать доклад</button>
-      <button class="btn btn-sm" id="vrTplBtn" onclick="vrTemplate()" title="Сформировать без обращения к API">Шаблонный доклад</button>
-      <span id="vrStatus" style="font-size:12px;color:var(--muted)"></span>
-    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Период выбирается вверху (Неделя/Месяц/Год/Произвольный). Перед отправкой в Claude API имена расчётов, точки, борта и грузы заменяются условными номерами и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт». Нажмите «Сформировать» вверху — при недоступности сети/API доклад будет составлен по шаблону автоматически.</div>
+    <div id="vrStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
     <div id="vrResultWrap" style="display:${txt?'block':'none'}">
       <textarea id="vrResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
       <div style="display:flex;gap:8px;margin-top:8px">
@@ -664,14 +687,13 @@ function reportVerbal(out){
       </div>
     </div>
   </div>`;
-  const sel=document.getElementById('vrPeriod'); if(sel) sel.value=per;
 }
 
+// Селектор периода доклада (в верхнем блоке): сохранить выбор и подстроить видимость
+// полей дат («Произвольный» открывает repFrom/repTo). НЕ вызывает API.
 function vrPeriodChange(){
-  const per=document.getElementById('vrPeriod').value;
-  window._vrPeriod=per;
-  const h=document.getElementById('vrCustomHint');
-  if(h) h.style.display=per==='custom'?'inline':'none';
+  window._vrPeriod=(document.getElementById('vrPeriod')||{}).value;
+  repAdaptPeriodFields();
 }
 
 // Диапазон дат по выбранному периоду (скользящие окна 7/30/365 дней либо произвольный)
@@ -847,21 +869,14 @@ function vrBuildTemplate(flights, range){
   return L.join('\n');
 }
 
-// Явная кнопка «Шаблонный доклад» — без обращения к API
-function vrTemplate(){
-  const r=vrPeriodRange();
-  const flights=vrFilterFlights(r);
-  vrShowText(vrBuildTemplate(flights,r));
-  vrSetStatus(flights.length?'Шаблонный доклад сформирован (без API).':'За выбранный период вылетов нет.','var(--muted)');
-}
-
-// Основная кнопка: пробуем API (таймаут 10с) → при недоступности сети/таймауте автоматически шаблон
+// Запуск по «Сформировать»: пробуем API (таймаут 10с) → при недоступности сети/таймауте
+// или отсутствии ключа автоматически шаблонный доклад (без отдельной кнопки)
 async function vrGenerate(){
   const r=vrPeriodRange();
   const flights=vrFilterFlights(r);
   if(!flights.length){ vrSetStatus('За выбранный период вылетов нет.','var(--amber)'); return; }
   const apiKey=(localStorage.getItem('anthropicKey')||'').trim();
-  const btn=document.getElementById('vrGenBtn');
+  const btn=document.getElementById('repRunBtn');
   const fallback=(notice)=>{ vrShowText(vrBuildTemplate(flights,r)); vrSetStatus(notice,'var(--amber)'); };
 
   // Нет ключа или нет сети — сразу шаблон, без попытки запроса
@@ -933,24 +948,45 @@ const RPG_PROMPT = 'Напиши шутливый и ироничный репо
 function rpgRole(){ return (typeof state!=='undefined'&&state.role) || (window.authUser&&authUser.role) || ''; }
 function rpgIsPrivileged(){ const r=rpgRole(); return r==='admin'||r==='cmd'; }
 
+// Час закрытия периода: период (неделя/месяц) считается ЗАВЕРШЁННЫМ и становится
+// текущим для репортажа начиная с RPG_CLOSE_HOUR:00 его последнего дня. До этого
+// момента берётся предыдущий завершённый период. Менять здесь.
+const RPG_CLOSE_HOUR=21;
+
 // Диапазон выбранного периода: календарная неделя (пн–вс) или календарный месяц.
+// Период становится «текущим» только после RPG_CLOSE_HOUR последнего дня (см. выше).
 function rpgPeriodRange(){
   const per=(document.getElementById('rpgPeriod')||{}).value||'week';
   const fd=iso=>iso?iso.split('-').reverse().join('.'):'…';
-  const now=new Date();
+  const now=new Date(); // с реальным временем — порог RPG_CLOSE_HOUR требует часов
   let start,end;
   if(per==='month'){
-    // Последний ЗАВЕРШЁННЫЙ календарный месяц (не текущий)
-    start=new Date(now.getFullYear(),now.getMonth()-1,1);
-    end=new Date(now.getFullYear(),now.getMonth(),0); // последний день предыдущего месяца
+    // Последний день ТЕКУЩЕГО месяца, RPG_CLOSE_HOUR:00 — момент закрытия.
+    const curLast=new Date(now.getFullYear(),now.getMonth()+1,0); // последний день тек. месяца
+    const closeMs=new Date(curLast.getFullYear(),curLast.getMonth(),curLast.getDate(),RPG_CLOSE_HOUR).getTime();
+    if(now.getTime()>=closeMs){
+      // Текущий месяц закрыт → репортаж за текущий месяц
+      start=new Date(now.getFullYear(),now.getMonth(),1);
+      end=curLast;
+    } else {
+      // Текущий месяц ещё идёт → за предыдущий
+      start=new Date(now.getFullYear(),now.getMonth()-1,1);
+      end=new Date(now.getFullYear(),now.getMonth(),0); // последний день пред. месяца
+    }
   } else {
-    // Последняя ЗАВЕРШЁННАЯ неделя пн–вс. В понедельник прошлая неделя
-    // закончилась лишь вчера (вс) — берём позапрошлую (на неделю раньше).
+    // Неделя пн–вс. Момент закрытия — вс RPG_CLOSE_HOUR:00 ТЕКУЩЕЙ недели.
     const dow=(now.getDay()+6)%7; // 0=пн
     const curMon=new Date(now.getFullYear(),now.getMonth(),now.getDate()-dow); // пн текущей недели
-    const backWeeks=dow===0?2:1;
-    start=new Date(curMon.getFullYear(),curMon.getMonth(),curMon.getDate()-7*backWeeks);
-    end=new Date(start.getFullYear(),start.getMonth(),start.getDate()+6); // вс той недели
+    const curSun=new Date(curMon.getFullYear(),curMon.getMonth(),curMon.getDate()+6); // вс текущей недели
+    const closeMs=new Date(curSun.getFullYear(),curSun.getMonth(),curSun.getDate(),RPG_CLOSE_HOUR).getTime();
+    if(now.getTime()>=closeMs){
+      // Текущая неделя закрыта → репортаж за текущую неделю
+      start=curMon; end=curSun;
+    } else {
+      // Текущая неделя ещё идёт → за предыдущую (на 7 дней раньше)
+      start=new Date(curMon.getFullYear(),curMon.getMonth(),curMon.getDate()-7);
+      end=new Date(start.getFullYear(),start.getMonth(),start.getDate()+6);
+    }
   }
   const from=localISO(start), to=localISO(end);
   return {from,to,startMs:start.getTime(),endMs:end.getTime(),
@@ -1072,19 +1108,11 @@ function reportReportage(out){
       +'<div class="rb-line" style="color:var(--amber)">Доступно только командиру и администратору (роли admin/cmd).</div></div>';
     return;
   }
-  const per=window._rpgPeriod||'week';
   const txt=window._rpgText||'';
   out.innerHTML=`<div class="report-block">
     <div class="rb-head">Репортаж недели (AI) 🎙️</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Шутливый репортаж о достижениях пилотов. Перед отправкой в Claude API имена пилотов заменяются на «Пилот N» и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт».</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-      <select id="rpgPeriod" onchange="rpgPeriodChange()" style="width:auto">
-        <option value="week">Календарная неделя (пн–вс)</option>
-        <option value="month">Календарный месяц</option>
-      </select>
-      <button class="btn btn-primary" id="rpgGenBtn" onclick="rpgGenerate()">Сформировать репортаж</button>
-      <span id="rpgStatus" style="font-size:12px;color:var(--muted)"></span>
-    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Шутливый репортаж о достижениях пилотов за выбранный вверху период (календарная неделя/месяц). Перед отправкой в Claude API имена пилотов заменяются на «Пилот N» и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт». Нажмите «Сформировать» вверху.</div>
+    <div id="rpgStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
     <div id="rpgResultWrap" style="display:${txt?'block':'none'}">
       <textarea id="rpgResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
       <div style="display:flex;gap:8px;margin-top:8px">
@@ -1092,7 +1120,6 @@ function reportReportage(out){
       </div>
     </div>
   </div>`;
-  const sel=document.getElementById('rpgPeriod'); if(sel) sel.value=per;
 }
 
 async function rpgGenerate(){
@@ -1103,7 +1130,7 @@ async function rpgGenerate(){
   const apiKey=(localStorage.getItem('anthropicKey')||'').trim();
   if(!apiKey||!apiKey.startsWith('sk-ant')){ rpgSetStatus('API-ключ не задан (вкладка «Импорт»).','var(--amber)'); return; }
   if(!navigator.onLine){ rpgSetStatus('Нет сети — репортаж формируется только через API.','var(--amber)'); return; }
-  const btn=document.getElementById('rpgGenBtn');
+  const btn=document.getElementById('repRunBtn');
   if(btn) btn.disabled=true;
   rpgSetStatus('⏳ Пишу репортаж…');
   try{
