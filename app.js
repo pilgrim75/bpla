@@ -519,7 +519,8 @@ function returnLossDrone(f){
     );
   }
   // tombstone удалённых loss-передач — чтобы неразрушающий merge не вернул их из облака
-  removedTransfers.forEach(t=>{ if(t.id) tombstones.add(t.id); });
+  // Путь Б: публикуем удаление в облачный лист tombstones (распространение на устройства)
+  syncPublishTombstones(removedTransfers.map(t=>t.id));
   syncBumpStockVersion();
   setTimeout(()=>syncPushStockSquads(),300);
 }
@@ -737,7 +738,7 @@ function adminClearFlights(){
   // tombstone на каждый id — иначе неразрушающий merge (syncPushAll) и поллинг
   // вернут все вылеты из облака в течение секунд, и «удаление» не сработает
   const _cnt=state.flights.length;
-  tombstones.addMany(state.flights.map(f=>f.id).filter(Boolean));
+  syncPublishTombstones(state.flights.map(f=>f.id).filter(Boolean)); // Путь Б: публикуем массовое удаление
   state.flights=[];
   logAction('flight','clear','Удалены ВСЕ вылеты ('+_cnt+' зап.)');
   saveLocal();
@@ -783,7 +784,7 @@ function adminCleanOrphanLosses(){
   });
   const removed=before-(state.transfers||[]).length;
   // tombstone удалённых loss-записей — иначе неразрушающий merge/поллинг вернёт их из облака
-  tombstones.addMany(removedIds);
+  syncPublishTombstones(removedIds); // Путь Б: публикуем удаление осиротевших потерь в облако
   saveLocal();
   if(removed>0){
     syncPushStockSquads();
@@ -824,7 +825,7 @@ function adminDedupeLossTransfers(){
     return;
   }
   if(!confirm('Найдено '+removed+' дублей записей о потерях (одинаковые дата+время+пилот+борт).\nОставить по одной записи в каждой группе, остальные удалить?'))return;
-  tombstones.addMany(removedIds);
+  syncPublishTombstones(removedIds); // Путь Б: публикуем удаление дублей потерь в облако
   state.transfers=kept;
   // Немедленная выгрузка полным write (merge исключит tombstoned-записи);
   // saveLocalQuiet — чтобы не плодить второй отложенный push через debounce

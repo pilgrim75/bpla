@@ -618,6 +618,36 @@ body.theme-field{
 .abs-modal-shield .gold-shield{cursor:default}
 .abs-modal-shield .gold-shield:hover{transform:none}
 
+/* ===== Доска почёта для шаринга (репортаж недели) ===== */
+/* Всегда ТЁМНАЯ и независимая от темы приложения — чтобы PNG читался в Telegram.
+   Фиксированная ширина 600px → стабильный размер картинки (html2canvas). */
+/* Off-screen контейнер рендера + картинка-результат на экране */
+.rpg-board-host{position:fixed;left:-10000px;top:0;z-index:-1}
+.rpg-board-imgwrap{margin-bottom:8px}
+.rpg-board-img{max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid var(--color-border-tertiary)}
+.rpg-board{width:600px;box-sizing:border-box;background:#1b1e24;border:1px solid #2c313a;
+  border-radius:12px;padding:18px 22px;color:#e7e9ea;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+.rpg-board .rpg-board-title{font-size:16px;font-weight:600;color:#ffd700;
+  margin-bottom:14px;text-align:center;letter-spacing:.2px}
+.rpg-board .crew-item{border-bottom:0.5px solid #2c313a;padding:11px 2px}
+.rpg-board .crew-item:last-child{border-bottom:none}
+.rpg-board .crew-name{font-size:14px;font-weight:500;color:#e7e9ea;
+  display:flex;align-items:center;flex-wrap:wrap;gap:3px}
+/* Обычные медали — КРУГЛЫЕ цветные значки (как .medal-badge на главной), не щиты.
+   Параметры скопированы в scope, чтобы блок был независим от глобальных правил/темы. */
+.rpg-board .medal-row{display:flex;align-items:center;gap:5px;margin-left:0;margin-top:8px;flex-wrap:wrap}
+.rpg-board .medal-badge{display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;font-size:14px;line-height:1;border-radius:999px;
+  border:1px solid transparent;cursor:default}
+.rpg-board .rpg-empty{color:#9aa0a6;text-align:center;padding:10px 0}
+/* Золотой щит = inline-SVG (форма+градиент рисует SVG, эмодзи поверх) —
+   html2canvas корректно растрирует SVG, в отличие от CSS clip-path */
+.rpg-board .gold-row{display:inline-flex;align-items:center;gap:3px;vertical-align:middle}
+.rpg-board .gss{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:23px;vertical-align:middle}
+.rpg-board .gss .gss-bg{position:absolute;left:0;top:0;width:100%;height:100%;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))}
+.rpg-board .gss .gss-emoji{position:relative;z-index:1;font-size:11px;line-height:1}
+
 /* Flight items (Dashboard) */
 .flight-item{padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;gap:10px}
 .flight-item:last-child{border-bottom:none}

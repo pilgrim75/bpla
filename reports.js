@@ -1113,6 +1113,7 @@ function reportReportage(out){
     <div class="rb-head">Репортаж недели (AI) 🎙️</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Шутливый репортаж о достижениях пилотов за выбранный вверху период (календарная неделя/месяц). Перед отправкой в Claude API имена пилотов заменяются на «Пилот N» и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт». Нажмите «Сформировать» вверху.</div>
     <div id="rpgStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
+    <div id="rpgBoardSlot">${rpgBoardSlotHtml()}</div>
     <div id="rpgResultWrap" style="display:${txt?'block':'none'}">
       <textarea id="rpgResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
       <div style="display:flex;gap:8px;margin-top:8px">
@@ -1132,6 +1133,8 @@ async function rpgGenerate(){
   if(!navigator.onLine){ rpgSetStatus('Нет сети — репортаж формируется только через API.','var(--amber)'); return; }
   const btn=document.getElementById('repRunBtn');
   if(btn) btn.disabled=true;
+  // Сбрасываем доску почёта прошлой генерации — появится только после успеха
+  window._rpgBoardImg=null; const slot0=document.getElementById('rpgBoardSlot'); if(slot0) slot0.innerHTML='';
   rpgSetStatus('⏳ Пишу репортаж…');
   try{
     const ctrl=new AbortController();
@@ -1154,6 +1157,7 @@ async function rpgGenerate(){
     txt+='\n\n───────────────\nℹ️ Что означают медали: https://pilgrim75.github.io/bpla/medals.html';
     rpgShowText(txt);
     rpgSetStatus('✓ Готово','var(--green2)');
+    await rpgRenderBoard(range); // картинка-«доска почёта» над текстом (медали из того же снимка периода)
   }catch(e){
     const net = e.name==='AbortError' || /Failed to fetch|NetworkError|network|ERR_/i.test(e.message||'');
     rpgSetStatus(net?'Сеть недоступна — попробуйте ещё раз.':'Ошибка API: '+e.message,'var(--red)');
@@ -1165,4 +1169,117 @@ function rpgCopyTelegram(){
   window._rpgText=ta.value; // сохраняем правки
   const done=()=>{ const b=document.querySelector('[onclick="rpgCopyTelegram()"]'); if(b){ const o=b.textContent; b.textContent='✓ Скопировано!'; setTimeout(()=>b.textContent=o,2000); } };
   navigator.clipboard.writeText(ta.value).then(done).catch(()=>{ ta.select(); document.execCommand('copy'); done(); });
+}
+
+// ===== ДОСКА ПОЧЁТА (картинка-шапка для Telegram) =====
+// Источник данных — ТОТ ЖЕ rpgSnapshotAt(range.endMs), что и текст репортажа:
+// медали на картинке гарантированно совпадают с упомянутыми в тексте. Иконки/цвета —
+// из каталогов MEDALS / ABS_RECORDS (app.js). Своей логики подсчёта медалей нет.
+// Возвращает [{pilot,shieldIds,medalIds}] ТОЛЬКО для пилотов с ≥1 наградой.
+function rpgBuildBoardData(range){
+  const pilots=[...new Set((state.squads||[]).map(s=>s.pilot).filter(Boolean))];
+  const snap=rpgSnapshotAt(range.endMs, pilots); // {medals:{pilot:Set(id)}, shields:{id:pilot}}
+  const rows=[];
+  pilots.forEach(p=>{
+    const shieldIds=Object.keys(snap.shields||{}).filter(id=>snap.shields[id]===p);
+    const medalIds=[...(snap.medals[p]||[])];
+    if(shieldIds.length||medalIds.length) rows.push({pilot:p, shieldIds, medalIds});
+  });
+  return rows;
+}
+
+// Золотой щит как inline-SVG (для доски почёта) — html2canvas НЕ растрирует CSS
+// clip-path, поэтому форму щита и градиент рисуем средствами SVG. uid делает id
+// градиента уникальным (несколько щитов на странице). Эмодзи — поверх щита.
+function rpgShieldSvg(icon, title, uid){
+  const gid='gsg'+uid;
+  return `<span class="gss" title="${esc(title)} — абсолютный рекорд">`
+    +`<svg class="gss-bg" viewBox="0 0 24 28" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">`
+    +`<defs><linearGradient id="${gid}" x1="0%" y1="0%" x2="85%" y2="100%">`
+    +`<stop offset="0%" stop-color="#FFF3AE"/><stop offset="45%" stop-color="#FFD700"/><stop offset="100%" stop-color="#D99A00"/>`
+    +`</linearGradient></defs>`
+    +`<path d="M12 0 L24 4.48 L24 15.68 L12 28 L0 15.68 L0 4.48 Z" fill="url(#${gid})"/>`
+    +`</svg><span class="gss-emoji">${icon}</span></span>`;
+}
+
+// HTML доски почёта (карточки в стиле crew-item, без дронов/дат/числа вылетов).
+function rpgBoardHtml(range){
+  const rows=rpgBuildBoardData(range);
+  const title='🏅 Доска почёта · '+esc(range.label||'');
+  let body, uid=0;
+  if(!rows.length){
+    body='<div class="rpg-empty">За период наград не присуждено</div>';
+  } else {
+    body=rows.map(r=>{
+      const shields=r.shieldIds.map(id=>{
+        const c=ABS_RECORDS[id]||{icon:'🛡️',name:id};
+        return rpgShieldSvg(c.icon, c.name, uid++);
+      }).join('');
+      const shieldRow=shields?`<span class="gold-row gold-inline">${shields}</span>`:'';
+      const medals=r.medalIds.map(id=>{
+        const m=MEDALS[id]; if(!m) return '';
+        return `<span class="medal-badge" style="background:${m.color}22;border-color:${m.color}77" title="${esc(m.name)}">${m.icon}</span>`;
+      }).join('');
+      const medalRow=medals?`<span class="medal-row">${medals}</span>`:'';
+      return `<div class="crew-item">
+        <div class="crew-name">Пилот ${esc(r.pilot)}${shieldRow}</div>
+        ${medalRow}
+      </div>`;
+    }).join('');
+  }
+  return `<div class="rpg-board-wrap"><div class="rpg-board" id="rpgBoard">
+    <div class="rpg-board-title">${title}</div>
+    ${body}
+  </div></div>`;
+}
+
+// HTML слота: готовая картинка <img> + кнопка скачивания + подсказка про «копировать
+// картинку». Источник — window._rpgBoardImg (dataURL); пусто → ''. Переживает перерисовку
+// reportReportage (картинка уже отрисована и закэширована, повторный рендер не нужен).
+function rpgBoardSlotHtml(){
+  const d=window._rpgBoardImg;
+  if(!d) return '';
+  return `<div class="rpg-board-imgwrap"><img src="${d}" alt="Доска почёта" class="rpg-board-img"></div>
+    <div style="display:flex;gap:10px;align-items:center;margin:0 0 12px;flex-wrap:wrap">
+      <button class="btn btn-sm" onclick="rpgSaveMedalImage()">🖼️ Сохранить картинку медалей</button>
+      <span style="font-size:11px;color:var(--muted)">или правый клик по картинке → «Копировать картинку» → вставить в Telegram</span>
+    </div>`;
+}
+
+// Строит доску в СКРЫТОМ off-screen контейнере, рендерит её в PNG (html2canvas) и
+// показывает на экране СРАЗУ как <img>. Живой HTML-блок на экран не выводится.
+// dataURL кэшируется в window._rpgBoardImg (переживает перерисовку reportReportage).
+async function rpgRenderBoard(range){
+  window._rpgBoardName=(range.from||'period')+'_'+(range.to||'');
+  window._rpgBoardImg=null;
+  const slot=document.getElementById('rpgBoardSlot');
+  if(slot) slot.innerHTML='<div style="font-size:12px;color:var(--muted);margin:6px 0">⏳ Готовлю картинку медалей…</div>';
+  if(typeof html2canvas!=='function'){
+    if(slot) slot.innerHTML='<div style="font-size:12px;color:var(--red);margin:6px 0">Модуль html2canvas не загружен — картинка недоступна.</div>';
+    return;
+  }
+  const host=document.createElement('div');
+  host.className='rpg-board-host';
+  host.innerHTML=rpgBoardHtml(range);
+  document.body.appendChild(host);
+  try{
+    const el=host.querySelector('#rpgBoard');
+    const canvas=await html2canvas(el,{backgroundColor:'#1b1e24', scale:2, logging:false});
+    window._rpgBoardImg=canvas.toDataURL('image/png');
+    if(slot) slot.innerHTML=rpgBoardSlotHtml();
+  }catch(e){
+    if(slot) slot.innerHTML='<div style="font-size:12px;color:var(--red);margin:6px 0">Не удалось сформировать картинку: '+esc(e.message||String(e))+'</div>';
+  }finally{
+    host.remove();
+  }
+}
+
+// Скачивание готовой картинки (dataURL уже посчитан в rpgRenderBoard).
+function rpgSaveMedalImage(){
+  const d=window._rpgBoardImg;
+  if(!d){ rpgSetStatus('Картинка ещё не готова.','var(--amber)'); return; }
+  const fname='medals_'+(window._rpgBoardName||'period')+'.png';
+  const a=document.createElement('a'); a.href=d; a.download=fname;
+  document.body.appendChild(a); a.click(); a.remove();
+  rpgSetStatus('✓ Картинка сохранена ('+fname+')','var(--green2)');
 }

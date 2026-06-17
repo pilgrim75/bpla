@@ -150,7 +150,13 @@ function syncRenderAll(){
 // --- Очередь отправки ---
 // Гарантирует что изменения не потеряются даже если сеть упала
 
-function _qid(x){ return (x.data&&x.data.id)||x.id; }
+function _qid(x){
+  const base=(x.data&&x.data.id)||x.id;
+  // tombstone делит id с самой записью (id строки-tombstone = id удалённого вылета).
+  // Разводим их в очереди/подтверждении префиксом, иначе flight и его tombstone
+  // схлопнулись бы в один элемент очереди и подтверждение доставки путалось бы.
+  return x.type==='tombstone' ? 'tomb:'+base : base;
+}
 const pendingQueue = {
   _key: 'sync_pending_queue',
   load(){ try{ return JSON.parse(localStorage.getItem(this._key)||'[]'); }catch(e){ return []; } },
@@ -203,7 +209,10 @@ function updateQueueIndicator(){
 async function trySendQueueItem(item, url, key, token){
   try{
     const enc = await syncEncrypt(item.data, key);
-    const sheet = item.type==='flight'?'flights':(item.type==='actlog'?'actlog':'transfers');
+    const sheet = item.type==='flight'?'flights'
+                : item.type==='actlog'?'actlog'
+                : item.type==='tombstone'?'tombstones'   // Путь Б: append удаления в общий лист
+                : 'transfers';
     const body = JSON.stringify({
       action:'append_one', token,
       sheet,
@@ -279,6 +288,59 @@ const tombstones = {
   }
 };
 tombstones.prune(); // при каждом запуске
+
+// ============================================================
+// Путь Б — ОБЩИЕ ОБЛАЧНЫЕ TOMBSTONES (распространение удалений)
+// ============================================================
+// Публикация удаления: пометить локально + дописать id в облачный лист 'tombstones'
+// через ту же очередь с гарантией доставки (append_one + pendingQueue + ретраи).
+// Зовётся ИЗ ВСЕХ путей удаления: syncDeleteFlight, returnLossDrone,
+// adminClearFlights / adminCleanOrphanLosses / adminDedupeLossTransfers.
+// ВАЖНО: слияние ВХОДЯЩИХ облачных tombstones (syncMergeCloudTombstones) пишет в
+// набор через tombstones.addMany НАПРЯМУЮ, без публикации — иначе полученные с
+// другого устройства удаления уходили бы обратно в облако по кругу.
+function syncPublishTombstones(ids){
+  const arr=(Array.isArray(ids)?ids:[ids]).filter(x=>x!=null&&x!=='');
+  if(!arr.length) return;
+  tombstones.addMany(arr);                  // локальная страховка (как было раньше)
+  if(syncReadOnly()) return;                // наблюдатель в облако не пишет
+  const {url,token}=syncGetCfg();
+  if(!url||!token) return;                   // локальный режим — публиковать некуда
+  // id строки-tombstone = id удаляемой записи → серверный appendOne идемпотентен
+  // (дубль id → {status:'duplicate'}), повторное удаление безопасно.
+  arr.forEach(id=>pendingQueue.add({type:'tombstone', data:{id}}));
+  if(navigator.onLine) syncFlushQueue();     // попытка немедленной отправки (иначе уйдёт при онлайне)
+}
+
+// Слить облачный лист tombstones в локальный набор. id в листе открытый (колонка id),
+// расшифровка не нужна. Возвращает raw-id'шники (для подтверждения доставки строятся
+// как 'tomb:'+id, см. _qid).
+function syncMergeCloudTombstones(rows){
+  if(!rows||!rows.length) return [];
+  const ids=rows.map(r=>r.id).filter(x=>x!=null&&x!=='').map(String);
+  if(ids.length) tombstones.addMany(ids);
+  return ids;
+}
+
+// Убрать из state записи, попавшие в tombstones. Существующие фильтры чтения гейтят
+// только ДОБАВЛЕНИЕ из облака — этот проход чистит уже присутствующие записи (удалённые
+// на другом устройстве могли отрендериться до прихода tombstone). Порядок прихода не
+// важен. Возвращает true, если что-то удалено.
+function syncPruneStateByTombstones(){
+  const tb=tombstones.load();
+  let removed=false;
+  if(Array.isArray(state.flights)){
+    const n=state.flights.length;
+    state.flights=state.flights.filter(f=>!f.id||!tb.has(f.id));
+    if(state.flights.length!==n) removed=true;
+  }
+  if(Array.isArray(state.transfers)){
+    const n=state.transfers.length;
+    state.transfers=state.transfers.filter(t=>!t.id||!tb.has(t.id));
+    if(state.transfers.length!==n) removed=true;
+  }
+  return removed;
+}
 
 // --- Версия склада ---
 let _stockVersion = parseInt(localStorage.getItem('sync_stock_version')||'0');
@@ -369,8 +431,9 @@ async function syncDeleteFlight(idx){
 
   // tombstone и для вылета, и для удалённых loss-передач — чтобы неразрушающий
   // merge в syncPushAll/pollCloud/syncPullAll не вернул их из облака обратно.
-  tombstones.add(f.id);
-  removedTransfers.forEach(t=>{ if(t.id) tombstones.add(t.id); });
+  // Путь Б: пометить локально + опубликовать удаление в облачный лист tombstones
+  // (доставка с ретраем) — чтобы удаление дошло до других устройств.
+  syncPublishTombstones([f.id, ...removedTransfers.map(t=>t.id)]);
   state.flights.splice(idx,1);
   // Risk 3: НЕ делаем syncPushAll (полный write затирает чужие, ещё не сполленные
   // вылеты/передачи). Удаление держится локально на tombstone; склад/расчёты
@@ -449,6 +512,7 @@ async function syncPushAll(silent=false){
       const r = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
       const d = await r.json();
       if(d.error) throw new Error(d.error);
+      syncMergeCloudTombstones(d.tombstones); // Путь Б: подтянуть чужие удаления ДО merge
       const tb = tombstones.load();
       const [cloudFRaw, cloudTRaw] = await Promise.all([
         syncDecryptRows(d.flights||[], key, 'flights'),
@@ -473,6 +537,9 @@ async function syncPushAll(silent=false){
         console.log('[SYNC] pushAll merge: +'+addF.length+' flights, +'+addT.length+' transfers из облака');
         try{ saveLocalQuiet(); }catch(e){}
       }
+      // Путь Б: не выгружать обратно записи, помеченные удалёнными (свои/чужие).
+      // Бонус: полный write листа flights ниже физически уберёт их из облака (GC).
+      if(syncPruneStateByTombstones()){ try{ saveLocalQuiet(); }catch(e){} }
     }catch(e){
       console.warn('[SYNC] pushAll merge пропущен (чтение не удалось):', e.message);
     }
@@ -567,6 +634,9 @@ async function syncPullAll(confirm_=false){
       transfers: syncDedupeById(await syncDecryptRows(d.transfers||[], key, 'transfers')),
       users: d.users||[]
     };
+    // Путь Б: подтянуть облачные tombstones (чужие удаления) в локальный набор ДО
+    // фильтрации — иначе удалённое на другом устройстве здесь бы не скрылось.
+    loaded.tombstoneIds = syncMergeCloudTombstones(d.tombstones);
     // Фильтруем tombstones (и удалённые вылеты, и удалённые loss-передачи)
     const tb = tombstones.load();
     loaded.flights   = loaded.flights.filter(f=>!tb.has(f.id));
@@ -599,10 +669,15 @@ async function syncPullAll(confirm_=false){
 async function syncPullOnLogin(){
   const loaded = await syncPullAll(false);
   if(!loaded){ syncIndicator('error'); return; }
-  // Подтверждаем доставку по полному снимку облака
+  // Путь Б: убрать из state записи, удалённые на других устройствах (облачные tombstones
+  // уже слиты в набор внутри syncPullAll) — иначе ветка «localOnly» ниже сохранила бы их
+  // как «локальные, которых нет в облаке».
+  syncPruneStateByTombstones();
+  // Подтверждаем доставку по полному снимку облака (вкл. tombstones)
   pendingQueue.confirmDelivered(new Set([
     ...loaded.flights.map(f=>f.id),
-    ...loaded.transfers.map(t=>t.id)
+    ...loaded.transfers.map(t=>t.id),
+    ...(loaded.tombstoneIds||[]).map(id=>'tomb:'+id)
   ].filter(Boolean)));
   const hasPending = pendingQueue.all().length > 0;
   // Склад/расчёты — last-write-wins по _sv. Берём из облака ТОЛЬКО если версия
@@ -714,8 +789,13 @@ async function pollCloud(){
     let changed = false;
     let newFlights = 0;      // фактически добавленные чужие вылеты (для тоста — не вся дельта)
     let lossFlagSet = false; // выставили _lossWritten при приёме чужой потери — надо вернуть в облако
-    const tb = tombstones.load();
+    // Путь Б: слить облачные tombstones (чужие удаления) ДО обработки вылетов/передач —
+    // иначе только что удалённое на другом устройстве снова добавилось бы из дельты.
+    const tombIds = syncMergeCloudTombstones(d.tombstones);
+    const tb = tombstones.load(); // уже включает облачные tombstones
     const deliveredIds = new Set(); // id, вернувшиеся из облака — подтверждение доставки
+    tombIds.forEach(id=>deliveredIds.add('tomb:'+id)); // подтверждаем доставку наших tombstone'ов
+    if(syncPruneStateByTombstones()) changed = true;   // убрать уже отрисованные удалённые записи
 
     // Новые вылеты от других пользователей
     for(const row of (d.flights||[])){
