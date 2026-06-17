@@ -1560,28 +1560,59 @@ function saveTransfer(){
   if(!drone){alert('Укажите БПЛА');return;}
   if(from===to){alert('Отправитель и получатель совпадают');return;}
 
-  // Спецприёмники: перевод в Не БГ или списание (всегда со склада)
+  // Спецприёмники: перевод в «не бг» (строка склада со статусом nbg) или «списан» (выбытие).
   if(to==='не бг'||to==='списан'){
     const role=state.role||authUser.role||'';
     if(!(role==='admin'||role==='cmd'||role==='tech')){alert('Недостаточно прав');return;}
-    const bg=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='bg');
-    if(!bg||bg.qty<qty){
-      if(!confirm(`На складе недостаточно боеготовых "${drone}". Всё равно оформить?`))return;
+    const dl=drone.toLowerCase();
+
+    // Списать qty у ИСТОЧНИКА по from. БАГ 2 (исправлен 17.06): раньше эта ветка ВСЕГДА
+    // списывала со склада (bg) и писала запись как from:'склад' — поэтому «пилот → не бг»
+    // снимало борт со склада, а у пилота он оставался (обход был: пилот→склад, затем склад→не бг).
+    if(from==='склад'){
+      const bg=state.stock.find(d=>d.name.toLowerCase()===dl&&d.status==='bg');
+      if(!bg||bg.qty<qty){
+        if(!confirm(`На складе недостаточно боеготовых "${drone}". Всё равно оформить?`))return;
+      }
+      if(to==='не бг'){
+        if(bg){bg.qty-=qty;if(bg.qty===0)state.stock=state.stock.filter(d=>d!==bg);}
+        else{state.stock.push({name:drone,qty:-qty,status:'bg'});}
+      } else { // списан со склада: уменьшить qty, при 0 запись оставить (как было)
+        if(bg){bg.qty=Math.max(0,bg.qty-qty);}
+        else{state.stock.push({name:drone,qty:0,status:'bg'});}
+      }
+    } else if(from==='не бг'){ // не бг → списан: списываем из не боеготовых
+      const nbgSrc=state.stock.find(d=>d.name.toLowerCase()===dl&&d.status==='nbg');
+      if(!nbgSrc||nbgSrc.qty<qty){
+        if(!confirm(`Не боеготовых "${drone}" недостаточно. Всё равно оформить?`))return;
+        if(nbgSrc){nbgSrc.qty-=qty;}
+        else{state.stock.push({name:drone,qty:-qty,status:'nbg'});}
+      } else {
+        nbgSrc.qty-=qty;
+        if(nbgSrc.qty===0)state.stock=state.stock.filter(d=>d!==nbgSrc);
+      }
+    } else { // from = конкретный пилот: списываем У ПИЛОТА (а не со склада)
+      const sq=state.squads.find(s=>s.pilot===from);
+      const di=sq&&sq.drones.find(d=>d.name.toLowerCase()===dl);
+      if(!di||di.qty<qty){
+        if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
+        if(di){di.qty-=qty;}
+        else if(sq){sq.drones.push({name:drone,qty:-qty});}
+      } else {
+        di.qty-=qty;
+        if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);
+      }
     }
+
+    // Зачислить в приёмник: «не бг» → строка склада со статусом nbg; «списан» → приёмника нет (выбытие)
     if(to==='не бг'){
-      // bg -= qty
-      if(bg){bg.qty-=qty;if(bg.qty===0)state.stock=state.stock.filter(d=>d!==bg);}
-      else{state.stock.push({name:drone,qty:-qty,status:'bg'});}
-      // nbg += qty
-      const nbg=state.stock.find(d=>d.name.toLowerCase()===drone.toLowerCase()&&d.status==='nbg');
+      const nbg=state.stock.find(d=>d.name.toLowerCase()===dl&&d.status==='nbg');
       if(nbg){nbg.qty+=qty;}
       else{state.stock.push({name:drone,qty,status:'nbg'});}
-    } else { // списан: уменьшить qty, при 0 запись оставить
-      if(bg){bg.qty=Math.max(0,bg.qty-qty);}
-      else{state.stock.push({name:drone,qty:0,status:'bg'});}
     }
+
     if(!state.transfers)state.transfers=[];
-    const op=makeTransfer('transfer',{from:'склад',to,drone,qty,note});
+    const op=makeTransfer('transfer',{from,to,drone,qty,note}); // реальный from (раньше хардкод 'склад')
     state.transfers.unshift(op);
     syncBumpStockVersion();
     saveLocal();
@@ -1592,7 +1623,7 @@ function saveTransfer(){
     document.getElementById('transferCard').style.display='none';
     document.getElementById('transDrone').value='';
     document.getElementById('transNote').value='';
-    logAction('transfer','add','склад → '+to+': '+drone+' ×'+qty);
+    logAction('transfer','add',from+' → '+to+': '+drone+' ×'+qty);
     return;
   }
 
