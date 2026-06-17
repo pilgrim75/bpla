@@ -134,10 +134,15 @@ function loadLocal(){
     const s=localStorage.getItem('droneState');
     if(s){
       state=JSON.parse(s);
-      // Чистим невалидные записи transfers (с undefined полями)
+      // Чистим невалидные записи transfers (с undefined полями).
+      // ВАЖНО: exchange-передачи (saveExchange) НЕ имеют drone/from/to — у них
+      // give/get/unit. Раньше фильтр их отбрасывал при загрузке из localStorage,
+      // и передачи наружу «пропадали» из state (diff склада не сходился: +N по отданным
+      // бортам), хотя в облаке записи были. Держим запись, если у неё есть тип и любое
+      // содержательное поле любого типа (drone/from/to ИЛИ give/get/unit).
       if(state.transfers){
         state.transfers=state.transfers.filter(t=>
-          t&&t.type&&(t.drone||t.from||t.to)
+          t&&t.type&&(t.drone||t.from||t.to||t.give||t.get||t.unit)
         );
       }
     }
