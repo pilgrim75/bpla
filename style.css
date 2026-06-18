@@ -1,103 +1,150 @@
 *{box-sizing:border-box;margin:0;padding:0}
 
-/* ============ ТЕМЫ ============ */
+/* ============ ШРИФТЫ (общие, вне тем) ============ */
+:root{
+  --font-sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+
+/* ============ ТЕМЫ ============
+   Дизайн-система «командная консоль»: спокойно, читаемо, один сдержанный акцент.
+   Семантические токены (--surface/--inset/--ok/--warn/--danger/--gold + *-soft)
+   маппятся на исторические имена переменных, чтобы не переписывать все селекторы. */
+
+/* ТЕРМИНАЛ (тёмно-зелёная) */
 :root,body.theme-terminal{
-  --bg:#050a05;--bg2:#0a110a;--bg3:#060c06;
-  --accent:#39ff14;--accent2:#22c55e;--accent3:#16a34a;
-  --accent-dim:rgba(57,255,20,0.08);
-  --red:#ff4444;--red-dim:rgba(255,68,68,0.10);
-  --amber:#ffd700;--amber-dim:rgba(255,215,0,0.08);
-  --muted:#3d6b3d;--border:#1a2e1a;--border2:#1f4d1f;
-  --text:#b8f0b8;--text2:#6aaf6a;--text3:#3d6b3d;
-  --card:#060c06;--card2:#0a110a;
-  --input-bg:#020602;--input-color:#b8f0b8;
-  --radius:6px;
-  --tag-ok-bg:rgba(34,197,94,0.12);--tag-ok-color:#22c55e;--tag-ok-border:#16a34a;
-  --tag-danger-bg:rgba(255,68,68,0.10);--tag-danger-color:#ff4444;--tag-danger-border:#7a1010;
-  --tag-info-bg:rgba(255,255,255,0.04);--tag-info-color:var(--text2);--tag-info-border:var(--border2);
+  --bg:#050a05;--bg2:#0f1a0f;--bg3:#0f1a0f;
+  --accent:#46d96a;--accent2:#46d96a;--accent3:#46d96a;
+  --accent-dim:rgba(70,217,106,0.14);
+  --red:#e8625a;--red-dim:rgba(232,98,90,0.14);
+  --amber:#d9c24e;--amber-dim:rgba(217,194,78,0.14);
+  --muted:#4d7a4d;--border:rgba(120,255,140,0.13);--border2:rgba(120,255,140,0.22);
+  --text:#c7f5c7;--text2:#7bbf7b;--text3:#4d7a4d;
+  --card:#0b130b;--card2:#0f1a0f;
+  --surface:#0b130b;--surface-2:#0f1a0f;--inset:#030703;
+  --input-bg:#030703;--input-color:#c7f5c7;
+  --ok:#46d96a;--warn:#d9c24e;--danger:#e8625a;--gold:#d9b24a;
+  --accent-soft:rgba(70,217,106,0.14);--ok-soft:rgba(70,217,106,0.14);
+  --warn-soft:rgba(217,194,78,0.14);--danger-soft:rgba(232,98,90,0.14);
+  --radius:9px;
+  --tag-ok-bg:rgba(70,217,106,0.14);--tag-ok-color:#46d96a;--tag-ok-border:rgba(70,217,106,0.45);
+  --tag-danger-bg:rgba(232,98,90,0.14);--tag-danger-color:#e8625a;--tag-danger-border:rgba(232,98,90,0.45);
+  --tag-info-bg:rgba(70,217,106,0.14);--tag-info-color:#46d96a;--tag-info-border:rgba(70,217,106,0.4);
   --scanlines:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,10,0,0.08) 3px,rgba(0,10,0,0.08) 4px);
 }
+
+/* СЕРЫЙ (основная) */
 body.theme-gray{
-  --bg:#111;--bg2:#1a1a1a;--bg3:#222;
-  --accent:#e0e0e0;--accent2:#aaa;--accent3:#666;
-  --accent-dim:rgba(255,255,255,0.05);
-  --red:#e05555;--red-dim:rgba(224,85,85,0.10);
-  --amber:#c8a84c;--amber-dim:rgba(200,168,76,0.10);
-  --muted:#555;--border:#2a2a2a;--border2:#333;
-  --text:#d0d0d0;--text2:#888;--text3:#555;
-  --card:#1a1a1a;--card2:#222;
-  --input-bg:#111;--input-color:#d0d0d0;
-  --radius:10px;
-  --tag-ok-bg:rgba(80,200,100,0.10);--tag-ok-color:#5cb870;--tag-ok-border:#2a5a30;
-  --tag-danger-bg:rgba(224,85,85,0.10);--tag-danger-color:#e05555;--tag-danger-border:#6a2020;
-  --tag-info-bg:rgba(255,255,255,0.04);--tag-info-color:#888;--tag-info-border:#333;
+  --bg:#131517;--bg2:#212429;--bg3:#212429;
+  --accent:#6ea8de;--accent2:#6ea8de;--accent3:#6ea8de;
+  --accent-dim:rgba(110,168,222,0.14);
+  --red:#dd6259;--red-dim:rgba(221,98,89,0.14);
+  --amber:#d6a94e;--amber-dim:rgba(214,169,78,0.14);
+  --muted:#646b73;--border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);
+  --text:#e7e9ec;--text2:#9aa1a9;--text3:#646b73;
+  --card:#191c20;--card2:#212429;
+  --surface:#191c20;--surface-2:#212429;--inset:#0f1113;
+  --input-bg:#0f1113;--input-color:#e7e9ec;
+  --ok:#5fb472;--warn:#d6a94e;--danger:#dd6259;--gold:#d9b24a;
+  --accent-soft:rgba(110,168,222,0.14);--ok-soft:rgba(95,180,114,0.14);
+  --warn-soft:rgba(214,169,78,0.14);--danger-soft:rgba(221,98,89,0.14);
+  --radius:9px;
+  --tag-ok-bg:rgba(95,180,114,0.14);--tag-ok-color:#5fb472;--tag-ok-border:rgba(95,180,114,0.45);
+  --tag-danger-bg:rgba(221,98,89,0.14);--tag-danger-color:#dd6259;--tag-danger-border:rgba(221,98,89,0.45);
+  --tag-info-bg:rgba(110,168,222,0.14);--tag-info-color:#6ea8de;--tag-info-border:rgba(110,168,222,0.4);
   --scanlines:none;
 }
+
+/* БЕЖЕВЫЙ (светлая) — статусные цвета затемнены для контраста на светлом */
 body.theme-paper{
-  --bg:#f0ece0;--bg2:#e8e4d8;--bg3:#ddd8c8;
-  --accent:#1a1a14;--accent2:#3a3a2a;--accent3:#7a7060;
-  --accent-dim:rgba(0,0,0,0.05);
-  --red:#a03028;--red-dim:rgba(160,48,40,0.08);
-  --amber:#8a6820;--amber-dim:rgba(138,104,32,0.08);
-  --muted:#7a7060;--border:#c0b898;--border2:#c8c0a8;
-  --text:#2a2820;--text2:#5a5248;--text3:#7a7060;
-  --card:#f0ece0;--card2:#e8e4d8;
-  --input-bg:#e8e4d8;--input-color:#1a1a14;
-  --radius:8px;
-  --tag-ok-bg:rgba(40,120,40,0.08);--tag-ok-color:#286028;--tag-ok-border:#286028;
-  --tag-danger-bg:rgba(160,48,40,0.08);--tag-danger-color:#a03028;--tag-danger-border:#a03028;
-  --tag-info-bg:rgba(0,0,0,0.04);--tag-info-color:#5a5248;--tag-info-border:#c0b898;
+  --bg:#ece5d6;--bg2:#e6ddcd;--bg3:#e6ddcd;
+  --accent:#2f6f8f;--accent2:#2f6f8f;--accent3:#2f6f8f;
+  --accent-dim:rgba(47,111,143,0.14);
+  --red:#b34a3f;--red-dim:rgba(179,74,63,0.14);
+  --amber:#a9802a;--amber-dim:rgba(169,128,42,0.16);
+  --muted:#8a8071;--border:rgba(40,35,25,0.14);--border2:rgba(40,35,25,0.22);
+  --text:#2a2620;--text2:#5f574a;--text3:#8a8071;
+  --card:#f5efe2;--card2:#e6ddcd;
+  --surface:#f5efe2;--surface-2:#e6ddcd;--inset:#e2d8c6;
+  --input-bg:#e2d8c6;--input-color:#2a2620;
+  --ok:#3f8f5a;--warn:#a9802a;--danger:#b34a3f;--gold:#9a7a2a;
+  --accent-soft:rgba(47,111,143,0.14);--ok-soft:rgba(63,143,90,0.14);
+  --warn-soft:rgba(169,128,42,0.16);--danger-soft:rgba(179,74,63,0.14);
+  --radius:9px;
+  --tag-ok-bg:rgba(63,143,90,0.14);--tag-ok-color:#3f8f5a;--tag-ok-border:rgba(63,143,90,0.5);
+  --tag-danger-bg:rgba(179,74,63,0.14);--tag-danger-color:#b34a3f;--tag-danger-border:rgba(179,74,63,0.5);
+  --tag-info-bg:rgba(47,111,143,0.14);--tag-info-color:#2f6f8f;--tag-info-border:rgba(47,111,143,0.45);
   --scanlines:none;
 }
+
+/* ПОЛЕВОЙ ПЛАНШЕТ */
 body.theme-field{
-  --bg:#252e12;--bg2:#2a3418;--bg3:#1e2610;
-  --accent:#c8bc6a;--accent2:#a0a848;--accent3:#6a7840;
-  --accent-dim:rgba(200,188,106,0.08);
-  --red:#c04828;--red-dim:rgba(192,72,40,0.10);
-  --amber:#d4a840;--amber-dim:rgba(212,168,64,0.10);
-  --muted:#6a7840;--border:#2a3410;--border2:#364420;
-  --text:#c8bc6a;--text2:#8a9a58;--text3:#5a6838;
-  --card:#1e2610;--card2:#252e12;
-  --input-bg:#1a2008;--input-color:#c8bc6a;
-  --radius:6px;
-  --tag-ok-bg:rgba(160,168,72,0.10);--tag-ok-color:#a0a848;--tag-ok-border:#6a7840;
-  --tag-danger-bg:rgba(192,72,40,0.10);--tag-danger-color:#c04828;--tag-danger-border:#703020;
-  --tag-info-bg:rgba(0,0,0,0.10);--tag-info-color:#8a9a58;--tag-info-border:#364420;
+  --bg:#222a10;--bg2:#323e1c;--bg3:#323e1c;
+  --accent:#c8bc6a;--accent2:#c8bc6a;--accent3:#c8bc6a;
+  --accent-dim:rgba(200,188,106,0.14);
+  --red:#cf6a4a;--red-dim:rgba(207,106,74,0.14);
+  --amber:#d4a840;--amber-dim:rgba(212,168,64,0.14);
+  --muted:#71793f;--border:rgba(200,188,106,0.16);--border2:rgba(200,188,106,0.28);
+  --text:#d8cf86;--text2:#a0a060;--text3:#71793f;
+  --card:#2a3416;--card2:#323e1c;
+  --surface:#2a3416;--surface-2:#323e1c;--inset:#1a2108;
+  --input-bg:#1a2008;--input-color:#d8cf86;
+  --ok:#9aa848;--warn:#d4a840;--danger:#cf6a4a;--gold:#d9b24a;
+  --accent-soft:rgba(200,188,106,0.14);--ok-soft:rgba(154,168,72,0.14);
+  --warn-soft:rgba(212,168,64,0.14);--danger-soft:rgba(207,106,74,0.14);
+  --radius:9px;
+  --tag-ok-bg:rgba(154,168,72,0.14);--tag-ok-color:#9aa848;--tag-ok-border:rgba(154,168,72,0.5);
+  --tag-danger-bg:rgba(207,106,74,0.14);--tag-danger-color:#cf6a4a;--tag-danger-border:rgba(207,106,74,0.5);
+  --tag-info-bg:rgba(200,188,106,0.14);--tag-info-color:#c8bc6a;--tag-info-border:rgba(200,188,106,0.45);
   --scanlines:none;
 }
 
 /* ============ BASE ============ */
 body{
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-family:var(--font-sans);
   background:var(--bg);color:var(--text);font-size:14px;
   background-image:var(--scanlines);
+}
+/* Все цифры/время/счётчики — моноширинные, табличные (главный сдвиг дизайн-системы) */
+.num,.stat-num,.stat,.flight-time,.qty,.stock-count,.offstock-count,.drone-qty,
+.crew-flights,.change-time,.day-count,.version,.time-chip,.adm-flight-table td{
+  font-family:var(--font-mono);font-variant-numeric:tabular-nums;
 }
 .app{display:flex;height:100vh;flex-direction:column}
 
 /* ============ TOPBAR ============ */
 .topbar{
-  background:var(--bg2);
-  padding:8px 16px;display:flex;align-items:center;gap:10px;
+  background:var(--surface);
+  padding:6px 14px;display:flex;align-items:center;gap:10px;min-height:42px;
   flex-shrink:0;flex-wrap:wrap;border-bottom:1px solid var(--border);
 }
-.logo{font-size:15px;font-weight:700;color:var(--accent);letter-spacing:.5px}
-.logo span{color:var(--muted);font-weight:400;font-size:11px;margin-left:6px}
+.logo{font-size:15px;font-weight:700;color:var(--text);letter-spacing:.4px}
+.logo span{color:var(--text3);font-weight:400;font-size:11px;margin-left:6px}
 .logo::after{content:'';display:none}
-.role-badge{
-  background:var(--bg3);border:1px solid var(--border2);
-  padding:4px 12px;font-size:12px;color:var(--text2);
-  border-radius:var(--radius);
+/* Единый стиль контролов шапки (роль/тема/шрифт) — без неона */
+.tb-select{
+  width:auto;height:26px;min-height:0;padding:0 8px;font-size:12px;
+  background:var(--surface-2);color:var(--text);
+  border:1px solid var(--border);border-radius:6px;
+  font-family:var(--font-sans);letter-spacing:0;cursor:pointer;
 }
-.role-badge b{color:var(--accent)}
+.tb-select:focus{border-color:var(--accent)}
+.role-badge{
+  display:inline-flex;align-items:center;gap:7px;
+  background:var(--surface-2);border:1px solid var(--border);
+  padding:4px 11px;font-size:12px;color:var(--text2);
+  border-radius:999px;
+}
+.role-badge b{color:var(--text);font-weight:600}
 .sync-indicator{
   font-size:11px;padding:3px 10px;border:1px solid var(--border);
-  color:var(--text3);border-radius:var(--radius);background:var(--bg3);
+  color:var(--text3);border-radius:999px;background:var(--surface-2);
 }
-.sync-indicator.syncing{border-color:var(--amber);color:var(--amber)}
-.sync-indicator.saved{border-color:var(--accent3);color:var(--accent2)}
+.sync-indicator.syncing{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.sync-indicator.saved{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
 .queue-indicator{
-  font-size:11px;padding:3px 10px;border:1px solid var(--amber);
-  color:var(--amber);border-radius:var(--radius);background:var(--bg3);white-space:nowrap;
+  font-size:11px;padding:3px 10px;border:1px solid var(--warn);
+  color:var(--warn);border-radius:999px;background:var(--warn-soft);white-space:nowrap;
 }
 
 /* ============ NAV ============ */
@@ -137,13 +184,13 @@ body{
 .nav-check{display:none}
 .nav button.active .nav-check{display:block}
 .card{
-  background:var(--card);border:1px solid var(--border);
-  padding:18px;border-radius:var(--radius);
+  background:var(--surface);border:1px solid var(--border);
+  padding:14px 16px;border-radius:var(--radius);
 }
 .card::before,.card::after{display:none}
 .card-title{
-  font-size:12px;color:var(--text2);text-transform:uppercase;
-  letter-spacing:1.5px;margin-bottom:14px;font-weight:700;
+  font-size:10.5px;color:var(--text3);text-transform:uppercase;
+  letter-spacing:.07em;margin-bottom:12px;font-weight:600;
   display:flex;align-items:center;gap:7px;
 }
 
@@ -159,8 +206,8 @@ body{
 /* ============ TAGS ============ */
 .tag{
   display:inline-flex;align-items:center;
-  padding:2px 8px;font-size:12px;font-weight:600;
-  border-radius:4px;border:1px solid;
+  padding:2px 9px;font-size:10.5px;font-weight:600;
+  border-radius:999px;border:1px solid;line-height:1.5;
 }
 .tag-ok{background:var(--tag-ok-bg);color:var(--tag-ok-color);border-color:var(--tag-ok-border)}
 .tag-warn{background:var(--amber-dim);color:var(--amber);border-color:var(--amber)}
@@ -184,10 +231,12 @@ tr:hover td{background:var(--accent-dim)}
 
 /* ============ FORMS ============ */
 input,select,textarea{
-  border:1px solid var(--border2);padding:6px 10px;font-size:13px;
-  font-family:inherit;color:var(--input-color);background:var(--input-bg);
-  width:100%;outline:none;transition:border .15s;border-radius:var(--radius);
+  border:1px solid var(--border2);padding:6px 10px;font-size:13px;min-height:30px;
+  font-family:inherit;color:var(--input-color);background:var(--inset);
+  width:100%;outline:none;transition:border .15s;border-radius:6px;
 }
+textarea{min-height:80px}
+input[type=checkbox],input[type=radio]{min-height:0;width:auto}
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 textarea{resize:vertical;min-height:80px}
 select option{background:var(--input-bg);color:var(--input-color)}
@@ -201,14 +250,14 @@ label{
 
 /* ============ BUTTONS ============ */
 .btn{
-  border:1px solid var(--border2);padding:6px 14px;font-size:12px;
+  border:1px solid var(--border);padding:6px 14px;font-size:12px;
   font-family:inherit;cursor:pointer;font-weight:600;
-  transition:all .15s;border-radius:var(--radius);background:var(--card2);
+  transition:all .15s;border-radius:6px;background:var(--surface-2);
   color:var(--text2);
 }
-.btn:hover{border-color:var(--accent2);color:var(--accent)}
-.btn-primary{background:var(--input-bg);border-color:var(--border2);color:var(--accent2)}
-.btn-primary:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.btn:hover{border-color:var(--border2);color:var(--text)}
+.btn-primary{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.btn-primary:hover{filter:brightness(1.12)}
 .btn-success{background:var(--tag-ok-bg);border-color:var(--tag-ok-border);color:var(--tag-ok-color)}
 .btn-success:hover{filter:brightness(1.2)}
 .btn-sm{padding:3px 8px;font-size:11px}
@@ -231,9 +280,9 @@ label{
 .drone-row:last-child{border-bottom:none}
 .drone-name{font-weight:600;flex:1;color:var(--text);font-size:13px}
 .qty{
-  background:var(--accent-dim);border:1px solid var(--border2);
-  padding:2px 8px;font-weight:700;font-size:13px;min-width:30px;
-  text-align:center;color:var(--accent);border-radius:4px;
+  background:var(--surface-2);border:1px solid var(--border);
+  padding:2px 9px;font-weight:600;font-size:13px;min-width:30px;
+  text-align:center;color:var(--text);border-radius:6px;
 }
 
 /* ============ FLIGHTS ============ */
@@ -252,13 +301,81 @@ label{
   .flight-entry>*{min-width:0}
 }
 
+/* ============ FLIGHT LOG: компактный фильтр в шапке ============ */
+.flt-header{flex-wrap:wrap;gap:8px}
+.flt-count{
+  font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:11px;color:var(--text2);background:var(--surface-2);
+  border:1px solid var(--border);border-radius:999px;padding:2px 9px;margin-left:6px;
+}
+.flt-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.flt-controls .flt-inp{
+  height:28px;min-height:0;width:auto;padding:0 8px;font-size:11.5px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+}
+.flt-controls .flt-date{width:130px}
+
+/* ============ FLIGHT LOG (журнал вылетов — уплотнение) ============ */
+#flightList table td{padding:4px 8px;font-size:12.5px}
+#flightList table th{padding:5px 8px}
+#flightList .tag{padding:2px 8px;font-size:10.5px;white-space:nowrap}
+/* Кнопка копирования: компактнее + снять оставшийся неон (инлайн → !important) на токены темы */
+#flightList .copy-flight-btn{
+  width:24px!important;height:24px!important;font-size:13px!important;
+  background:var(--accent-soft)!important;border:1px solid var(--accent)!important;color:var(--accent)!important;
+  border-radius:5px;
+}
+/* Заголовок-полоса группы по дням (Сегодня/Вчера/дата · N вылетов) */
+#flightList .day-head td{
+  background:var(--surface-2);color:var(--text3);
+  font-family:var(--font-sans);font-size:10.5px!important;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;padding:6px 8px;
+}
+#flightList .day-head:hover td{background:var(--surface-2)}
+
 /* ============ ADMIN FLIGHT TABLE ============ */
 .adm-flight-table{table-layout:auto;width:100%;min-width:950px;font-size:12px}
 .adm-flight-table th{font-size:11px;padding:5px 6px;white-space:nowrap;color:var(--text3)}
 .adm-flight-table td{padding:3px 4px;font-size:12px;white-space:nowrap}
 .adm-flight-table input,.adm-flight-table select{
-  font-size:11px;padding:2px 4px;height:24px;box-sizing:border-box;border-radius:3px;
+  font-size:11px;padding:2px 4px;height:24px;min-height:0;box-sizing:border-box;border-radius:5px;
 }
+
+/* ============ ADMIN SUB-TABS ============ */
+.adm-tabs{display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.adm-tab{
+  background:none;border:1px solid transparent;border-bottom:none;
+  color:var(--text3);padding:8px 14px;font-size:11px;font-weight:600;
+  letter-spacing:.04em;cursor:pointer;font-family:inherit;text-transform:uppercase;
+  margin-bottom:-1px;border-radius:6px 6px 0 0;
+}
+.adm-tab:hover:not(.active){color:var(--text)}
+.adm-tab.active{background:var(--surface-2);border-color:var(--border);color:var(--text)}
+
+/* ============ DANGER ZONE ============ */
+.danger-zone{border-color:var(--danger)!important}
+.danger-zone .card-title{color:var(--danger)}
+
+/* ============ ADMIN — компактнее (только размеры/отступы) ============ */
+#page-admin .card{padding:11px 14px}
+#page-admin .card-title{margin-bottom:9px}
+#page-admin input:not([type=checkbox]):not([type=radio]),
+#page-admin select{height:24px;min-height:0;font-size:12px;padding:0 8px}
+#page-admin table td{padding:3px 8px}
+#page-admin table th{padding:6px 8px}
+
+/* Администратор: убрать нативные индикаторы (пикер времени/даты — они открывают пикер и съедают ширину).
+   Дата readonly + кастомный .dp-popup → выбор мышью сохраняется; время вводится с клавиатуры. */
+#page-admin input[type="time"]::-webkit-calendar-picker-indicator,
+#page-admin input[type="date"]::-webkit-calendar-picker-indicator{display:none;-webkit-appearance:none}
+#page-admin input[type="number"]::-webkit-inner-spin-button,
+#page-admin input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+#page-admin input[type="number"]{-moz-appearance:textfield}
+/* Ширины, чтобы значение влезало целиком (border-box: учитывает паддинги) */
+#page-admin input[type="date"]{min-width:104px}
+#page-admin input[type="time"]{min-width:60px}
+#page-admin td input[type="number"]{min-width:42px;text-align:center}
+#page-admin input{text-overflow:clip;overflow:visible}
 
 /* ============ REPORTS ============ */
 .report-block{
@@ -445,23 +562,22 @@ label{
   --color-background-danger:var(--red-dim);
   --color-background-success:var(--tag-ok-bg);
   --color-background-warning:var(--amber-dim);
-  --color-background-info:rgba(59,130,246,0.12);
+  --color-background-info:var(--accent-soft);
   --color-text-primary:var(--text);
   --color-text-secondary:var(--text2);
   --color-text-danger:var(--red);
   --color-text-success:var(--tag-ok-color);
   --color-text-warning:var(--amber);
-  --color-text-info:#60a5fa;
+  --color-text-info:var(--accent);
   --color-border-tertiary:var(--border);
   --color-border-secondary:var(--border2);
   --color-border-danger:var(--tag-danger-border);
   --color-border-success:var(--tag-ok-border);
   --color-border-warning:var(--amber);
-  --color-border-info:#3b82f6;
+  --color-border-info:var(--tag-info-border);
   --green:var(--tag-ok-color);--green2:var(--tag-ok-color);--green3:var(--tag-ok-border);--green-dim:var(--tag-ok-bg);
   --border-radius-lg:var(--radius);
-  --border-radius-md:var(--radius);
-  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --border-radius-md:6px;
 }
 body.theme-gray{
   --color-background-primary:var(--card);
@@ -470,23 +586,22 @@ body.theme-gray{
   --color-background-danger:var(--red-dim);
   --color-background-success:var(--tag-ok-bg);
   --color-background-warning:var(--amber-dim);
-  --color-background-info:rgba(59,130,246,0.12);
+  --color-background-info:var(--accent-soft);
   --color-text-primary:var(--text);
   --color-text-secondary:var(--text2);
   --color-text-danger:var(--red);
   --color-text-success:var(--tag-ok-color);
   --color-text-warning:var(--amber);
-  --color-text-info:#60a5fa;
+  --color-text-info:var(--accent);
   --color-border-tertiary:var(--border);
   --color-border-secondary:var(--border2);
   --color-border-danger:var(--tag-danger-border);
   --color-border-success:var(--tag-ok-border);
   --color-border-warning:var(--amber);
-  --color-border-info:#3b82f6;
+  --color-border-info:var(--tag-info-border);
   --green:var(--tag-ok-color);--green2:var(--tag-ok-color);--green3:var(--tag-ok-border);--green-dim:var(--tag-ok-bg);
   --border-radius-lg:var(--radius);
-  --border-radius-md:var(--radius);
-  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --border-radius-md:6px;
 }
 body.theme-paper{
   --color-background-primary:var(--card);
@@ -495,23 +610,22 @@ body.theme-paper{
   --color-background-danger:var(--red-dim);
   --color-background-success:var(--tag-ok-bg);
   --color-background-warning:var(--amber-dim);
-  --color-background-info:rgba(59,130,246,0.12);
+  --color-background-info:var(--accent-soft);
   --color-text-primary:var(--text);
   --color-text-secondary:var(--text2);
   --color-text-danger:var(--red);
   --color-text-success:var(--tag-ok-color);
   --color-text-warning:var(--amber);
-  --color-text-info:#60a5fa;
+  --color-text-info:var(--accent);
   --color-border-tertiary:var(--border);
   --color-border-secondary:var(--border2);
   --color-border-danger:var(--tag-danger-border);
   --color-border-success:var(--tag-ok-border);
   --color-border-warning:var(--amber);
-  --color-border-info:#3b82f6;
+  --color-border-info:var(--tag-info-border);
   --green:var(--tag-ok-color);--green2:var(--tag-ok-color);--green3:var(--tag-ok-border);--green-dim:var(--tag-ok-bg);
   --border-radius-lg:var(--radius);
-  --border-radius-md:var(--radius);
-  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --border-radius-md:6px;
 }
 body.theme-field{
   --color-background-primary:var(--card);
@@ -520,23 +634,22 @@ body.theme-field{
   --color-background-danger:var(--red-dim);
   --color-background-success:var(--tag-ok-bg);
   --color-background-warning:var(--amber-dim);
-  --color-background-info:rgba(59,130,246,0.12);
+  --color-background-info:var(--accent-soft);
   --color-text-primary:var(--text);
   --color-text-secondary:var(--text2);
   --color-text-danger:var(--red);
   --color-text-success:var(--tag-ok-color);
   --color-text-warning:var(--amber);
-  --color-text-info:#60a5fa;
+  --color-text-info:var(--accent);
   --color-border-tertiary:var(--border);
   --color-border-secondary:var(--border2);
   --color-border-danger:var(--tag-danger-border);
   --color-border-success:var(--tag-ok-border);
   --color-border-warning:var(--amber);
-  --color-border-info:#3b82f6;
+  --color-border-info:var(--tag-info-border);
   --green:var(--tag-ok-color);--green2:var(--tag-ok-color);--green3:var(--tag-ok-border);--green-dim:var(--tag-ok-bg);
   --border-radius-lg:var(--radius);
-  --border-radius-md:var(--radius);
-  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --border-radius-md:6px;
 }
 
 /* ============ NEW DESIGN CLASSES ============ */
@@ -544,16 +657,45 @@ body.theme-field{
 /* Topbar additions */
 .version{font-size:11px;background:var(--color-background-secondary);color:var(--color-text-secondary);padding:2px 8px;border-radius:999px;border:0.5px solid var(--color-border-tertiary)}
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px}
-.role-dot{width:6px;height:6px;background:#3B6D11;border-radius:50%;flex-shrink:0}
+.role-dot{width:6px;height:6px;background:var(--ok);border-radius:50%;flex-shrink:0}
 .time-chip{font-size:12px;font-weight:500;color:var(--color-text-primary);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:4px 10px}
 .btn-exit{font-size:12px;color:var(--color-text-danger);background:var(--color-background-danger);border:0.5px solid var(--color-border-danger);border-radius:var(--border-radius-md);padding:4px 12px;cursor:pointer;font-family:inherit}
 
 /* Navbar */
-.navbar{background:var(--color-background-primary);border-bottom:0.5px solid var(--color-border-tertiary);padding:0 20px;display:flex;align-items:center;gap:2px;flex-shrink:0;flex-wrap:wrap;min-height:56px}
-.nav-tab{font-size:20px;font-weight:500;color:var(--color-text-secondary);padding:14px 16px;cursor:pointer;border:none;border-bottom:2px solid transparent;background:none;display:flex;align-items:center;gap:6px;letter-spacing:0.02em;font-family:inherit;white-space:nowrap}
-.nav-tab.active{color:var(--color-text-primary);border-bottom:2px solid var(--color-text-primary)}
+.navbar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 12px;display:flex;align-items:center;gap:2px;flex-shrink:0;flex-wrap:wrap;min-height:40px}
+.nav-tab{font-size:13px;font-weight:500;color:var(--color-text-secondary);padding:11px 14px;cursor:pointer;border:none;border-bottom:2px solid transparent;background:none;display:flex;align-items:center;gap:6px;letter-spacing:0.01em;font-family:inherit;white-space:nowrap}
+.nav-tab.active{color:var(--color-text-primary);border-bottom:2px solid var(--accent)}
 .nav-tab:hover:not(.active){color:var(--color-text-primary)}
-.nav-tab i{font-size:20px}
+.nav-tab i{font-size:15px;opacity:.85}
+/* «Администратор» — зона необратимых действий */
+#adminNavBtn{color:var(--danger)}
+#adminNavBtn.active{color:var(--danger);border-bottom-color:var(--danger)}
+#adminNavBtn:hover:not(.active){color:var(--danger)}
+
+/* ☰-меню навигации (видно только на мобильном — display:flex включается в @media) */
+.nav-menu-wrap{position:relative;display:none}
+.nav-menu-btn{
+  background:none;border:none;border-bottom:2px solid transparent;
+  color:var(--color-text-secondary);font-size:18px;line-height:1;
+  padding:9px 12px;cursor:pointer;font-family:inherit;
+}
+.nav-menu-btn.active{color:var(--color-text-primary);border-bottom-color:var(--accent)}
+.nav-menu{
+  position:absolute;top:100%;right:0;z-index:9997;min-width:190px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,.4);
+  display:none;overflow:hidden;
+}
+.nav-menu.open{display:block}
+.nav-menu-item{
+  display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  background:none;border:none;border-bottom:1px solid var(--border);
+  color:var(--text);padding:11px 14px;font-size:13px;cursor:pointer;font-family:inherit;
+}
+.nav-menu-item:last-child{border-bottom:none}
+.nav-menu-item:hover{background:var(--accent-soft)}
+.nav-menu-item i{font-size:15px;opacity:.85;color:var(--text2)}
+#navMenuAdmin,#navMenuAdmin i{color:var(--danger)}
 
 /* Stats row (Dashboard) */
 .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
@@ -561,7 +703,12 @@ body.theme-field{
 .stat-label{font-size:11px;color:var(--color-text-secondary);letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px}
 .stat-label i{font-size:14px}
 .stat-num{font-size:28px;font-weight:500;color:var(--color-text-primary);line-height:1;margin-bottom:10px}
-.stat-list{display:flex;flex-direction:column;gap:3px}
+.stat-list{
+  display:grid;grid-template-columns:1fr 1fr;
+  column-gap:22px;row-gap:5px;
+  max-height:170px;overflow-y:auto;
+}
+.stat-list .stat-row{margin-top:0}/* интервалы держит row-gap */
 .stat-meta{font-size:12px;color:var(--color-text-secondary);margin-top:8px;display:flex;flex-direction:column;gap:3px}
 
 /* Overrides for .stat-row already defined in BASE - new design version */
@@ -686,11 +833,29 @@ body.theme-field{
 .badge-warn{font-size:11px;font-weight:500;color:var(--color-text-warning);background:var(--color-background-warning);border:0.5px solid var(--color-border-warning);border-radius:999px;padding:2px 9px}
 .badge-danger{font-size:11px;font-weight:500;color:var(--color-text-danger);background:var(--color-background-danger);border:0.5px solid var(--color-border-danger);border-radius:999px;padding:2px 9px}
 
+/* Склад: списки БГ и «Не БГ» в 2 колонки, как на дашборде */
+#stockListBG,#stockListNBG{
+  display:grid;grid-template-columns:1fr 1fr;
+  column-gap:24px;align-content:start;
+}
+@media(max-width:640px){
+  #stockListBG,#stockListNBG{grid-template-columns:1fr}
+}
+
 /* Crew rows (Inventory squads) */
 .crew-header-row{background:var(--color-background-secondary);padding:8px 16px;display:flex;align-items:center;gap:10px;border-bottom:0.5px solid var(--color-border-tertiary)}
 .crew-abbr{font-size:11px;font-weight:500;color:var(--color-text-secondary);background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:2px 7px}
 .crew-pname{font-size:13px;font-weight:500;color:var(--color-text-primary)}
 .crew-status-badge{margin-left:auto;font-size:11px;font-weight:500;color:var(--color-text-success);background:var(--color-background-success);border:0.5px solid var(--color-border-success);border-radius:999px;padding:2px 9px}
+
+/* Выданные борта — расчёты блоками-карточками в грид 2 колонки, борта чипами */
+.crew-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 16px}
+.crew-block{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.crew-block .crew-head{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border)}
+.crew-block .crew-drones{display:flex;flex-wrap:wrap;gap:6px;padding:11px 12px}
+.drone-chip{font-size:11px;color:var(--color-text-secondary);background:var(--inset);border:1px solid var(--border);border-radius:6px;padding:3px 9px;white-space:nowrap}
+.drone-chip .num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--text3)}
+@media(max-width:640px){.crew-grid{grid-template-columns:1fr}}
 
 /* Drone subrows (Inventory squads) */
 .drone-subrow{display:flex;align-items:center;padding:7px 16px 7px 40px;border-bottom:0.5px solid var(--color-border-tertiary);gap:10px}
@@ -716,14 +881,25 @@ body.theme-field{
 .change-time{font-size:11px;color:var(--color-text-secondary);margin-left:auto;white-space:nowrap}
 
 /* Status dots */
-.status-dot-ok{width:8px;height:8px;background:#3B6D11;border-radius:50%;flex-shrink:0}
-.status-dot-warn{width:8px;height:8px;background:#BA7517;border-radius:50%;flex-shrink:0}
+.status-dot-ok{width:8px;height:8px;background:var(--ok);border-radius:50%;flex-shrink:0}
+.status-dot-warn{width:8px;height:8px;background:var(--warn);border-radius:50%;flex-shrink:0}
 
 /* Responsive */
 @media(max-width:640px){
   .stats-row{grid-template-columns:1fr}
   .bottom-row{grid-template-columns:1fr}
   .two-col{grid-template-columns:1fr}
+  .topbar{padding:6px 10px;gap:6px}
+  /* Навигация: основные вкладки в строке, «лишние» — под ☰ (overflow видимый, чтобы dropdown не обрезался) */
+  .navbar{padding:0 6px}
+  .nav-tab{padding:10px 11px}
+  .nav-extra{display:none!important}
+  .nav-menu-wrap{display:flex;align-items:center;margin-left:auto}
+  .main{padding:10px;gap:10px}
+  .section-head{align-items:stretch}
+  /* Строка журнала переносится в две строки на узком экране */
+  .flight-entry{grid-template-columns:1fr 1fr;row-gap:2px}
+  .adm-tab{padding:7px 10px}
 }
 
 /* ===== ЭКРАН-ЗАСТАВКА (index.html #splashScreen) =====

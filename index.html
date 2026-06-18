@@ -39,7 +39,7 @@
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
   <div class="version">v0.22</div>
-  <select id="roleSwitch" style="width:auto;padding:4px 10px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px" onchange="switchRole(this.value)">
+  <select id="roleSwitch" class="tb-select" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
     <option value="tech">ТЕХНИК</option>
@@ -48,19 +48,19 @@
     <div class="role-badge" id="roleBadge"><div class="role-dot"></div><b>Командир</b></div>
     <div class="sync-indicator" id="syncIndicator">● локально</div>
     <div class="queue-indicator" id="queueIndicator" style="display:none" title="Несинхронизированные изменения ждут отправки"></div>
-    <select id="themeSwitch" onchange="applyTheme(this.value)" title="Цветовая схема" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
+    <select id="themeSwitch" class="tb-select" onchange="applyTheme(this.value)" title="Цветовая схема">
       <option value="terminal">Терминал</option>
       <option value="wb">Серый</option>
-      <option value="bw">Чёрный на белом</option>
+      <option value="bw">Бежевый</option>
       <option value="field">Полевой планшет</option>
     </select>
-    <select id="fontSizeSwitch" onchange="applyFontSize(this.value)" title="Размер шрифта" style="width:auto;padding:4px 8px;font-size:11px;background:#000;color:#39ff14;border:1px solid #1f4d1f;font-family:inherit;letter-spacing:1px">
+    <select id="fontSizeSwitch" class="tb-select" onchange="applyFontSize(this.value)" title="Размер шрифта">
       <option value="12">Шрифт: S</option>
       <option value="16" selected>Шрифт: M</option>
       <option value="20">Шрифт: L</option>
       <option value="24">Шрифт: XL</option>
     </select>
-    <button id="logoutBtn" onclick="logout()" style="display:none;padding:3px 10px;font-size:10px;background:#1a0000;border:1px solid #7a0000;color:var(--red);cursor:pointer;font-family:inherit;letter-spacing:1px">Выход</button>
+    <button id="logoutBtn" class="btn-exit" onclick="logout()" style="display:none">Выход</button>
   </div>
 </div>
 <div id="netBar"></div>
@@ -70,9 +70,20 @@
   <button class="nav-tab" id="invNavBtn" onclick="showPage('inventory',this)"><i class="ti ti-building-warehouse"></i>Склад</button>
   <button class="nav-tab" onclick="showPage('flights',this)"><i class="ti ti-plane-departure"></i>Вылеты</button>
   <button class="nav-tab" onclick="showPage('report',this)"><i class="ti ti-chart-bar"></i>Отчёты</button>
-  <button class="nav-tab" id="importNavBtn" onclick="showPage('import',this)"><i class="ti ti-file-import"></i>Импорт</button>
-  <button class="nav-tab" id="adminNavBtn" onclick="showPage('admin',this)" style="display:none"><i class="ti ti-shield"></i>Администратор</button>
-  <button class="nav-tab" onclick="showPage('settings',this)" style="margin-left:auto"><i class="ti ti-settings"></i>Настройки</button>
+  <button class="nav-tab nav-extra" id="importNavBtn" onclick="showPage('import',this)"><i class="ti ti-file-import"></i>Импорт</button>
+  <button class="nav-tab nav-extra" id="adminNavBtn" onclick="showPage('admin',this)" style="display:none"><i class="ti ti-shield"></i>Администратор</button>
+  <button class="nav-tab nav-extra" id="settingsNavBtn" onclick="showPage('settings',this)" style="margin-left:auto"><i class="ti ti-settings"></i>Настройки</button>
+  <!-- ☰-меню: на мобильном собирает «лишние» вкладки (Импорт/Администратор/Настройки).
+       Пункты зовут showPage с РЕАЛЬНОЙ кнопкой таба (роутинг/подсветка штатные),
+       видимость пунктов зеркалит инлайн-display реальных кнопок (роли не дублируются). -->
+  <div class="nav-menu-wrap">
+    <button class="nav-menu-btn" id="navMenuBtn" onclick="navMenuToggle(event)" title="Ещё" aria-label="Меню">☰</button>
+    <div class="nav-menu" id="navMenu">
+      <button class="nav-menu-item" id="navMenuImport" onclick="navMenuGo('import','importNavBtn')"><i class="ti ti-file-import"></i>Импорт</button>
+      <button class="nav-menu-item" id="navMenuAdmin" onclick="navMenuGo('admin','adminNavBtn')"><i class="ti ti-shield"></i>Администратор</button>
+      <button class="nav-menu-item" id="navMenuSettings" onclick="navMenuGo('settings','settingsNavBtn')"><i class="ti ti-settings"></i>Настройки</button>
+    </div>
+  </div>
 </div>
 
 <div class="main">
@@ -259,19 +270,6 @@
 
 <!-- FLIGHTS -->
 <div class="page" id="page-flights">
-  <div class="section-head">
-    <div class="section-title">Журнал вылетов</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end">
-      <div><label>С даты</label><input style="width:130px" type="date" id="filterFrom" onchange="renderFlights()"></div>
-      <div><label>По дату</label><input style="width:130px" type="date" id="filterTo" onchange="renderFlights()"></div>
-      <div><label>Пилот</label>
-        <select style="width:120px" id="filterPilot" onchange="renderFlights()">
-          <option value="">Все пилоты</option>
-        </select>
-      </div>
-    </div>
-  </div>
-
   <!-- datalists -->
   <datalist id="dl-ammo-catalog"></datalist>
   <datalist id="dl-pilots"></datalist>
@@ -330,8 +328,22 @@
   </div>
 
   <!-- ЖУРНАЛ ТАБЛИЦЕЙ -->
-  <div class="card" style="overflow-x:auto">
-    <div id="flightList"></div>
+  <div class="section-card">
+    <div class="section-header flt-header">
+      <div class="section-title"><i class="ti ti-list"></i> Журнал вылетов <span class="flt-count" id="flightCount"></span></div>
+      <div class="flt-controls">
+        <input class="flt-inp flt-date" type="date" id="filterFrom" onchange="flightDateManual()" title="С даты">
+        <input class="flt-inp flt-date" type="date" id="filterTo" onchange="flightDateManual()" title="По дату">
+        <select class="flt-inp" id="filterPilot" onchange="renderFlights()"><option value="">Все пилоты</option></select>
+        <select class="flt-inp" id="flightPeriod" onchange="flightPeriodChange(this.value)" title="Период">
+          <option value="week">Неделя</option>
+          <option value="month">Месяц</option>
+          <option value="all">Весь период</option>
+          <option value="custom">Произвольный</option>
+        </select>
+      </div>
+    </div>
+    <div id="flightList" style="overflow-x:auto"></div>
   </div>
 </div>
 
@@ -442,17 +454,17 @@
   <div class="section-head">
     <div class="section-title" style="color:var(--red)">Администратор</div>
   </div>
-  <div class="notice" style="background:rgba(255,51,51,0.06);border-color:#7a0000;color:var(--red)">Внимание: все изменения и удаления необратимы. Данные сохраняются немедленно.</div>
+  <div class="notice" style="background:var(--danger-soft);border-color:var(--danger);color:var(--danger)">Внимание: все изменения и удаления необратимы. Данные сохраняются немедленно.</div>
 
   <!-- Вкладки внутри раздела -->
-  <div style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid var(--border2);flex-wrap:wrap">
-    <button class="adm-tab active" onclick="showAdminTab('flights',this)" style="background:var(--green-dim);border:1px solid var(--border2);border-bottom:none;color:var(--green);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase;margin-bottom:-1px">Журнал вылетов</button>
-    <button class="adm-tab" onclick="showAdminTab('stock',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Склад</button>
-    <button class="adm-tab" onclick="showAdminTab('squads',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Расчёты</button>
-    <button class="adm-tab" onclick="showAdminTab('ammo',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Боеприпасы</button>
-    <button class="adm-tab" onclick="showAdminTab('actlog',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Журнал действий</button>
-    <button class="adm-tab" onclick="showAdminTab('geo',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Карта/Гео</button>
-    <button class="adm-tab" onclick="showAdminTab('data',this)" style="background:none;border:none;color:var(--text2);padding:6px 16px;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">Данные</button>
+  <div class="adm-tabs">
+    <button class="adm-tab active" onclick="showAdminTab('flights',this)">Журнал вылетов</button>
+    <button class="adm-tab" onclick="showAdminTab('stock',this)">Склад</button>
+    <button class="adm-tab" onclick="showAdminTab('squads',this)">Расчёты</button>
+    <button class="adm-tab" onclick="showAdminTab('ammo',this)">Боеприпасы</button>
+    <button class="adm-tab" onclick="showAdminTab('actlog',this)">Журнал действий</button>
+    <button class="adm-tab" onclick="showAdminTab('geo',this)">Карта/Гео</button>
+    <button class="adm-tab" onclick="showAdminTab('data',this)">Данные</button>
   </div>
 
   <!-- ВКЛАДКА: ЖУРНАЛ ВЫЛЕТОВ -->
@@ -541,8 +553,8 @@
       </div>
       <div id="saveStatus" style="font-size:12px;color:var(--muted)">Данные хранятся в localStorage. Для переноса на другое устройство — экспортируйте в файл.</div>
     </div>
-    <div class="card" style="border-color:#7a0000">
-      <div class="card-title" style="color:var(--red)">Опасная зона</div>
+    <div class="card danger-zone">
+      <div class="card-title">Опасная зона</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-danger" onclick="adminClearFlights()">Удалить все вылеты</button>
         <button class="btn btn-danger" onclick="adminResetAll()">Полный сброс данных</button>

@@ -210,7 +210,15 @@ function showPage(id,btn){
   document.getElementById('page-'+id).classList.add('active');
   document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  if(id==='flights')renderFlights();
+  if(id==='flights'){
+    // Дефолт при первом показе вкладки — последние 7 дней (потом уважаем выбор пользователя)
+    if(!window._flightsInit){
+      window._flightsInit=true;
+      const ff=document.getElementById('filterFrom');
+      if(ff&&!ff.value)ff.value=localISO(new Date(Date.now()-7*864e5));
+    }
+    renderFlights();
+  }
   if(id==='dashboard')renderDashboard();
   if(id==='inventory')renderInventory();
   if(id==='report'){fillReportFilters();buildReport();}
@@ -289,11 +297,8 @@ function switchRole(r){
 function showAdminTab(tab,btn){
   document.querySelectorAll('.adm-panel').forEach(p=>p.style.display='none');
   document.getElementById('adm-'+tab).style.display='block';
-  document.querySelectorAll('.adm-tab').forEach(b=>{
-    b.style.background='none';b.style.border='none';b.style.color='var(--text2)';b.style.borderBottom='none';b.style.marginBottom='';
-  });
-  btn.style.background='var(--green-dim)';btn.style.border='1px solid var(--border2)';
-  btn.style.borderBottom='none';btn.style.color='var(--green)';btn.style.marginBottom='-1px';
+  document.querySelectorAll('.adm-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
   if(tab==='flights')renderAdminFlights();
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
@@ -301,6 +306,32 @@ function showAdminTab(tab,btn){
   if(tab==='geo')renderGeoTab();
   if(tab==='actlog'){loadActLogFromCloud().then(()=>renderActLog());};
 }
+
+// ===== Мобильное ☰-меню навигации =====
+function navMenuClose(){const p=document.getElementById('navMenu');if(p)p.classList.remove('open');}
+function navMenuToggle(e){
+  if(e)e.stopPropagation();
+  const panel=document.getElementById('navMenu');
+  if(!panel)return;
+  if(panel.classList.contains('open')){navMenuClose();return;}
+  // Зеркалим видимость пунктов по инлайн-display реальных кнопок (роли: viewer/non-admin)
+  [['navMenuImport','importNavBtn'],['navMenuAdmin','adminNavBtn'],['navMenuSettings','settingsNavBtn']].forEach(([item,real])=>{
+    const it=document.getElementById(item),rb=document.getElementById(real);
+    if(it&&rb)it.style.display=(rb.style.display==='none')?'none':'';
+  });
+  panel.classList.add('open');
+}
+function navMenuGo(page,btnId){
+  const b=document.getElementById(btnId);
+  if(b)showPage(page,b); // штатный роутинг + подсветка на реальной (скрытой) кнопке
+  const mb=document.getElementById('navMenuBtn');
+  if(mb)mb.classList.add('active');
+  navMenuClose();
+}
+// Закрытие по клику вне меню
+document.addEventListener('click',e=>{
+  if(!(e.target.closest&&e.target.closest('.nav-menu-wrap')))navMenuClose();
+});
 
 function admClearFilters(){
   document.getElementById('adm-filterFrom').value='';
@@ -572,7 +603,21 @@ function renderAdminStock(){
 
 function adminEditStock(idx,field,val){
   if(!guardWrite())return;
-  if(state.stock[idx])state.stock[idx][field]=val;
+  const it=state.stock[idx]; if(!it)return;
+  if(field==='qty'){
+    const newQ=parseInt(val,10)||0;
+    const delta=newQ-(it.qty||0);
+    if(delta){
+      const loc=it.status==='bg'?'склад':(it.status==='nbg'?'не бг':(it.status||'склад'));
+      const reason=adjustReason(it.name+' ('+loc+'): '+(it.qty||0)+'→'+newQ);
+      if(!reason){renderAdminStock();return;} // отмена — восстановить поле из state
+      it.qty=newQ;
+      recordAdjust(it.name,delta,loc,reason);
+      logAction('stock','edit','Адм: коррекция '+it.name+' ('+loc+') '+(newQ-delta)+'→'+newQ+' — '+reason);
+    } else { it.qty=newQ; }
+  } else {
+    it[field]=val;
+  }
   saveLocal();
   syncBumpStockVersion();   // версионируем — иначе поллинг затрёт правку
   syncPushStockSquads();
@@ -581,10 +626,14 @@ function adminEditStock(idx,field,val){
 
 function adminDeleteStock(idx){
   if(!guardWrite())return;
-  if(!confirm('Удалить позицию со склада?'))return;
-  const it=state.stock[idx];
+  const it=state.stock[idx]; if(!it)return;
+  // Причина-запрос служит подтверждением; при наличии qty — adjust(−qty) для прослеживаемости
+  const loc=it.status==='bg'?'склад':(it.status==='nbg'?'не бг':(it.status||'склад'));
+  const reason=adjustReason('удаление позиции '+it.name+' ×'+it.qty+' ('+loc+')');
+  if(!reason)return;
+  if(it.qty) recordAdjust(it.name,-it.qty,loc,'удаление позиции: '+reason);
   state.stock.splice(idx,1);
-  logAction('stock','delete','Удалена позиция склада: '+(it?it.name+' ×'+it.qty+' ('+it.status+')':'#'+idx));
+  logAction('stock','delete','Удалена позиция склада: '+it.name+' ×'+it.qty+' ('+it.status+') — '+reason);
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -628,15 +677,33 @@ function renderAdminSquads(){
     </table>`:'<div style="color:var(--muted);padding:8px">Нет расчётов</div>';
 }
 
+// ===== Ручные коррекции наличия (type='adjust') =====
+// Любая ручная правка qty (склад/расчёт) фиксируется записью движения 'adjust' со ЗНАКОВОЙ
+// дельтой и причиной — чтобы НИ ОДНО изменение наличия не было невидимым, а syncAuditStock
+// сводил баланс (дельта adjust входит в intake-сторону, см. _stockAuditCompute).
+// Запрос причины (обязателен для правок/удалений). '' или отмена → null (правку не применять).
+function adjustReason(what){
+  const r=prompt('Причина коррекции количества'+(what?'\n('+what+')':'')+'\nОбязательно к заполнению:');
+  return r&&r.trim()?r.trim():null;
+}
+// Корректирующая запись движения. delta — со знаком (+ приход/исправление вверх, − выбытие).
+function recordAdjust(name,delta,location,reason){
+  if(!name||!delta)return;
+  if(!state.transfers)state.transfers=[];
+  const op=makeTransfer('adjust',{
+    drone:name,qty:delta,location:location||'',
+    from:delta<0?(location||''):'',to:delta>0?(location||''):'',
+    note:'коррекция: '+(reason||'')+' ['+(authUser.login||state.role||'admin')+']'
+  });
+  state.transfers.unshift(op);
+  syncAddTransfer(op);
+}
+// Создание состава (новый расчёт/именование борта) — adjust без запроса причины (авто-нота):
+// это не «коррекция», а установление наличия; раньше писалась фиктивная transfer-запись
+// склад↔пилот, которую аудит как внутреннюю игнорировал (баланс не сходился).
 function _logAdminTransfer(pilot,drone,delta,note){
   if(!pilot||!drone||delta===0)return;
-  if(!state.transfers)state.transfers=[];
-  state.transfers.unshift(makeTransfer('transfer',{
-    from:delta>0?'склад':pilot,
-    to:delta>0?pilot:'склад',
-    drone,qty:Math.abs(delta),
-    note:note||'адм'
-  }));
+  recordAdjust(drone,delta,pilot,note||'адм');
 }
 
 function adminEditSquadPilot(si,val){
@@ -653,7 +720,14 @@ function adminEditSquadDrone(si,di,field,val){
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
     const old=d[field];
-    if(field==='qty'){const delta=(parseInt(val)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'адм');}
+    if(field==='qty'){
+      const delta=(parseInt(val)||0)-d.qty;
+      if(delta&&d.name){
+        const reason=adjustReason(d.name+' у '+sq.pilot+': '+d.qty+'→'+(parseInt(val)||0));
+        if(!reason){renderAdminSquads();return;} // отмена — восстановить поле
+        recordAdjust(d.name,delta,sq.pilot,reason);
+      }
+    }
     else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'адм');
     d[field]=val;
     if(old!==val)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': '+(field==='name'?('борт '+(old||'(новый)')+' → '+val):('борт '+(d.name||'?')+' — кол-во '+old+' → '+val)));
@@ -664,10 +738,19 @@ function adminEditSquadDrone(si,di,field,val){
 }
 function adminDeleteSquad(si){
   if(!guardWrite())return;
-  if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
-  const pName=state.squads[si].pilot;
+  const sq=state.squads[si]; if(!sq)return;
+  const pName=sq.pilot;
+  const held=(sq.drones||[]).filter(d=>d.name&&d.qty);
+  let reason='';
+  if(held.length){
+    reason=adjustReason('удаление расчёта '+pName+' — спишутся борта');
+    if(!reason)return;
+    held.forEach(d=>recordAdjust(d.name,-d.qty,pName,'удаление расчёта: '+reason));
+  } else {
+    if(!confirm('Удалить расчёт '+pName+'?'))return;
+  }
   state.squads.splice(si,1);
-  logAction('squad','delete','Удалён расчёт '+pName);
+  logAction('squad','delete','Удалён расчёт '+pName+(reason?' — '+reason:''));
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -869,7 +952,7 @@ function _stockAuditCompute(){
   const get=name=>{
     const k=norm(name);
     if(!k)return null;
-    if(!models[k])models[k]={model:String(name).trim(),intake:0,onhandAll:0,onhandActive:0,lost:0,exGive:0,lossSum:0,writeoffT:0,nbgT:0};
+    if(!models[k])models[k]={model:String(name).trim(),intake:0,onhandAll:0,onhandActive:0,lost:0,exGive:0,lossSum:0,writeoffT:0,nbgT:0,adjust:0};
     return models[k];
   };
 
@@ -895,6 +978,7 @@ function _stockAuditCompute(){
       if(t.give){ const m=get(t.give); if(m)m.exGive+=t.giveQty||0; }
     }
     else if(t.type==='loss'){ const m=get(t.drone); if(m)m.lossSum+=t.qty||1; }
+    else if(t.type==='adjust'){ const m=get(t.drone); if(m)m.adjust+=t.qty||0; } // знаковая дельта ручной коррекции
     else if(t.type==='transfer'){
       // Внутреннее перемещение — игнор, кроме спецприёмников saveTransfer:
       // «списан» = фактическое выбытие (qty уменьшен без loss-записи), «не бг» — справочно
@@ -906,12 +990,13 @@ function _stockAuditCompute(){
 
   const summary=Object.values(models).map(m=>{
     const outflow=m.exGive+m.lossSum;
+    const intakeAdj=m.intake+m.adjust; // ручные коррекции — на сторону прихода (знаковые)
     return {
-      model:m.model, intake:m.intake, onhand:m.onhandAll, lost:m.lost, outflow,
+      model:m.model, intake:m.intake, adjust:m.adjust, onhand:m.onhandAll, lost:m.lost, outflow,
       writeoff_t:m.writeoffT, nbg_t:m.nbgT,
-      diff_A:m.intake-(m.onhandAll+outflow),      // lost-строки = наличие
-      diff_B:m.intake-(m.onhandActive+outflow),   // lost-строки = дубль loss-передач
-      diff_adj:m.intake-(m.onhandAll+outflow+m.writeoffT) // как diff_A + списания через форму передачи
+      diff_A:intakeAdj-(m.onhandAll+outflow),      // lost-строки = наличие
+      diff_B:intakeAdj-(m.onhandActive+outflow),   // lost-строки = дубль loss-передач
+      diff_adj:intakeAdj-(m.onhandAll+outflow+m.writeoffT) // diff_A + списания через форму передачи
     };
   }).sort((a,b)=>a.model.localeCompare(b.model,'ru'));
 
@@ -1476,7 +1561,7 @@ function renderDashboard(){
 
 // ============ INVENTORY ============
 function renderInventory(){
-  const bg=state.stock.filter(d=>d.status==='bg');
+  const bg=state.stock.filter(d=>d.status==='bg'&&d.qty!==0);
   const nbg=state.stock.filter(d=>d.status!=='bg'&&d.qty!==0);
   document.getElementById('stockListBG').innerHTML=bg.length?bg.map(d=>
     `<div class="stock-row"><div class="stock-name">${esc(d.name)}</div><div class="stock-count">${d.qty}</div></div>`
@@ -1485,21 +1570,23 @@ function renderInventory(){
     `<div class="offstock-row"><div class="offstock-name">${esc(d.name)}</div><div style="display:flex;align-items:center;gap:8px"><div class="${d.status==='loss'?'badge-danger':'badge-warn'}">${d.status==='loss'?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
   ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет</div>';
 
-  document.getElementById('squadTable').innerHTML=state.squads.map(sq=>{
-    const drones=sq.drones.filter(d=>d.qty!==0);
-    const abbr=sq.pilot.slice(0,2).toUpperCase();
-    return `<div class="crew-header-row">
-        <div class="crew-abbr">${esc(abbr)}</div>
-        <div class="crew-pname">Пилот ${esc(sq.pilot)}</div>
-        <div class="crew-status-badge">БГ</div>
-      </div>
-      ${drones.map((d,i)=>`<div class="drone-subrow">
-        <div class="drone-label">${i===0?'БПЛА':''}</div>
-        <div class="drone-name" style="${d.qty<0?'color:var(--color-text-danger)':''}">${esc(d.name)}${d.qty<0?' ⚠':''}</div>
-        <div class="drone-qty" style="${d.qty<0?'color:var(--color-text-danger);border-color:var(--color-border-danger)':''}">${d.qty}</div>
-      </div>`).join('')}
-      ${drones.length===0?`<div class="drone-subrow"><div class="drone-label"></div><div class="drone-name" style="color:var(--color-text-secondary)">нет дронов</div></div>`:''}`;
-  }).join('');
+  document.getElementById('squadTable').innerHTML=state.squads.length
+    ? `<div class="crew-grid">`+state.squads.map(sq=>{
+        const drones=sq.drones.filter(d=>d.qty!==0);
+        const abbr=sq.pilot.slice(0,2).toUpperCase();
+        const chips=drones.length
+          ? drones.map(d=>`<span class="drone-chip"${d.qty<0?' style="color:var(--color-text-danger);border-color:var(--color-border-danger)"':''}>${esc(d.name)}${d.qty<0?' ⚠':''} <span class="num">×${d.qty}</span></span>`).join('')
+          : `<span style="font-size:11px;color:var(--color-text-secondary)">нет дронов</span>`;
+        return `<div class="crew-block">
+          <div class="crew-head">
+            <div class="crew-abbr">${esc(abbr)}</div>
+            <div class="crew-pname">Пилот ${esc(sq.pilot)}</div>
+            <div class="crew-status-badge">БГ</div>
+          </div>
+          <div class="crew-drones">${chips}</div>
+        </div>`;
+      }).join('')+`</div>`
+    : '';
   renderTransfersLog();
 }
 
@@ -1789,6 +1876,12 @@ function renderTransfersLog(){
         <div class="change-detail"><span>${esc(op.unit)}</span> · ${exDetail}${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
+    } else if(op.type==='adjust'){
+      return `<div class="change-row">
+        <div class="badge-warn">Коррекция</div>
+        <div class="change-detail">${esc(op.location||'')} · <span>${esc(op.drone)} ${op.qty>0?'+':''}${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
+      </div>`;
     } else {
       return `<div class="change-row">
         <div class="change-badge-in">Передача</div>
@@ -1800,6 +1893,21 @@ function renderTransfersLog(){
 }
 
 // ============ FLIGHTS ============
+// Селектор периода журнала: Неделя (−7) / Месяц (−30) / Весь период.
+// Меняет только значения #filterFrom/#filterTo; фильтрацию делает renderFlights.
+function flightPeriodChange(v){
+  const ff=document.getElementById('filterFrom'),ft=document.getElementById('filterTo');
+  if(!ff||!ft)return;
+  if(v==='all'){ff.value='';ft.value='';}
+  else if(v==='month'){ff.value=localISO(new Date(Date.now()-30*864e5));ft.value='';}
+  else{ff.value=localISO(new Date(Date.now()-7*864e5));ft.value='';} // week (по умолчанию)
+  renderFlights();
+}
+// Ручной ввод даты в журнале → переключаем селектор периода на «Произвольный»
+function flightDateManual(){
+  const sel=document.getElementById('flightPeriod'); if(sel)sel.value='custom';
+  renderFlights();
+}
 function renderFlights(){
   const fp=document.getElementById('filterPilot').value;
   const from=document.getElementById('filterFrom').value;
@@ -1814,6 +1922,8 @@ function renderFlights(){
     return new Date((x.date||'2000-01-01')+'T'+norm);
   };
   f.sort((a,b)=>toMs(b)-toMs(a));
+  const _fc=document.getElementById('flightCount');
+  if(_fc)_fc.textContent=f.length+' '+ruPlural(f.length,'запись','записи','записей');
   if(!f.length){
     document.getElementById('flightList').innerHTML='<div style="color:var(--muted);padding:16px;text-align:center">Нет вылетов</div>';
     fillDataLists();return;
@@ -1826,10 +1936,22 @@ function renderFlights(){
     pilotDayCount[key]=(pilotDayCount[key]||0)+1;
     autoNums.set(x,pilotDayCount[key]);
   });
+  // Группировка по дням: счётчики на дату + метка «Сегодня/Вчера/дата»
+  const dayCounts={};
+  f.forEach(x=>{const d=x.date||'';dayCounts[d]=(dayCounts[d]||0)+1;});
+  const _today=todayISO();
+  const _yest=(()=>{const d=new Date();d.setDate(d.getDate()-1);return localISO(d);})();
+  const dayHeadLabel=d=>{
+    const n=dayCounts[d]||0;
+    const cnt=n+' '+ruPlural(n,'вылет','вылета','вылетов');
+    if(!d) return 'Без даты · '+cnt;
+    const dd=d.split('-').reverse().join('.');
+    const prefix=d===_today?'Сегодня · ':(d===_yest?'Вчера · ':'');
+    return prefix+dd+' · '+cnt;
+  };
   document.getElementById('flightList').innerHTML=`
     <table style="table-layout:auto;width:100%">
       <thead><tr>
-        <th style="width:100px">Дата</th>
         <th style="width:55px">Время</th>
         <th style="width:34px">#</th>
         <th style="width:80px">Пилот</th>
@@ -1843,10 +1965,14 @@ function renderFlights(){
         <th style="width:28px"></th>
       </tr></thead>
       <tbody>
-        ${f.map(x=>{
+        ${f.map((x,i)=>{
           const idx=state.flights.indexOf(x);
           const editRow=renderFlightEditRow(x,idx);
           const num=autoNums.get(x)||x.flightnum||'';
+          // Заголовок дня перед первой строкой новой даты (f отсортирован по дате убыв.)
+          const curDate=x.date||'';
+          const dayHead=(i===0||curDate!==(f[i-1].date||''))
+            ?`<tr class="day-head"><td colspan="11">${esc(dayHeadLabel(curDate))}</td></tr>`:'';
           // Форматируем дату дд.мм.гггг
           const dateFmt=x.date?x.date.split('-').reverse().join('.'):'';
           // Строка для копирования
@@ -1859,8 +1985,7 @@ function renderFlights(){
             +', '+(x.result==='yes'?'выполнена':'не выполнена')
             +', '+(x.returned==='yes'?'вернул':'потерян')
             +(x.note?', '+x.note:'');
-          return `<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
-            <td style="white-space:nowrap">${esc(x.date||'—')}</td>
+          return `${dayHead}<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
             <td style="white-space:nowrap;color:var(--muted)">${esc(x.time||'—')}</td>
             <td style="text-align:center;color:var(--muted);font-size:10px;white-space:nowrap">${num?'#'+num:''}</td>
             <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.pilot||'—')}</td>
@@ -1872,7 +1997,7 @@ function renderFlights(){
             <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${esc(x.note||'')}</td>
             <td style="padding:2px 4px;width:36px"><button class="copy-flight-btn" data-copy="${esc(copyStr).replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></td>
-          </tr>${editRow?`<tr><td colspan="12" style="padding:0;border:none">${editRow}</td></tr>`:''}`
+          </tr>${editRow?`<tr><td colspan="11" style="padding:0;border:none">${editRow}</td></tr>`:''}`
         }).join('')}
       </tbody>
     </table>`;
@@ -2093,7 +2218,14 @@ function squadEditDrone(si,di,field,val){
   const sq=state.squads[si];const d=sq&&sq.drones[di];
   if(d){
     const old=d[field];
-    if(field==='qty'){const delta=(parseInt(val,10)||0)-d.qty;if(delta&&d.name)_logAdminTransfer(sq.pilot,d.name,delta,'инв');}
+    if(field==='qty'){
+      const delta=(parseInt(val,10)||0)-d.qty;
+      if(delta&&d.name){
+        const reason=adjustReason(d.name+' у '+sq.pilot+': '+d.qty+'→'+(parseInt(val,10)||0));
+        if(!reason){renderSquadEditor();return;} // отмена — восстановить поле
+        recordAdjust(d.name,delta,sq.pilot,reason);
+      }
+    }
     else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'инв');
     d[field]=val;
     if(old!==val)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': '+(field==='name'?('борт '+(old||'(новый)')+' → '+val):('борт '+(d.name||'?')+' — кол-во '+old+' → '+val)));
@@ -2103,8 +2235,15 @@ function squadEditDrone(si,di,field,val){
 function squadDeleteDrone(si,di){
   if(!guardWrite())return;
   const sq=state.squads[si];const d=sq&&sq.drones[di];
-  if(d&&d.name)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': удалён борт '+d.name+' ×'+d.qty);
-  state.squads[si].drones.splice(di,1);
+  if(!d)return;
+  let reason='';
+  if(d.name&&d.qty){ // непустой борт с количеством — причина + adjust(−qty)
+    reason=adjustReason('удаление борта '+d.name+' ×'+d.qty+' у '+sq.pilot);
+    if(!reason)return;
+    recordAdjust(d.name,-d.qty,sq.pilot,'удаление борта: '+reason);
+  }
+  if(d.name)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': удалён борт '+d.name+' ×'+d.qty+(reason?' — '+reason:''));
+  sq.drones.splice(di,1);
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();
 }
 function squadAddDrone(si){
@@ -2114,10 +2253,19 @@ function squadAddDrone(si){
 }
 function squadDeletePilot(si){
   if(!guardWrite())return;
-  if(!confirm('Удалить расчёт '+state.squads[si].pilot+'?'))return;
-  const pName=state.squads[si].pilot;
+  const sq=state.squads[si]; if(!sq)return;
+  const pName=sq.pilot;
+  const held=(sq.drones||[]).filter(d=>d.name&&d.qty);
+  let reason='';
+  if(held.length){
+    reason=adjustReason('удаление расчёта '+pName+' — спишутся борта');
+    if(!reason)return;
+    held.forEach(d=>recordAdjust(d.name,-d.qty,pName,'удаление расчёта: '+reason));
+  } else {
+    if(!confirm('Удалить расчёт '+pName+'?'))return;
+  }
   state.squads.splice(si,1);
-  logAction('squad','delete','Удалён расчёт '+pName);
+  logAction('squad','delete','Удалён расчёт '+pName+(reason?' — '+reason:''));
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();rebuildRoleSelector();
 }
 function squadAddPilot(){
@@ -2218,8 +2366,10 @@ function applyFontSize(sz){
     .dp-nav-label { font-size: ${sl}px !important; }
     .notice { font-size: ${sc}px !important; }
     .qty { font-size: ${sc}px !important; }
-    .topbar, .topbar * { font-size: 14px !important; }
-    .nav-tab, .nav-tab * { font-size: 20px !important; }
+    .topbar, .topbar * { font-size: 13px !important; }
+    .topbar .logo { font-size: 15px !important; }
+    .nav-tab { font-size: 13px !important; }
+    .nav-tab i { font-size: 15px !important; }
   `;
   try{localStorage.setItem('fontSize',sz);}catch(e){}
 }
