@@ -44,15 +44,36 @@ function syncReadOnly(){
   }catch(e){ return false; }
 }
 
+// === Защита шифртекста от порчи Google Sheets (#ERROR!) ===
+// Sheets трактует значение ячейки как ФОРМУЛУ, если оно начинается с = + - @,
+// и затирает её на «#ERROR!». base64-шифртекст начинается со случайного символа
+// алфавита — примерно в 1.6% случаев это «+» → ячейка ломается, запись гибнет
+// безвозвратно (atob('#ERROR!') → «not correctly encoded»). Риск ОБЩИЙ для всех
+// листов (flights/transfers/stock/squads/actlog); actlog заметнее лишь из-за частых
+// login-записей. Решение: триггерные значения помечаем ведущим «~» (нет ни в
+// алфавите base64, ни в начале JSON-строки) — Sheets хранит их как текст. Помечаем
+// ТОЛЬКО триггерные → 98% записей остаются в прежнем формате, и старые клиенты
+// читают их как раньше (а испорченные «+...» всё равно ломались бы — регрессии нет).
+// Маркер снимается при чтении, если он есть; записи без маркера читаются как прежде.
+// Точки применения — единые: syncEncrypt (все writes) / syncDecrypt (все reads).
+const SHEET_FORMULA_TRIGGER=/^[=+\-@]/;
+function syncMarkData(data){
+  return (typeof data==='string' && SHEET_FORMULA_TRIGGER.test(data)) ? '~'+data : data;
+}
+function syncUnmarkData(data){
+  return (typeof data==='string' && data.charCodeAt(0)===0x7e /* ~ */) ? data.slice(1) : data;
+}
+
 async function syncEncrypt(obj, key){
   const json = JSON.stringify(obj);
-  if(!key) return { id: obj.id, data: json };
-  return { id: obj.id, data: await aesEncrypt(json, key) };
+  const data = key ? await aesEncrypt(json, key) : json;
+  return { id: obj.id, data: syncMarkData(data) };
 }
 
 async function syncDecrypt(row, key){
   try{
-    const json = key ? await aesDecrypt(row.data, key) : row.data;
+    const data = syncUnmarkData(row.data);
+    const json = key ? await aesDecrypt(data, key) : data;
     return JSON.parse(json);
   }catch(e){ console.warn('[SYNC] decrypt error:', e.message, row.id); return null; }
 }
@@ -650,7 +671,10 @@ async function syncPullAll(confirm_=false){
       try{ localStorage.setItem('act_log',JSON.stringify(actLog)); }catch(e){}
       // Подтверждение доставки actlog-записей очереди по полному снимку — критично
       // для viewer: у него нет 30-секундного поллинга, только эта полная загрузка.
-      pendingQueue.confirmDelivered(new Set(entries.map(e=>e.id).filter(Boolean)));
+      // По открытому id строки (а не только расшифрованных entries): испорченная
+      // (#ERROR!) actlog-запись иначе никогда не подтвердится и зависнет в очереди
+      // viewer'а (у него нет 30-сек поллинга — только этот полный путь).
+      pendingQueue.confirmDelivered(new Set([...entries.map(e=>e.id), ...d.actlog.map(r=>r.id)].filter(Boolean)));
     }
     if(d.stock&&d.stock.length){
       // без имени листа (тихо): те же строки d.stock уже просигналили при сборке loaded выше
@@ -799,6 +823,7 @@ async function pollCloud(){
 
     // Новые вылеты от других пользователей
     for(const row of (d.flights||[])){
+      if(row.id) deliveredIds.add(row.id); // подтверждаем доставку по открытому id даже у испорченной (#ERROR!) строки — ретрай не поможет, appendOne идемпотентен
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
       deliveredIds.add(obj.id);
@@ -821,6 +846,7 @@ async function pollCloud(){
 
     // Новые передачи
     for(const row of (d.transfers||[])){
+      if(row.id) deliveredIds.add(row.id); // подтверждение по открытому id (см. flights выше) — испорченную строку из очереди не держим
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
       deliveredIds.add(obj.id);
@@ -834,6 +860,7 @@ async function pollCloud(){
 
     // Актлог
     for(const row of (d.actlog||[])){
+      if(row.id) deliveredIds.add(row.id); // подтверждение по открытому id (см. flights выше) — иначе испорченная (#ERROR!) login-запись висела бы в очереди вечно
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
       deliveredIds.add(obj.id); // подтверждение доставки записей очереди (actlog тоже в pendingQueue)
@@ -991,4 +1018,50 @@ async function syncAuditEncryption(){
     console.log('[AUDIT] Битых записей нет — все строки расшифровались');
   }
   return {summary, bad};
+}
+
+// РАЗОВАЯ ЧИСТКА: инвентаризация ячеек, затёртых Google Sheets на «#ERROR!»
+// (шифртекст принят за формулу — корень повторяющихся decrypt-ошибок). Данные
+// таких строк невосстановимы (Sheets их затёрла) — функция только НАХОДИТ их и
+// чистит соответствующие зависшие записи очереди. Физически удалить строки из
+// облака точечного action нет (см. CLAUDE.md §4): для actlog проще оставить
+// (журнал аудита, битые строки тихо отбрасываются при чтении), для flights/
+// transfers строка самозалечится при ближайшем полном write листа (syncPushAll
+// пишет корректное значение поверх). Вызов из консоли: await syncPurgeErrorRows()
+// ОГРАНИЧЕНИЯ: только чтение облака; локально трогает ТОЛЬКО pendingQueue
+// (снимает заведомо непроходимые записи), state/actLog не мутирует.
+async function syncPurgeErrorRows(){
+  const {url,token}=syncGetCfg();
+  if(!url||!token){ console.warn('[PURGE] Облако не настроено (нет url/token)'); return null; }
+  const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
+  const d=await r.json();
+  if(d.error){ console.warn('[PURGE]', d.error); return null; }
+  const sheets=['flights','stock','squads','transfers','actlog'];
+  const errors=[], errIds=new Set();
+  for(const sheet of sheets){
+    for(const row of (d[sheet]||[])){
+      // Затёртая ячейка: data === '#ERROR!' (Sheets) или иное не-base64/не-JSON,
+      // но «#ERROR!» — характерный маркер именно формульной порчи.
+      if(typeof row.data==='string' && /^#(ERROR!|REF!|NAME\?|VALUE!|DIV\/0!|N\/A|NUM!|NULL!)/.test(row.data)){
+        errors.push({sheet, id:row.id||'(без id)', data:row.data});
+        if(row.id) errIds.add(row.id);
+      }
+    }
+  }
+  if(errors.length){
+    console.log('[PURGE] Затёртых Google Sheets ячеек (#ERROR! и т.п.): '+errors.length);
+    console.table(errors);
+    // Снимаем из очереди записи, чьи id затёрты в облаке — ретрай заведомо бесполезен
+    // (appendOne идемпотентен по id: повтор вернёт duplicate, новой строки не создаст).
+    const q=pendingQueue.all();
+    const kept=q.filter(x=>!errIds.has((x.data&&x.data.id)||x.id));
+    if(kept.length!==q.length){
+      pendingQueue.save(kept);
+      console.log('[PURGE] Снято из очереди (непроходимые): '+(q.length-kept.length));
+    }
+    console.log('[PURGE] Данные затёртых строк невосстановимы. Строки можно вручную удалить в листах (после бэкапа); flights/transfers самозалечатся при следующем полном write.');
+  } else {
+    console.log('[PURGE] Затёртых ячеек не найдено');
+  }
+  return {errors};
 }

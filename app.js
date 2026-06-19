@@ -3292,7 +3292,7 @@ async function loadActLogFromCloud(){
     const d=await r.json();
     if(d.error||!d.actlog)return;
     const entries=await Promise.all(d.actlog.map(async row=>{
-      try{return JSON.parse(key?await aesDecrypt(row.data,key):row.data);}catch(e){return null;}
+      try{const data=syncUnmarkData(row.data);return JSON.parse(key?await aesDecrypt(data,key):data);}catch(e){return null;}
     })).then(a=>a.filter(Boolean));
     // Сливаем с локальным
     entries.forEach(e=>{if(e&&e.id&&!actLog.some(x=>x.id===e.id))actLog.unshift(e);});
