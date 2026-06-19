@@ -377,9 +377,9 @@ function renderAdminFlights(){
         <td><input style="width:85px" value="${esc(x.drone||'')}" onchange="adminEditFlight(${i},'drone',this.value)" onclick="event.stopPropagation();showQuickPicker(this,[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort(),v=>{adminEditFlight(${i},'drone',v)})" autocomplete="off"></td>
         <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
         <td><select style="width:80px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
-        <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
+        <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?'<span title="Пересчитать дистанцию по текущей точке" style="cursor:pointer" onclick="adminRecalcFlightDist('+i+')">🔒</span>&nbsp;&nbsp;'+x.range_km+' км':''}</td>
         <td><input style="width:100%;min-width:120px" value="${esc(x.note||'')}" onchange="adminEditFlight(${i},'note',this.value)"></td>
-        <td style="white-space:nowrap">${x.geo_locked?'<span title="Дистанция зафиксирована (🔒). Защищена от пересчёта">🔒</span> ':''}<button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
+        <td style="white-space:nowrap"><button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
       </tr>`).join('')}
       </tbody>
     </table>`:'<div style="color:var(--muted);padding:12px">Нет вылетов</div>';
@@ -410,6 +410,26 @@ function adminEditFlight(idx,field,val){
   syncEditFlight(idx,field,val);
   const fl=state.flights[idx];
   logAction('flight','edit','Адм: '+(fl?(fl.pilot||'')+' '+(fl.date||'')+' '+(fl.time||''):'#'+idx)+' — '+field+' = '+String(val??'').slice(0,40));
+}
+
+// Точечный пересчёт дистанции одного вылета по ТЕКУЩЕЙ точке (клик на замок в колонке «Дальн»).
+// Разблокировать → пересчитать из координат (geoComputeFlight сам берёт точку старта/цели)
+// → снова зафиксировать (geo_locked=true). Не трогает остальные вылеты. Уходит в облако
+// штатно (saveLocal → неразрушающий syncPushAll merge flights), как любая правка вылета.
+function adminRecalcFlightDist(idx){
+  if(!guardWrite())return;
+  const f=state.flights[idx]; if(!f)return;
+  if(typeof geoComputeFlight!=='function'){alert('Геомодуль недоступен');return;}
+  const r=geoComputeFlight(f);
+  if(!r){alert('Не удалось рассчитать дистанцию: точка не найдена в геоданных.');return;}
+  f.range_km=r.range_km;
+  f.distance_km=r.distance_km;
+  f.geo_locked=true; // снова под защитой глобального пересчёта (includeLocked:false)
+  saveLocal();
+  logAction('flight','edit','Адм: пересчёт дистанции '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||'')+' → '+f.range_km+' км');
+  renderAdminFlights();
+  renderFlights();
+  renderDashboard();
 }
 
 // Пересчёт списания при смене борта в вылете-потере (returned='no').
