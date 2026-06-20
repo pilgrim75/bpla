@@ -211,11 +211,22 @@ function reportStock(out){
       if(op.date<todayStr)return 'Вчера '+(op.time||'');
       return op.time||'';
     };
+    // Причина потери — из note ВЫЛЕТА (у loss-записи note нет). Связь как в
+    // applyLossIfNeeded/updateLossTransferDrone: flightId → пилот+борт+дата+время.
+    const lossNote=op=>{
+      const fl=state.flights||[];
+      let f=op.flightId?fl.find(x=>x.id===op.flightId):null;
+      if(!f){
+        const p=(op.pilot||'').toLowerCase(), d=(op.drone||'').toLowerCase();
+        f=fl.find(x=>(x.pilot||'').toLowerCase()===p&&(x.drone||'').toLowerCase()===d&&x.date===op.date&&(x.time||'')===(op.time||''));
+      }
+      return (f&&f.note)?f.note:'';
+    };
     // Формируем строки перемещений — потери не дедуплицируем, остальные по уникальному тексту
     const moveFmt=op=>{
       const prefix=datePrefix(op);
       const pfx=prefix?'('+prefix+') ':'';
-      if(op.type==='loss') return pfx+'✈ Потеря: '+op.drone+' — пилот '+op.pilot;
+      if(op.type==='loss'){ const n=lossNote(op); return pfx+'✈ Потеря: '+op.drone+' — пилот '+op.pilot+(n?' ('+n+')':''); }
       if(op.type==='exchange'){
         let exTxt;
         if(op.give&&op.get) exTxt='⇄ Обмен с '+op.unit+': отдали '+op.give+' — '+op.giveQty+' шт., получили '+op.get+' — '+op.getQty+' шт.';
