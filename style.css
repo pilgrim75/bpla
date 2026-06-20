@@ -707,7 +707,10 @@ body.theme-field{
   display:grid;grid-template-columns:1fr 1fr;
   column-gap:22px;row-gap:5px;
   max-height:170px;overflow-y:auto;
-  scrollbar-gutter:stable;/* резерв под вертикальный скроллбар — не наезжает на цифры правой колонки */
+  /* зазор справа под полосу прокрутки — иначе тонкий скроллбар наезжает на цифры
+     правой колонки (scrollbar-gutter:stable резервировал слишком мало). padding-left
+     для симметрии, чтобы блок не перекосило. */
+  padding-right:14px;padding-left:2px;
 }
 .stat-list .stat-row{margin-top:0}/* интервалы держит row-gap */
 .stat-meta{font-size:12px;color:var(--color-text-secondary);margin-top:8px;display:flex;flex-direction:column;gap:3px}
