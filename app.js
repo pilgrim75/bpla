@@ -1,6 +1,20 @@
 
 // ============ STATE ============
-const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16'];
+// Базовый каталог моделей (страховочный список). Реальный парк может опережать его —
+// для словарей/автодополнения/AI-парсера используется getDroneVocab() (каталог ∪ склад ∪ расчёты).
+const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','ПВХ2д','ПВХ2н','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16','Рейд'];
+
+// Полный словарь моделей в обороте: каталог + всё, что реально есть на складе и в расчётах.
+// Так словарь не отстаёт от парка (новые борта появляются в stock/squads сразу). Дедуп,
+// пустые отброшены. Вызывать ТОЛЬКО в рантайме (читает state — app.js грузится последним).
+function getDroneVocab(){
+  const s=(typeof state!=='undefined'&&state)||{};
+  return [...new Set([
+    ...DRONE_CATALOG,
+    ...((s.stock||[]).map(d=>d.name)),
+    ...((s.squads||[]).flatMap(sq=>(sq.drones||[]).map(d=>d.name)))
+  ].filter(Boolean))];
+}
 
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
@@ -1163,6 +1177,7 @@ function syncStockFixLegacy(confirm){
 // Каталог: id → {icon, name, color}. Текст описания (desc) формируется
 // динамически с конкретными цифрами в calcPilotMedals.
 const MEDALS = {
+  raidback:  {icon:'🎖️', name:'Дальний рейд',  color:'#b45309'},
   longshot:  {icon:'🚀', name:'Дальнобойщик', color:'#6366f1'},
   workhorse: {icon:'⚡', name:'Трудяга',      color:'#f59e0b'},
   sniper:    {icon:'🥇', name:'Снайпер',      color:'#eab308'},
@@ -1171,7 +1186,7 @@ const MEDALS = {
   veteran:   {icon:'💎', name:'Ветеран',      color:'#06b6d4'},
   progress:  {icon:'📈', name:'Прогресс',     color:'#22c55e'},
   bestday:   {icon:'🌟', name:'Лучший день',  color:'#a855f7'},
-  raid:      {icon:'🎯', name:'Дальний рейд', color:'#ec4899'},
+  raid:      {icon:'🎯', name:'Дальний вылет', color:'#ec4899'},
 };
 
 // ISO-дата n дней назад от текущего момента
@@ -1194,11 +1209,17 @@ function computeMedalWinners(){
   const hasGeo = f10.some(f=>f.range_km!=null);
   const w = {};
 
-  // 🚀 Дальнобойщик — рекорд дальности одного вылета (нужно гео)
+  // 🎖️ Дальний рейд — рекорд дальности среди ВЕРНУВШИХСЯ (returned==='yes'): далеко И обратно
+  if(hasGeo){
+    const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null&&x.returned==='yes').sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
+    const r=nomRatioTop(c);
+    if(r) w.raidback={pilot:r.pilot, km:r.value, desc:`Самый дальний вылет с возвратом борта среди всех пилотов: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
+  }
+  // 🚀 Дальнобойщик — рекорд дальности одного вылета (нужно гео; возврат не учитывается)
   if(hasGeo){
     const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null).sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
     const r=nomRatioTop(c);
-    if(r) w.longshot={pilot:r.pilot, desc:`Абсолютный рекорд дальности одного вылета среди всех пилотов: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
+    if(r) w.longshot={pilot:r.pilot, km:r.value, desc:`Абсолютный рекорд дальности одного вылета среди всех пилотов: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
   }
   // ⚡ Трудяга — больше всего вылетов за 10 дней
   {
@@ -1266,9 +1287,15 @@ function calcPilotMedals(pilot){
   const add = (id,desc)=>{ const m=MEDALS[id]; out.push({id, icon:m.icon, name:m.name, color:m.color, desc}); };
 
   // Единственный носитель — победитель совпал с пилотом
-  ['longshot','workhorse','sniper','thrifty','progress','bestday'].forEach(id=>{
+  ['raidback','longshot','workhorse','sniper','thrifty','progress','bestday'].forEach(id=>{
     if(w[id] && w[id].pilot===pilot) add(id, w[id].desc);
   });
+  // 🎖️ Дальний рейд старше 🚀 Дальнобойщика, но 🚀 убираем ТОЛЬКО при равной дальности
+  // (рекордный вылет и так вернулся → 🚀 дублирует 🎖️). Если 🚀 дальше (рекорд был в один
+  // конец) — это отдельное достижение, показываем обе.
+  if(w.raidback&&w.longshot&&w.raidback.pilot===pilot&&w.longshot.pilot===pilot&&w.raidback.km===w.longshot.km){
+    const i=out.findIndex(m=>m.id==='longshot'); if(i>=0) out.splice(i,1);
+  }
 
   // 💎 Ветеран — верхний ярус (карта носителей)
   if(w.veteran && w.veteran[pilot]) add('veteran', w.veteran[pilot]);
@@ -1324,6 +1351,7 @@ function showMedalModal(pilot, idx){
 // Отдельная система поверх медалей: рекорды ЗА ВСЁ ВРЕМЯ по правилу 1%.
 // Не хранятся в localStorage — пересчитываются из state.flights при каждом renderDashboard().
 const ABS_RECORDS = {
+  raidback:  {icon:'🎖️', name:'Дальний рейд'},
   longshot:  {icon:'🚀', name:'Дальнобойщик'},
   workhorse: {icon:'⚡', name:'Трудяга'},
   bestday:   {icon:'🌟', name:'Лучший день'},
@@ -1376,11 +1404,17 @@ function computeAbsoluteRecords(){
   const at=p=>flights.filter(f=>f.pilot===p);
   const res={};
 
-  // 🚀 Дальнобойщик — самый дальний одиночный вылет за всё время
+  // 🎖️ Дальний рейд — самый дальний одиночный вылет С ВОЗВРАТОМ за всё время
+  {
+    const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null&&x.returned==='yes').sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
+    const r=_absWinner(c,true,'ratio');
+    if(r) res.raidback={pilot:r.pilot, km:r.value, desc:`Самый дальний одиночный вылет с возвратом за всё время: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
+  }
+  // 🚀 Дальнобойщик — самый дальний одиночный вылет за всё время (возврат не учитывается)
   {
     const c=pilots.map(p=>{ const far=at(p).filter(x=>x.range_km!=null).sort((a,b)=>b.range_km-a.range_km)[0]; return {pilot:p, value:far?far.range_km:null, _f:far}; });
     const r=_absWinner(c,true,'ratio');
-    if(r) res.longshot={pilot:r.pilot, desc:`Самый дальний одиночный вылет за всё время: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
+    if(r) res.longshot={pilot:r.pilot, km:r.value, desc:`Самый дальний одиночный вылет за всё время: ${r.value} км${r._f&&r._f.date?` (${medalFmtDate(r._f.date)})`:''}.`};
   }
   // ⚡ Трудяга — максимум вылетов за любую одну неделю за всё время
   {
@@ -1425,6 +1459,9 @@ function computeAbsoluteRecords(){
     const r=_absWinner(c,true,'ratio');
     if(r) res.veteran={pilot:r.pilot, desc:`Наибольшее общее число вылетов за всё время: ${r.value}.`};
   }
+  // 🎖️ старше 🚀, но 🚀 снимаем ТОЛЬКО при равной дальности у одного пилота (рекордный вылет
+  // и так вернулся → дубль). Если 🚀-рекорд дальше (был в один конец) — присуждаются обе.
+  if(res.raidback && res.longshot && res.raidback.pilot===res.longshot.pilot && res.raidback.km===res.longshot.km) delete res.longshot;
   return res;
 }
 
@@ -2033,12 +2070,8 @@ function fillDataLists(){
     const w=d>=cutoff?3:1; // свежие весят больше
     freq[x.drone]=(freq[x.drone]||0)+w;
   });
-  // Все известные дроны: сначала из склада и расчётов, потом каталог
-  const known=new Set([
-    ...state.stock.map(d=>d.name),
-    ...state.squads.flatMap(sq=>sq.drones.map(d=>d.name)),
-    ...DRONE_CATALOG
-  ]);
+  // Все известные дроны (каталог ∪ склад ∪ расчёты) — общий словарь getDroneVocab
+  const known=getDroneVocab();
   // Сортируем: частые вверху, остальные по алфавиту
   const sorted=[...known].sort((a,b)=>(freq[b]||0)-(freq[a]||0)||(a.localeCompare(b,'ru')));
   const opts=sorted.map(v=>`<option value="${esc(v)}">`).join('');

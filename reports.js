@@ -954,7 +954,7 @@ function vrPrint(){
 // Состояние панели — в window._rpg* (период/текст), переживает перерисовку.
 // Модель: claude-sonnet-4-6 (текущая; запрошенный claude-sonnet-4-20250514
 // устарел и снимается 15.06.2026 — используем актуальный ID, как в остальном app).
-const RPG_PROMPT = 'Напиши шутливый и ироничный репортаж на русском языке о боевых достижениях пилотов FPV-дронов за указанный период. Стиль — как залихватский спортивный комментатор, с грубым юмором, иронией и лёгким матом (не перебарщивай). Можно намекать на двусмысленные ситуации. Упоминай соперничество между пилотами — кто кого обошёл, кто затаил обиду, кто готовится к реваншу. Уважение к пилотам при этом сохраняется — смеёмся вместе, не над ними. Используй эмодзи медалей в тексте: 🚀⚡🥇🛡️🔥💎📈🌟🎯 и золотой щит 🛡️. Упоминай конкретные цифры из данных. Длина — 150-250 слов. Не добавляй данные которых нет. Используй Telegram markdown для форматирования: *жирный текст* (одна звёздочка с каждой стороны, не две). Не используй ## заголовки — вместо них просто текст с эмодзи. Не используй ** двойные звёздочки.';
+const RPG_PROMPT = 'Напиши шутливый и ироничный репортаж на русском языке о боевых достижениях пилотов FPV-дронов за указанный период. Стиль — как залихватский спортивный комментатор, с грубым юмором, иронией и лёгким матом (не перебарщивай). Можно намекать на двусмысленные ситуации. Упоминай соперничество между пилотами — кто кого обошёл, кто затаил обиду, кто готовится к реваншу. Уважение к пилотам при этом сохраняется — смеёмся вместе, не над ними. Используй эмодзи медалей в тексте: 🎖️🚀⚡🥇🛡️🔥💎📈🌟🎯 и золотой щит 🛡️. Упоминай конкретные цифры из данных. Длина — 150-250 слов. Не добавляй данные которых нет. ТЕХНИКА (опциональная тема): в данных может быть блок про дроны — дебютанты (впервые применены в этом периоде) и модели с заметным сдвигом результативности. Если такой материал есть и он яркий — впиши его в репортаж в общем юмористическом тоне как отдельный сюжет («подразделение обкатало новый борт, и вот что вышло»). Если блока нет или он невыразительный — НЕ упоминай технику и НЕ выдумывай характеристики дронов. Никаких ТТХ, которых нет в данных. Используй Telegram markdown для форматирования: *жирный текст* (одна звёздочка с каждой стороны, не две). Не используй ## заголовки — вместо них просто текст с эмодзи. Не используй ** двойные звёздочки.';
 
 function rpgRole(){ return (typeof state!=='undefined'&&state.role) || (window.authUser&&authUser.role) || ''; }
 function rpgIsPrivileged(){ const r=rpgRole(); return r==='admin'||r==='cmd'; }
@@ -1078,6 +1078,73 @@ function rpgBuildPayload(range){
     });
   } else L.push('- вылетов за период не было.');
 
+  // ===== ТЕХНИКА (опционально): дебютанты периода + сдвиг результативности по моделям.
+  // Названия моделей анонимизируются («Борт типа N») как в устном докладе и
+  // восстанавливаются в ответе (rpgDeanon). Блок попадает в payload ТОЛЬКО при наличии
+  // выразительного материала — иначе секции нет и AI про технику молчит (промпт это требует).
+  const priorF=flights.filter(f=>f.pilot&&f.pilot!=='[ПЕРЕДАЧА]'&&f.date&&f.date<range.from);
+  const periodModels=[...new Set(periodF.map(f=>f.drone).filter(Boolean))];
+  if(periodModels.length){
+    const D=vrIndexMap(periodModels,'Борт типа');
+    const dtok=m=>D.toTok.get(m)||m;
+    const TECH_MIN=3, TECH_SHIFT_MIN=5, TECH_SHIFT=0.2, TECH_BASE=8; // пороги выразительности
+    // TECH_SHIFT_MIN — мин. вылетов в ТЕКУЩЕМ периоде для заявки о сдвиге результативности
+    // (на 3 вылетах %-доля скачет шумом, напр. 3/3=100%); priorF-сторона достаточно TECH_MIN.
+    const priorModels=new Set(priorF.map(f=>f.drone).filter(Boolean));
+    const stat=fs=>({n:fs.length,d:fs.filter(f=>f.result==='yes').length,l:fs.filter(f=>f.returned==='no').length});
+    const techLines=[];
+    // Дебютанты — только при реальной истории до периода (иначе «новизна» бессмысленна,
+    // напр. холодный старт: вся история внутри периода → каждая модель ложно «дебютант»).
+    if(priorF.length>=TECH_BASE){
+      const debut=periodModels.filter(m=>!priorModels.has(m));
+      if(debut.length){
+        techLines.push('ДЕБЮТАНТЫ (впервые применены в этом периоде):');
+        debut.forEach(m=>{
+          const dfs=periodF.filter(f=>f.drone===m);
+          const s=stat(dfs);
+          let line='- '+dtok(m)+': вылетов '+s.n+', выполнено '+s.d+', потеряно '+s.l;
+          // Гео-портрет дебютанта: дальность + возвращаемость + контекст истории на
+          // сопоставимой дальности. Так AI видит «далеко И с возвратом», а не просто
+          // факт новой модели. Только агрегаты — ТТХ не выдумываются (см. RPG_PROMPT).
+          const geo=dfs.filter(f=>f.range_km!=null).map(f=>f.range_km);
+          if(geo.length){
+            const avg=geo.reduce((a,b)=>a+b,0)/geo.length, mx=Math.max(...geo);
+            const ret=dfs.filter(f=>f.returned==='yes').length;
+            line+='; дальность ср. '+geoRound2(avg)+' км, макс '+geoRound2(mx)+' км; вернулось '+ret+' из '+s.n;
+            const LONG=Math.floor(Math.min(...geo)); // нижняя граница рабочей дальности борта
+            const priorLong=priorF.filter(f=>f.range_km!=null&&f.range_km>=LONG);
+            if(priorLong.length>=5){
+              const pr=priorLong.filter(f=>f.returned==='yes').length;
+              line+='; ранее на дальности ≥'+LONG+' км возврат был '+pr+' из '+priorLong.length;
+            }
+          }
+          techLines.push(line+'.');
+        });
+      }
+    }
+    // Сдвиг результативности — модель с историей и ДО, и В периоде (мин. TECH_MIN вылетов
+    // с каждой стороны), |Δ доли выполнения| ≥ TECH_SHIFT. Дебютанты сюда не входят.
+    const shifts=[];
+    periodModels.forEach(m=>{
+      if(!priorModels.has(m)) return;
+      const cur=periodF.filter(f=>f.drone===m), pri=priorF.filter(f=>f.drone===m);
+      if(cur.length<TECH_SHIFT_MIN||pri.length<TECH_MIN) return;
+      const cr=cur.filter(f=>f.result==='yes').length/cur.length;
+      const pr=pri.filter(f=>f.result==='yes').length/pri.length;
+      if(Math.abs(cr-pr)>=TECH_SHIFT) shifts.push({m,cr,pr,n:cur.length});
+    });
+    if(shifts.length){
+      techLines.push('СДВИГ РЕЗУЛЬТАТИВНОСТИ:');
+      shifts.forEach(s=>techLines.push('- '+dtok(s.m)+': было '+Math.round(s.pr*100)+'% выполнения, стало '+Math.round(s.cr*100)+'% (вылетов в периоде '+s.n+').'));
+    }
+    if(techLines.length){
+      maps.D=D; // включаем обратную замену моделей только когда они реально попали в payload
+      L.push('');
+      L.push('ТЕХНИКА (используй ТОЛЬКО если материал яркий; названия «Борт типа N» — дословно):');
+      techLines.forEach(t=>L.push(t));
+    }
+  }
+
   L.push('');
   L.push('МЕДАЛИ ЗА ПЕРИОД:');
   const gk=Object.keys(medalsGained), lk=Object.keys(medalsLost);
@@ -1098,9 +1165,12 @@ function rpgBuildPayload(range){
   return {payload:L.join('\n'), maps, total};
 }
 
-// Обратная замена «Пилот N» → реальное имя (терпимо к склонениям и ё/е)
+// Обратная замена «Пилот N»/«Борт типа N» → реальные данные (терпимо к склонениям и ё/е).
+// M.D присутствует только когда в payload был блок ТЕХНИКА (иначе моделей в тексте нет).
 function rpgDeanon(text,M){
-  return text.replace(/Пилот[а-яё]*\s+(\d+)/gi,(m,n)=> (M.P.rev[n]!==undefined?M.P.rev[n]:m));
+  text=text.replace(/Пилот[а-яё]*\s+(\d+)/gi,(m,n)=> (M.P.rev[n]!==undefined?M.P.rev[n]:m));
+  if(M.D) text=text.replace(/Борт[а-яё]*\s+типа\s+(\d+)/gi,(m,n)=> (M.D.rev[n]!==undefined?M.D.rev[n]:m));
+  return text;
 }
 
 function rpgSetStatus(t,c){ const st=document.getElementById('rpgStatus'); if(st){ st.textContent=t||''; st.style.color=c||'var(--muted)'; } }

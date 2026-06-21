@@ -32,6 +32,9 @@ async function parseMessages(){
   const srcNonEmpty=srcLines.filter(Boolean);
   const numberedInput=srcLines.map((l,i)=>`[${i}] ${l}`).join('\n');
   const ammoKnown=ammoCatalog.flatMap(a=>[a.name,...(a.aliases||[])]).filter(Boolean);
+  // Словарь моделей для нормализации — динамический (каталог ∪ склад ∪ расчёты),
+  // иначе AI схлопывает новые борта к ближайшему старому (напр. «ПВХ 2» → «ПВХ1»).
+  const droneVocab=(typeof getDroneVocab==='function')?getDroneVocab():DRONE_CATALOG;
   try{
     const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
@@ -57,7 +60,7 @@ async function parseMessages(){
 - note: ТОЛЬКО дополнительные обстоятельства (перебили видео, потеря управления, спикировал и т.п.) — НЕ номер вылета, НЕ цель, НЕ боеприпас
 - returned: вернул/борт вернул = yes; не вернули/спикировал/перебили/потеря управления/борт остался/борт не вернул = no
 - result: на месте/выполнена = yes; не на месте/не выполнена = no
-- drone: нормализуй написание к ближайшему из словаря: ${DRONE_CATALOG.join(', ')}
+- drone: нормализуй написание к ближайшему из словаря: ${droneVocab.join(', ')}. Если в тексте модель отличается от всех в словаре (другой номер/суффикс) — НЕ подменяй её ближайшей, оставь как в тексте (оператор уточнит вручную)
 Верни ТОЛЬКО JSON-массив.`,
         messages:[{role:'user',content:numberedInput}]
       })
