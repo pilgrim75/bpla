@@ -553,6 +553,18 @@
       </div>
       <div id="saveStatus" style="font-size:12px;color:var(--muted)">Данные хранятся в localStorage. Для переноса на другое устройство — экспортируйте в файл.</div>
     </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Переименование модели БПЛА</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Каноническое переименование во ВСЕХ записях (склад, расчёты, вылеты, журнал передач) одной операцией — аудит целостности остаётся сведённым. Если новое имя уже есть как модель — записи СОЛЬЮТСЯ в одну. Только администратор.</div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div><label>Текущая модель</label>
+          <select id="renameModelOld" style="min-width:160px"><option value="">— выберите модель —</option></select>
+        </div>
+        <div style="align-self:center;padding-bottom:6px">→</div>
+        <div><label>Новое название</label><input id="renameModelNew" placeholder="Рейс15" style="width:160px"></div>
+        <button class="btn btn-primary btn-sm" onclick="adminRenameModelRun()">Переименовать</button>
+      </div>
+    </div>
     <div class="card danger-zone">
       <div class="card-title">Опасная зона</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">

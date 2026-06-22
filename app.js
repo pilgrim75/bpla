@@ -317,6 +317,7 @@ function showAdminTab(tab,btn){
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
   if(tab==='ammo')renderAmmoList();
+  if(tab==='data')renderRenameModelSelect();
   if(tab==='geo')renderGeoTab();
   if(tab==='actlog'){loadActLogFromCloud().then(()=>renderActLog());};
 }
@@ -956,6 +957,120 @@ function adminDedupeLossTransfers(){
   renderInventory();
   logAction('transfer','dedupe','Удалено '+removed+' дублей записей о потерях');
   setStatus('saveStatus','✓ Удалено '+removed+' дублей потерь — '+new Date().toLocaleString('ru'),'ok');
+}
+
+// ===== ПЕРЕИМЕНОВАНИЕ МОДЕЛИ БПЛА (вариант А — каноническое, ВСЕ вхождения вкл. transfers) =====
+// Атомарно у инициатора: правит stock/squads/flights/transfers + DRONE_CATALOG, затем явная
+// выгрузка (stock/squads через _sv-бамп; flights/transfers — полный неразрушающий write
+// syncPushAll, id стабилен → merge не вернёт старые имена). Если newName уже существует как
+// отдельная модель — это СЛИЯНИЕ: второе подтверждение + схлопываем дубль-строки (склад по
+// name+status, дроны расчёта по name). Замена только ТОЧНОГО совпадения имени, не подстроки.
+function adminRenameModel(oldName,newName){
+  if(!guardAdmin())return;
+  oldName=String(oldName||'').trim();
+  newName=String(newName||'').trim();
+  if(!oldName){alert('Не выбрана модель для переименования');return;}
+  if(!newName){alert('Укажите новое название модели');return;}
+  if(oldName===newName){alert('Новое название совпадает со старым');return;}
+
+  const eqOld=v=>String(v||'').trim()===oldName;
+  const eqNew=v=>String(v||'').trim()===newName;
+
+  // Аудит вхождений старого имени (для подтверждения и проверки существования)
+  const cntStock=(state.stock||[]).filter(d=>eqOld(d.name)).length;
+  const cntSquad=(state.squads||[]).reduce((s,sq)=>s+(sq.drones||[]).filter(d=>eqOld(d.name)).length,0);
+  const cntFlight=(state.flights||[]).filter(f=>eqOld(f.drone)).length;
+  const cntTransfer=(state.transfers||[]).filter(t=>eqOld(t.drone)||eqOld(t.give)||eqOld(t.get)).length;
+  const total=cntStock+cntSquad+cntFlight+cntTransfer;
+  if(!total){alert('Модель «'+oldName+'» не найдена ни в складе, ни в расчётах, ни в вылетах, ни в журнале передач');return;}
+
+  // Коллизия: newName уже существует как отдельная модель → это СЛИЯНИЕ, не переименование
+  const mergeInto=(state.stock||[]).some(d=>eqNew(d.name))
+    ||(state.squads||[]).some(sq=>(sq.drones||[]).some(d=>eqNew(d.name)))
+    ||(state.flights||[]).some(f=>eqNew(f.drone))
+    ||(state.transfers||[]).some(t=>eqNew(t.drone)||eqNew(t.give)||eqNew(t.get));
+
+  let msg='Переименовать модель «'+oldName+'» → «'+newName+'»?\n\n'
+    +'Затронуто записей: склад '+cntStock+', расчёты '+cntSquad+', вылеты '+cntFlight+', передачи '+cntTransfer+' (всего '+total+').\n'
+    +'Исторические передачи правятся тоже — аудит целостности останется сведённым.';
+  if(mergeInto){
+    msg='⚠ ВНИМАНИЕ: модель «'+newName+'» УЖЕ существует.\n'
+      +'Это СЛИЯНИЕ двух моделей в одну (количества сложатся, дубль-строки схлопнутся), а НЕ простое переименование.\n\n'+msg;
+  }
+  if(!confirm(msg))return;
+  if(mergeInto&&!confirm('Подтвердите СЛИЯНИЕ «'+oldName+'» в существующую «'+newName+'». Откат — только из .bak/экспорта.'))return;
+
+  // 1. Локальные данные — точное совпадение oldName
+  let n=0;
+  (state.stock||[]).forEach(d=>{ if(eqOld(d.name)){d.name=newName;n++;} });
+  (state.squads||[]).forEach(sq=>(sq.drones||[]).forEach(d=>{ if(eqOld(d.name)){d.name=newName;n++;} }));
+  (state.flights||[]).forEach(f=>{ if(eqOld(f.drone)){f.drone=newName;n++;} });
+  (state.transfers||[]).forEach(t=>{
+    if(eqOld(t.drone)){t.drone=newName;n++;}
+    if(eqOld(t.give)){t.give=newName;n++;}
+    if(eqOld(t.get)){t.get=newName;n++;}
+  });
+
+  // Схлопнуть дубль-строки (появляются при слиянии; при обычном переименовании — no-op)
+  // Склад: по name+status, qty суммируется в первую строку (id/_sv первой сохраняются)
+  const stSeen={};
+  state.stock=(state.stock||[]).filter(d=>{
+    if(!eqNew(d.name))return true;
+    const k=d.status||'bg';
+    if(stSeen[k]){stSeen[k].qty=(stSeen[k].qty||0)+(d.qty||0);return false;}
+    stSeen[k]=d;return true;
+  });
+  // Расчёты: по name внутри расчёта
+  (state.squads||[]).forEach(sq=>{
+    let first=null;
+    sq.drones=(sq.drones||[]).filter(d=>{
+      if(!eqNew(d.name))return true;
+      if(first){first.qty=(first.qty||0)+(d.qty||0);return false;}
+      first=d;return true;
+    });
+  });
+
+  // 2. DRONE_CATALOG (const-массив — мутируем содержимое). Нет старого имени — молча пропустить.
+  const ci=DRONE_CATALOG.indexOf(oldName);
+  if(ci>=0){ if(DRONE_CATALOG.indexOf(newName)<0)DRONE_CATALOG[ci]=newName; else DRONE_CATALOG.splice(ci,1); }
+
+  // 3. Сохранение + ЯВНАЯ синхронизация (не ambient-debounce — операция атомарна у инициатора)
+  saveLocalQuiet();          // localStorage без отложенного push
+  syncBumpStockVersion();    // §11 — иначе поллинг затрёт правку (last-write-wins по _sv)
+  syncPushStockSquads();     // stock/squads
+  syncToCloud(true);         // flights+transfers полным неразрушающим write (id стабилен)
+
+  // 4. След в журнале действий
+  logAction('admin','rename_model','Переименована модель «'+oldName+'» → «'+newName+'»'+(mergeInto?' (СЛИЯНИЕ)':'')+'; правок: '+n);
+
+  // 5. UI
+  renderInventory(); renderDashboard(); renderTransfersLog();
+  if(typeof renderAdminStock==='function')renderAdminStock();
+  if(typeof renderAdminSquads==='function')renderAdminSquads();
+  if(typeof renderAdminFlights==='function')renderAdminFlights();
+  renderRenameModelSelect();
+  const ne=document.getElementById('renameModelNew'); if(ne)ne.value='';
+  setStatus('saveStatus','✓ Модель «'+oldName+'» → «'+newName+'»: '+n+' правок'+(mergeInto?' (слияние)':'')+' — '+new Date().toLocaleString('ru'),'ok');
+}
+
+// Заполнить выпадающий список моделей для переименования (живые имена из всего парка)
+function renderRenameModelSelect(){
+  const sel=document.getElementById('renameModelOld');
+  if(!sel)return;
+  const cur=sel.value;
+  const models=[...new Set([
+    ...((state.stock||[]).map(d=>d.name)),
+    ...((state.squads||[]).flatMap(sq=>(sq.drones||[]).map(d=>d.name))),
+    ...((state.flights||[]).map(f=>f.drone)),
+    ...((state.transfers||[]).flatMap(t=>[t.drone,t.give,t.get]))
+  ].filter(Boolean).map(s=>String(s).trim()))].sort((a,b)=>a.localeCompare(b,'ru'));
+  sel.innerHTML='<option value="">— выберите модель —</option>'+models.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  if(models.includes(cur))sel.value=cur;
+}
+
+// Запуск из формы (адм. вкладка «Данные»)
+function adminRenameModelRun(){
+  adminRenameModel(document.getElementById('renameModelOld').value,document.getElementById('renameModelNew').value);
 }
 
 // Аудит целостности склада: закон сохранения бортов по моделям — «поступило» против
