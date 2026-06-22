@@ -30,6 +30,7 @@ function repAdaptPeriodFields(){
   let showDates=true;
   if(isVerbal){ const vp=(document.getElementById('vrPeriod')||{}).value||'week'; showDates=(vp==='custom'); }
   else if(isRpg){ showDates=false; }
+  else if(type==='byfilter'){ showDates=false; } // берёт снимок журнала, поля дат вкладки не применяются
   set('repFromCol', showDates);
   set('repToCol', showDates);
 }
@@ -175,6 +176,7 @@ function refreshReportOutput(){
   else if(type==='issued') reportIssued(out,from,to,filterPilot,filterDrones);
   else if(type==='verbal') reportVerbal(out);
   else if(type==='reportage') reportReportage(out);
+  else if(type==='byfilter') reportByFilter(out);
 }
 
 // Показ опции «Репортаж недели» только для admin/cmd (вызывается при открытии вкладки отчётов и смене роли)
@@ -429,23 +431,28 @@ function reportIssued(out,from,to,filterPilot,filterDrones){
     }
     const agg=new Map();
     transList.forEach(t=>{
-      const key=t.to+'||'+t.drone;
-      if(!agg.has(key)) agg.set(key,{pilot:t.to,drone:t.drone,qty:0});
+      const key=t.to+'||'+t.drone+'||'+(t.date||'');
+      if(!agg.has(key)) agg.set(key,{pilot:t.to,drone:t.drone,date:t.date||'',qty:0});
       agg.get(key).qty+=(t.qty||1);
     });
-    const rows=[...agg.values()];
+    // строка на каждую дату выдачи (пилот+борт+date); внутри дня qty суммируется
+    const rows=[...agg.values()].sort((a,b)=>
+      a.pilot.localeCompare(b.pilot)||a.drone.localeCompare(b.drone)||(a.date||'').localeCompare(b.date||''));
     const hasFilter=from||to||filterPilot||(filterDrones&&filterDrones.length);
     if(!rows.length){
       const msg=hasFilter?'Нет данных за выбранный период':'Нет данных';
       window._reportText='Выдано бортов\n'+msg;
       out.innerHTML=`<div class="report-block"><div class="rb-head">Выдано бортов</div><div class="rb-line">${msg}</div></div>`;
     } else {
+      const DATE_HDR='Дата выдачи';
+      const dDate=r=>r.date==='2000-01-01'?'—':(r.date||''); // легаси-дата до начала учёта → тире
       const wPilot=Math.max(...rows.map(r=>r.pilot.length),'Пилот'.length);
       const wDrone=Math.max(...rows.map(r=>r.drone.length),'Борт'.length);
+      const wDate=Math.max(...rows.map(r=>dDate(r).length),DATE_HDR.length);
       const wQty=Math.max(...rows.map(r=>String(r.qty).length),'Количество'.length);
-      const hdr=`${'Пилот'.padEnd(wPilot)} · ${'Борт'.padEnd(wDrone)} · Количество`;
-      const sep='─'.repeat(wPilot+wDrone+wQty+6);
-      const fmtRow=r=>`${r.pilot.padEnd(wPilot)} · ${r.drone.padEnd(wDrone)} · ${r.qty}`;
+      const hdr=`${'Пилот'.padEnd(wPilot)} · ${'Борт'.padEnd(wDrone)} · ${DATE_HDR.padEnd(wDate)} · Количество`;
+      const sep='─'.repeat(wPilot+wDrone+wDate+wQty+9);
+      const fmtRow=r=>`${r.pilot.padEnd(wPilot)} · ${r.drone.padEnd(wDrone)} · ${dDate(r).padEnd(wDate)} · ${r.qty}`;
       const totalQty=rows.reduce((s,r)=>s+r.qty,0);
       const uniqueDrones=[...new Set(rows.map(r=>r.drone))].length;
       window._reportText=['Выдано бортов',hdr,sep,...rows.map(fmtRow),'',`Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов`].join('\n');
@@ -458,6 +465,87 @@ function reportIssued(out,from,to,filterPilot,filterDrones){
         <div class="rb-line" style="margin-top:8px;font-weight:700">Итого выдано: ${totalQty} бортов, ${uniqueDrones} типов</div>
       </div>`;
     }
+}
+
+// Сводка по ТЕКУЩЕЙ выборке журнала вылетов. Считается по снимку window._flLastFiltered
+// (массив + значения 6 фильтров), НЕ пересчитывается из фильтров вкладки «Отчёты».
+function reportByFilter(out){
+  const MONO="font-family:'Courier New',monospace;white-space:pre";
+  const f=window._flLastFiltered;
+  const meta=window._flLastFilter||{};
+  const head=(t)=>`<div class="rb-head">${esc(t)}</div>`;
+  if(!f){
+    out.innerHTML=`<div class="report-block">${head('Отчёт по выборке журнала')}<div class="rb-line">Откройте «Журнал вылетов» и нажмите «📊 Отчёт».</div></div>`;
+    window._reportText='Отчёт по выборке журнала\nНет выборки.';
+    return;
+  }
+  // ISO 'YYYY-MM-DD' → 'DD.MM.YYYY' строкой (без Date — иначе UTC-сдвиг дня); легаси 2000-01-01 → «—»
+  const dDate=d=>d==='2000-01-01'?'—':(d&&/^\d{4}-\d{2}-\d{2}$/.test(d)?d.split('-').reverse().join('.'):(d||''));
+  // 1. Заголовок: диапазон дат + активные фильтры (что «все» — не перечисляем)
+  const rangeTxt=(meta.from||meta.to)?`${dDate(meta.from)||'…'} — ${dDate(meta.to)||'…'}`:'весь период';
+  const RES={yes:'выполнено',no:'не выполнено'}, RET={yes:'вернул',no:'потерял'};
+  const filt=[
+    meta.pilot?`пилот: ${meta.pilot}`:'',
+    (meta.drones&&meta.drones.length)?`борт: ${meta.drones.join(', ')}`:'',
+    (meta.ammo&&meta.ammo.length)?`боеприпас: ${meta.ammo.join(', ')}`:'',
+    (meta.result&&meta.result!=='all')?`результат: ${RES[meta.result]||meta.result}`:'',
+    (meta.returned&&meta.returned!=='all')?`возврат: ${RET[meta.returned]||meta.returned}`:''
+  ].filter(Boolean);
+  // Агрегаты по снимку
+  const byDrone={}, byAmmo={}, byPilot={};
+  let done=0, notdone=0;
+  f.forEach(x=>{
+    const dn=x.drone||'—'; if(!byDrone[dn])byDrone[dn]={fl:0,lost:0}; byDrone[dn].fl++; if(x.returned==='no')byDrone[dn].lost++;
+    const am=x.ammo||'—'; byAmmo[am]=(byAmmo[am]||0)+1;
+    const pl=x.pilot||'—'; if(!byPilot[pl])byPilot[pl]={fl:0,done:0,lost:0}; byPilot[pl].fl++;
+    if(x.result==='yes'){byPilot[pl].done++;done++;} else if(x.result==='no')notdone++;
+    if(x.returned==='no')byPilot[pl].lost++;
+  });
+  const droneRows=Object.entries(byDrone).sort((a,b)=>b[1].fl-a[1].fl).map(([k,v])=>[k,v.fl,v.lost]);
+  const ammoRows=Object.entries(byAmmo).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k,v]);
+  const pilotRows=Object.entries(byPilot).sort((a,b)=>b[1].fl-a[1].fl).map(([k,v])=>[k,v.fl,v.done,v.lost]);
+  // Моноширинная таблица: возвращает {text:[строки], html:'…'}; имена эскейпятся целой строкой
+  const mkTable=(cols,rows)=>{
+    const all=[cols,...rows];
+    const w=cols.map((h,i)=>Math.max(...all.map(r=>String(r[i]).length)));
+    const last=w.length-1;
+    const fmt=r=>r.map((v,i)=>i<last?String(v).padEnd(w[i]):String(v)).join(' · ');
+    const hdr=fmt(cols), sep='─'.repeat(hdr.length);
+    return {
+      text:[hdr,sep,...rows.map(fmt)],
+      html:`<div class="rb-line" style="${MONO}">${esc(hdr)}</div>`
+        +`<div class="rb-line" style="${MONO};color:var(--border2)">${esc(sep)}</div>`
+        +(rows.length?rows.map(r=>`<div class="rb-line" style="${MONO}">${esc(fmt(r))}</div>`).join('')
+                     :`<div class="rb-line" style="color:var(--muted)">—</div>`)
+    };
+  };
+  const tDrone=mkTable(['Модель','Вылетов','Потеряно'],droneRows);
+  const tAmmo=mkTable(['Боеприпас','Применений'],ammoRows);
+  const tPilot=mkTable(['Пилот','Вылетов','Выполнено','Потеряно'],pilotRows);
+  const total=f.length;
+  // HTML
+  const filtHtml=filt.length?`<div class="rb-line" style="color:var(--muted)">Фильтры: ${esc(filt.join(' · '))}</div>`:'';
+  out.innerHTML=`<div class="report-block">
+    ${head('Отчёт по выборке журнала')}
+    <div class="rb-line">Период: ${esc(rangeTxt)} · вылетов в выборке: ${total}</div>
+    ${filtHtml}
+  </div>
+  ${total?`<div class="report-block">${head('Борта')}${tDrone.html}</div>
+  <div class="report-block">${head('Боеприпасы')}${tAmmo.html}</div>
+  <div class="report-block">${head('Итоги')}
+    <div class="rb-line" style="${MONO}">Выполнено · <span style="color:var(--green2)">${done}</span>   Не выполнено · <span style="color:var(--red)">${notdone}</span>   Всего вылетов · ${total}</div>
+  </div>
+  <div class="report-block">${head('По пилотам')}${tPilot.html}</div>`
+  :`<div class="report-block"><div class="rb-line" style="color:var(--muted)">Нет вылетов в выборке</div></div>`}`;
+  // Plain-text копия
+  const lines=['Отчёт по выборке журнала','Период: '+rangeTxt+' · вылетов в выборке: '+total];
+  if(filt.length)lines.push('Фильтры: '+filt.join(' · '));
+  if(total){
+    lines.push('','Борта',...tDrone.text,'','Боеприпасы',...tAmmo.text,'',
+      'Итоги: выполнено '+done+', не выполнено '+notdone+', всего '+total,
+      '','По пилотам',...tPilot.text);
+  } else lines.push('','Нет вылетов в выборке');
+  window._reportText=lines.join('\n');
 }
 
 function isDelivery(ammo){

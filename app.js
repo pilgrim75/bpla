@@ -2080,6 +2080,97 @@ function flightDateManual(){
   const sel=document.getElementById('flightPeriod'); if(sel)sel.value='custom';
   renderFlights();
 }
+
+// ===== ФИЛЬТР ЖУРНАЛА: мультиселект борта/боеприпаса (UI поверх периода/пилота) =====
+// Храним МНОЖЕСТВО СНЯТЫХ значений (kind: 'Drone'|'Ammo'). По умолчанию все отмечены
+// (пустой Set). Новое значение, не попавшее в Set, — отмечено. Снятое значение остаётся
+// снятым при пересборке списка. Сняты ВСЕ из текущего списка (пустой выбор) → показать всё.
+window._flMsDesel=window._flMsDesel||{Drone:new Set(),Ammo:new Set()};
+window._flMsLastOpts=window._flMsLastOpts||{Drone:[],Ammo:[]};
+const FL_MS_FIELD={Drone:'drone',Ammo:'ammo'};
+const FL_MS_NAME={Drone:'Борт',Ammo:'Боеприпас'};
+// Уникальные непустые значения поля в переданном (период+пилот) списке вылетов
+function flMsOptions(list,kind){
+  const fld=FL_MS_FIELD[kind];
+  return [...new Set(list.map(x=>(x[fld]||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+}
+// Выбранные = опции, не попавшие в множество снятых
+function flMsSelected(opts,kind){
+  const d=window._flMsDesel[kind];
+  return opts.filter(o=>!d.has(o));
+}
+// Рендер чекбоксов + лейбла «Борт: все» / «Борт: N из M»
+function flMsRender(opts,kind){
+  const list=document.getElementById('fl'+kind+'List');
+  const lbl=document.getElementById('fl'+kind+'Label');
+  const d=window._flMsDesel[kind];
+  if(list){
+    list.innerHTML=opts.length
+      ? opts.map(o=>`<label class="ms-item"><input type="checkbox" value="${esc(o)}" ${d.has(o)?'':'checked'} onchange="flMsCheck('${kind}',this)"><span>${esc(o)}</span></label>`).join('')
+      : '<div class="ms-empty">Нет вылетов за период</div>';
+  }
+  if(lbl){
+    const sel=flMsSelected(opts,kind);
+    const all=!sel.length||sel.length===opts.length; // все ИЛИ ни одного → показать всё
+    lbl.textContent=FL_MS_NAME[kind]+': '+(all?'все':`${sel.length} из ${opts.length}`);
+  }
+}
+// Чек/снятие галочки → перерисовать журнал (панель остаётся открытой)
+function flMsCheck(kind,cb){
+  const d=window._flMsDesel[kind];
+  if(cb.checked)d.delete(cb.value); else d.add(cb.value);
+  renderFlights();
+}
+// Открыть/закрыть выпадашку (закрывает соседнюю; направление вверх если снизу мало места)
+function flMsToggle(kind,e){
+  if(e)e.stopPropagation();
+  const panel=document.getElementById('fl'+kind+'Panel');
+  const field=document.getElementById('fl'+kind+'Field');
+  if(!panel||!field)return;
+  if(panel.classList.contains('open')){panel.classList.remove('open','up');field.classList.remove('open');return;}
+  ['Drone','Ammo'].forEach(k=>{const p=document.getElementById('fl'+k+'Panel'),fi=document.getElementById('fl'+k+'Field');if(p)p.classList.remove('open','up');if(fi)fi.classList.remove('open');});
+  panel.classList.add('open');field.classList.add('open');
+  const r=field.getBoundingClientRect(),ph=panel.offsetHeight;
+  const below=window.innerHeight-r.bottom;
+  if(below<ph+8&&r.top>below)panel.classList.add('up');
+}
+// «Все» — снять отметки снятого (отметить всё)
+function flMsSelectAll(kind,e){
+  if(e)e.stopPropagation();
+  window._flMsDesel[kind].clear();
+  renderFlights();
+}
+// «Снять все» — занести все текущие опции в снятые (пустой выбор = показать всё)
+function flMsClearAll(kind,e){
+  if(e)e.stopPropagation();
+  (window._flMsLastOpts[kind]||[]).forEach(o=>window._flMsDesel[kind].add(o));
+  renderFlights();
+}
+// Закрытие выпадашек борта/боеприпаса кликом вне
+document.addEventListener('click',e=>{
+  ['Drone','Ammo'].forEach(kind=>{
+    const wrap=document.getElementById('fl'+kind+'Wrap');
+    const panel=document.getElementById('fl'+kind+'Panel');
+    if(!panel||!panel.classList.contains('open'))return;
+    if(wrap&&wrap.contains(e.target))return;
+    panel.classList.remove('open','up');
+    const fi=document.getElementById('fl'+kind+'Field'); if(fi)fi.classList.remove('open');
+  });
+});
+
+// ===== ФИЛЬТР ЖУРНАЛА: результат / возврат борта ('all'|'yes'|'no', состояние в модуле) =====
+window._flResult=window._flResult||'all';
+window._flReturned=window._flReturned||'all';
+function flSetResult(v){window._flResult=v||'all';renderFlights();}
+function flSetReturned(v){window._flReturned=v||'all';renderFlights();}
+// Кнопка «Отчёт» в журнале → вкладка «Отчёты» со сводкой по текущей выборке (снимок renderFlights)
+function flGotoReport(){
+  if(!window._flLastFiltered)renderFlights(); // гарантируем снимок
+  const rt=document.getElementById('repType'); if(rt)rt.value='byfilter';
+  const btn=[...document.querySelectorAll('#nav button')].find(b=>(b.getAttribute('onclick')||'').includes("'report'"));
+  if(btn)showPage('report',btn); // showPage('report') → fillReportFilters()+buildReport() → reportByFilter
+}
+
 function renderFlights(){
   const fp=document.getElementById('filterPilot').value;
   const from=document.getElementById('filterFrom').value;
@@ -2088,6 +2179,28 @@ function renderFlights(){
   if(fp)f=f.filter(x=>x.pilot&&x.pilot.includes(fp));
   if(from)f=f.filter(x=>x.date>=from);
   if(to)f=f.filter(x=>x.date<=to);
+  // Мультиселект борта/боеприпаса: опции из ТЕКУЩЕГО (период+пилот) списка; применяется поверх.
+  const _flDroneOpts=flMsOptions(f,'Drone'), _flAmmoOpts=flMsOptions(f,'Ammo');
+  window._flMsLastOpts={Drone:_flDroneOpts,Ammo:_flAmmoOpts};
+  flMsRender(_flDroneOpts,'Drone'); flMsRender(_flAmmoOpts,'Ammo');
+  const _flDroneSel=flMsSelected(_flDroneOpts,'Drone'), _flAmmoSel=flMsSelected(_flAmmoOpts,'Ammo');
+  if(_flDroneSel.length&&_flDroneSel.length<_flDroneOpts.length){const s=new Set(_flDroneSel);f=f.filter(x=>s.has((x.drone||'').trim()));}
+  if(_flAmmoSel.length&&_flAmmoSel.length<_flAmmoOpts.length){const s=new Set(_flAmmoSel);f=f.filter(x=>s.has((x.ammo||'').trim()));}
+  // Результат/возврат: модуль — источник истины; синхронизируем select. Строгое равенство:
+  // при активном фильтре пустой/неопределённый признак не проходит; «Все» — показывает.
+  const _rs=document.getElementById('filterResult'); if(_rs)_rs.value=window._flResult;
+  const _rt=document.getElementById('filterReturned'); if(_rt)_rt.value=window._flReturned;
+  if(window._flResult==='yes'||window._flResult==='no')f=f.filter(x=>x.result===window._flResult);
+  if(window._flReturned==='yes'||window._flReturned==='no')f=f.filter(x=>x.returned===window._flReturned);
+  // Снимок текущей выборки журнала для кнопки «Отчёт» (reportByFilter не пересчитывает заново).
+  // drones/ammo попадают в заголовок только когда реально сужают (не «все» и не «ничего»).
+  window._flLastFiltered=f.slice();
+  window._flLastFilter={
+    from,to,pilot:fp,
+    drones:(_flDroneSel.length&&_flDroneSel.length<_flDroneOpts.length)?_flDroneSel.slice():[],
+    ammo:(_flAmmoSel.length&&_flAmmoSel.length<_flAmmoOpts.length)?_flAmmoSel.slice():[],
+    result:window._flResult,returned:window._flReturned
+  };
   const toMs=x=>{
     const t=(x.time||'00:00').trim();
     const norm=t.includes(':')?t.split(':').map(p=>p.padStart(2,'0')).join(':'):'00:00';

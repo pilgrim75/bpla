@@ -335,12 +335,49 @@
         <input class="flt-inp flt-date" type="date" id="filterFrom" onchange="flightDateManual()" title="С даты">
         <input class="flt-inp flt-date" type="date" id="filterTo" onchange="flightDateManual()" title="По дату">
         <select class="flt-inp" id="filterPilot" onchange="renderFlights()"><option value="">Все пилоты</option></select>
+        <div class="ms-wrap" id="flDroneWrap">
+          <div class="ms-field" id="flDroneField" onclick="flMsToggle('Drone',event)" title="Фильтр по борту">
+            <span id="flDroneLabel">Борт: все</span>
+            <i class="ti ti-chevron-down ms-caret"></i>
+          </div>
+          <div class="ms-panel" id="flDronePanel">
+            <div class="ms-list" id="flDroneList"></div>
+            <div class="ms-foot">
+              <button type="button" class="btn btn-sm" onclick="flMsSelectAll('Drone',event)">Все</button>
+              <button type="button" class="btn btn-sm" onclick="flMsClearAll('Drone',event)">Снять все</button>
+            </div>
+          </div>
+        </div>
+        <div class="ms-wrap" id="flAmmoWrap">
+          <div class="ms-field" id="flAmmoField" onclick="flMsToggle('Ammo',event)" title="Фильтр по боеприпасу">
+            <span id="flAmmoLabel">Боеприпас: все</span>
+            <i class="ti ti-chevron-down ms-caret"></i>
+          </div>
+          <div class="ms-panel" id="flAmmoPanel">
+            <div class="ms-list" id="flAmmoList"></div>
+            <div class="ms-foot">
+              <button type="button" class="btn btn-sm" onclick="flMsSelectAll('Ammo',event)">Все</button>
+              <button type="button" class="btn btn-sm" onclick="flMsClearAll('Ammo',event)">Снять все</button>
+            </div>
+          </div>
+        </div>
+        <select class="flt-inp" id="filterResult" onchange="flSetResult(this.value)" title="Результат">
+          <option value="all">Результат: все</option>
+          <option value="yes">Выполнено</option>
+          <option value="no">Не выполнено</option>
+        </select>
+        <select class="flt-inp" id="filterReturned" onchange="flSetReturned(this.value)" title="Возврат борта">
+          <option value="all">Борт: все</option>
+          <option value="yes">Вернул</option>
+          <option value="no">Потерял</option>
+        </select>
         <select class="flt-inp" id="flightPeriod" onchange="flightPeriodChange(this.value)" title="Период">
           <option value="week">Неделя</option>
           <option value="month">Месяц</option>
           <option value="all">Весь период</option>
           <option value="custom">Произвольный</option>
         </select>
+        <button class="btn btn-sm" onclick="flGotoReport()" title="Сводка по текущей выборке журнала"><i class="ti ti-chart-bar"></i> Отчёт</button>
       </div>
     </div>
     <div id="flightList" style="overflow-x:auto"></div>
@@ -364,6 +401,7 @@
           <option value="detailed">Подробный отчёт по расчётам</option>
           <option value="verbal">Устный доклад (AI)</option>
           <option value="reportage" id="repTypeReportage">Репортаж недели (AI)</option>
+          <option value="byfilter" id="repTypeByFilter">По выборке журнала</option>
         </select>
       </div>
       <div id="repFromCol"><label>С даты</label><input type="date" id="repFrom" onchange="buildReport()"></div>

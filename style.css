@@ -453,6 +453,17 @@ label{
 .ms-empty{padding:10px 12px;font-size:12px;color:var(--muted)}
 .ms-foot{padding:8px;border-top:1px solid var(--border2);display:flex;justify-content:flex-end}
 
+/* Мультиселект борта/боеприпаса в фильтрах журнала вылетов (v0.22) */
+.flt-controls .ms-wrap{width:158px}
+.flt-controls .ms-foot{justify-content:space-between;gap:6px}
+/* Карточка журнала не должна клипать выпадающие панели фильтров (иначе длинный список
+   боеприпасов срезается при короткой выборке) — панель «вылетает» над журналом, как в отчётах.
+   Косметику нижних углов таблицы возвращаем радиусом на #flightList: клип уже даёт его
+   overflow-x:auto (overflow-y → auto), поэтому overflow:hidden НЕ ставим — иначе потеряем
+   горизонтальный скролл таблицы. */
+#page-flights .section-card{overflow:visible}
+#flightList{border-bottom-left-radius:var(--border-radius-lg);border-bottom-right-radius:var(--border-radius-lg)}
+
 /* ============ DATE PICKER ============ */
 .dp-wrap{position:relative;display:inline-block;width:100%}
 .dp-input{cursor:pointer;caret-color:transparent}
