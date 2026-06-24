@@ -219,7 +219,7 @@ checkNet();
 // ============ NAV ============
 function showPage(id,btn){
   // Наблюдателю недоступны Склад/Импорт/Администратор (вкладки скрыты + guard от прямого вызова)
-  if((isViewerRole(state.role)||isViewerRole(authUser.role))&&(id==='inventory'||id==='import'||id==='admin'))return;
+  if((isViewerRole(state.role)||isViewerRole(authUser.role))&&(id==='inventory'||id==='import'||id==='admin'||id==='vtx'))return;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
   document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
@@ -235,6 +235,7 @@ function showPage(id,btn){
   }
   if(id==='dashboard')renderDashboard();
   if(id==='inventory')renderInventory();
+  if(id==='vtx'&&typeof vtxRenderTab==='function')vtxRenderTab();
   if(id==='report'){fillReportFilters();buildReport();}
   if(id==='settings'){
     applySettingsVisibility(); // секции по ролям: admin — всё, остальные — ключ+статус
@@ -3616,7 +3617,7 @@ function applySettingsVisibility(){
 // Видимость вкладок/форм для роли только-чтение (viewer). Вызывается из switchRole.
 function applyViewerUI(r){
   const v=isViewerRole(r);
-  ['invNavBtn','importNavBtn'].forEach(id=>{
+  ['invNavBtn','importNavBtn','vtxNavBtn'].forEach(id=>{
     const b=document.getElementById(id);
     if(b)b.style.display=v?'none':'';
   });
@@ -3625,7 +3626,7 @@ function applyViewerUI(r){
   // Если наблюдатель оказался на скрытой странице — уводим на Обзор
   if(v){
     const active=document.querySelector('.page.active');
-    if(active&&['page-inventory','page-import','page-admin'].includes(active.id)){
+    if(active&&['page-inventory','page-import','page-admin','page-vtx'].includes(active.id)){
       showPage('dashboard',document.querySelector('#nav button'));
     }
   }

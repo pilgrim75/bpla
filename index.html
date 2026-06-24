@@ -38,7 +38,7 @@
 <div class="app" style="visibility:hidden">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
-  <div class="version">v0.22</div>
+  <div class="version">v0.25</div>
   <select id="roleSwitch" class="tb-select" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -70,6 +70,7 @@
   <button class="nav-tab" id="invNavBtn" onclick="showPage('inventory',this)"><i class="ti ti-building-warehouse"></i>Склад</button>
   <button class="nav-tab" onclick="showPage('flights',this)"><i class="ti ti-plane-departure"></i>Вылеты</button>
   <button class="nav-tab" onclick="showPage('report',this)"><i class="ti ti-chart-bar"></i>Отчёты</button>
+  <button class="nav-tab" id="vtxNavBtn" onclick="showPage('vtx',this)"><i class="ti ti-antenna"></i>VTX</button>
   <button class="nav-tab nav-extra" id="importNavBtn" onclick="showPage('import',this)"><i class="ti ti-file-import"></i>Импорт</button>
   <button class="nav-tab nav-extra" id="adminNavBtn" onclick="showPage('admin',this)" style="display:none"><i class="ti ti-shield"></i>Администратор</button>
   <button class="nav-tab nav-extra" id="settingsNavBtn" onclick="showPage('settings',this)" style="margin-left:auto"><i class="ti ti-settings"></i>Настройки</button>
@@ -453,6 +454,54 @@
   <div id="reportOutput"></div>
 </div>
 
+<!-- VTX — генератор Betaflight vtx-команд (автономный инструмент, учёта не трогает) -->
+<div class="page" id="page-vtx">
+  <!-- Шапка в одну строку: слева заголовок, справа загрузка + статус -->
+  <div class="vtx-head">
+    <div class="section-title" style="margin:0">VTX — генератор команд Betaflight</div>
+    <div class="vtx-head-actions">
+      <input type="file" id="vtxFileInput" accept=".json,application/json" style="display:none" onchange="vtxImportFile(this)">
+      <button class="btn btn-primary btn-sm" onclick="document.getElementById('vtxFileInput').click()"><i class="ti ti-upload"></i> Загрузить таблицу</button>
+      <span id="vtxLoadStatus" class="vtx-status">Таблица не загружена</span>
+    </div>
+  </div>
+
+  <!-- Двухколоночная сетка (auto-fit сам сворачивает в один столбец на узких) -->
+  <div class="vtx-cols">
+    <!-- ЛЕВАЯ КОЛОНКА: таблица частот → готовый набор команд -->
+    <div class="vtx-col">
+      <div class="card" id="vtxTableCard">
+        <div class="card-title">Таблица частот</div>
+        <div id="vtxTableWrap" style="overflow-x:auto"></div>
+      </div>
+      <div class="card" id="vtxCmdCard">
+        <div class="vtx-card-head">
+          <div class="card-title" style="margin:0">Готовый набор команд</div>
+          <div class="vtx-card-actions">
+            <button class="btn btn-primary btn-sm" onclick="vtxGenerate()">Сгенерировать</button>
+            <button class="btn btn-sm" style="color:var(--muted)" onclick="vtxCopyCommands()">Копировать</button>
+          </div>
+        </div>
+        <pre id="vtxOutput" class="vtx-output"></pre>
+      </div>
+    </div>
+
+    <!-- ПРАВАЯ КОЛОНКА: конструктор AUX -->
+    <div class="vtx-col">
+      <div class="card" id="vtxBuilderCard">
+        <div class="vtx-card-head">
+          <div class="card-title" style="margin:0">Конструктор AUX → команды</div>
+          <div class="vtx-card-actions">
+            <button class="btn btn-sm" onclick="vtxAddBlock('power')"><i class="ti ti-bolt"></i> + Блок мощности</button>
+            <button class="btn btn-sm" onclick="vtxAddBlock('freq')"><i class="ti ti-antenna"></i> + Блок частоты</button>
+          </div>
+        </div>
+        <div id="vtxBlocks"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- IMPORT -->
 <div class="page" id="page-import">
   <div class="section-head">
@@ -788,6 +837,7 @@
 <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 <script src="writeoff.js"></script>
 <script src="marshrut.js"></script> <!-- МАРШРУТ Этап 1: getBalance() рядом со старой системой (только чтение) -->
+<script src="vtx.js"></script> <!-- VTX: генератор Betaflight vtx-команд (автономный, учёта не трогает) -->
 <script src="app.js"></script>
 </body>
 </html>
