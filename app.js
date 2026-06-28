@@ -702,13 +702,28 @@ function renderAdminSquads(){
   document.getElementById('adminSquadList').innerHTML=state.squads.length?`
     <table>
       <thead><tr><th>Пилот</th><th>Точка старта</th><th>БПЛА</th><th>Кол-во</th><th>Действие</th></tr></thead>
-      <tbody>${state.squads.flatMap((sq,si)=>sq.drones.map((d,di)=>`<tr>
-        <td>${di===0?`<input style="width:90px" value="${esc(sq.pilot)}" onchange="adminEditSquadPilot(${si},this.value)">`:'&nbsp;'}</td>
-        <td>${di===0?`<input style="width:110px" value="${esc(sq.start_point||'')}" placeholder="45 вишня" onchange="squadEditStartPoint(${si},this.value)" autocomplete="off"><br><button id="geo-rc-btn-adm-${si}" class="btn btn-sm" style="margin-top:4px;font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing(${si},'geo-rc-prog-adm-${si}','geo-rc-btn-adm-${si}')">Пересчитать вылеты без дистанций</button><span id="geo-rc-prog-adm-${si}" style="font-size:10px;color:var(--muted)"></span>`:'&nbsp;'}</td>
-        <td><input style="width:90px" value="${esc(d.name)}" onchange="adminEditSquadDrone(${si},${di},'name',this.value)"></td>
-        <td><input style="width:55px" type="number" min="0" value="${d.qty}" onchange="adminEditSquadDrone(${si},${di},'qty',parseInt(this.value)||0)"></td>
-        <td>${di===0?`<button class="btn btn-danger btn-sm" onclick="adminDeleteSquad(${si})">Удалить расчёт</button>`:'&nbsp;'}</td>
-      </tr>`)).join('')}
+      <tbody>${state.squads.flatMap((sq,si)=>{
+        // Ячейки шапки расчёта (имя/точка старта/удаление) — общие для строки с бортами и
+        // для расчёта с ПУСТЫМ складом, чтобы пилот не исчезал из списка (см. ниже).
+        const pilotCell=`<input style="width:90px" value="${esc(sq.pilot)}" onchange="adminEditSquadPilot(${si},this.value)">`;
+        const startCell=`<input style="width:110px" value="${esc(sq.start_point||'')}" placeholder="45 вишня" onchange="squadEditStartPoint(${si},this.value)" autocomplete="off"><br><button id="geo-rc-btn-adm-${si}" class="btn btn-sm" style="margin-top:4px;font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing(${si},'geo-rc-prog-adm-${si}','geo-rc-btn-adm-${si}')">Пересчитать вылеты без дистанций</button><span id="geo-rc-prog-adm-${si}" style="font-size:10px;color:var(--muted)"></span>`;
+        const delCell=`<button class="btn btn-danger btn-sm" onclick="adminDeleteSquad(${si})">Удалить расчёт</button>`;
+        // Пустой склад → одна строка-заглушка, но расчётом всё равно можно управлять
+        // (точка старта, удаление; виден как получатель при выдаче борта).
+        if(!sq.drones.length) return [`<tr>
+          <td>${pilotCell}</td>
+          <td>${startCell}</td>
+          <td colspan="2" style="color:var(--muted)">нет бортов</td>
+          <td>${delCell}</td>
+        </tr>`];
+        return sq.drones.map((d,di)=>`<tr>
+          <td>${di===0?pilotCell:'&nbsp;'}</td>
+          <td>${di===0?startCell:'&nbsp;'}</td>
+          <td><input style="width:90px" value="${esc(d.name)}" onchange="adminEditSquadDrone(${si},${di},'name',this.value)"></td>
+          <td><input style="width:55px" type="number" min="0" value="${d.qty}" onchange="adminEditSquadDrone(${si},${di},'qty',parseInt(this.value)||0)"></td>
+          <td>${di===0?delCell:'&nbsp;'}</td>
+        </tr>`);
+      }).join('')}
       </tbody>
     </table>`:'<div style="color:var(--muted);padding:8px">Нет расчётов</div>';
 }
