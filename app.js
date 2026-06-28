@@ -1307,6 +1307,12 @@ const MEDALS = {
 
 // ISO-дата n дней назад от текущего момента
 function medalIsoDaysAgo(n){ return localISO(new Date(Date.now()-n*864e5)); }
+// Есть ли у пилота ≥1 вылет в периоде [from, to): from включительно, to (ISO)
+// исключительно; to=null → без верхней границы. Гейт холодного старта для
+// двухпериодных (сравнение текущий vs прошлый) медалей — см. 📈 Прогресс.
+function pilotActiveInPeriod(pilot, from, to){
+  return (state.flights||[]).some(f=>f.pilot===pilot && f.date && f.date>=from && (!to || f.date<to));
+}
 // 'YYYY-MM-DD' → 'DD.MM'
 function medalFmtDate(iso){ const p=(iso||'').split('-'); return p.length===3?`${p[2]}.${p[1]}`:iso; }
 
@@ -1371,12 +1377,19 @@ function computeMedalWinners(){
       });
     }
   }
-  // 📈 Прогресс — рост к прошлой неделе (мин. +3)
+  // 📈 Прогресс — рост к прошлой неделе (мин. +3). Гейт холодного старта:
+  // выдаётся ТОЛЬКО если у пилота есть активность в ОБОИХ периодах (текущая И
+  // прошлая неделя ≥1 вылет) — иначе «рост с 0» у новичка/вернувшегося из
+  // отпуска ложно срабатывал бы как лучшая динамика.
   {
     const thisW0=medalIsoDaysAgo(6), prevW0=medalIsoDaysAgo(13);
     const thisCnt=p=>flights.filter(f=>f.pilot===p && f.date>=thisW0).length;
     const prevCnt=p=>flights.filter(f=>f.pilot===p && f.date>=prevW0 && f.date<thisW0).length;
-    const c=pilots.map(p=>{ const g=thisCnt(p)-prevCnt(p); return {pilot:p, value:g>=3?g:null}; });
+    const c=pilots.map(p=>{
+      const both=pilotActiveInPeriod(p, thisW0, null) && pilotActiveInPeriod(p, prevW0, thisW0);
+      const g=thisCnt(p)-prevCnt(p);
+      return {pilot:p, value:(both && g>=3)?g:null};
+    });
     const r=nomRatioTop(c);
     if(r) w.progress={pilot:r.pilot, desc:`Рост к прошлой неделе: +${r.value} вылетов (было ${prevCnt(r.pilot)}, стало ${thisCnt(r.pilot)}) — лучшая динамика.`};
   }
