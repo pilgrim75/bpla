@@ -497,7 +497,9 @@ function reportByFilter(out){
   f.forEach(x=>{
     const dn=x.drone||'—'; if(!byDrone[dn])byDrone[dn]={fl:0,lost:0}; byDrone[dn].fl++; if(x.returned==='no')byDrone[dn].lost++;
     const am=x.ammo||'—'; byAmmo[am]=(byAmmo[am]||0)+1;
-    const pl=x.pilot||'—'; if(!byPilot[pl])byPilot[pl]={fl:0,done:0,lost:0}; byPilot[pl].fl++;
+    // Группировка «по пилотам» — СТАТИСТИКА (squadKey, сейчас = pilot; при разделении
+    // «расчёт/пилот» статистика остаётся за персоной — вызов squadKeyOf снять, ADR-001 §3).
+    const pl=squadKeyOf(x.pilot)||'—'; if(!byPilot[pl])byPilot[pl]={fl:0,done:0,lost:0}; byPilot[pl].fl++;
     if(x.result==='yes'){byPilot[pl].done++;done++;} else if(x.result==='no')notdone++;
     if(x.returned==='no')byPilot[pl].lost++;
   });
@@ -993,7 +995,7 @@ async function vrGenerate(){
       resp=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:1000, system:VR_PROMPT, messages:[{role:'user',content:payload}] }),
+        body:JSON.stringify({ model:AI_MODEL, max_tokens:1000, system:VR_PROMPT, messages:[{role:'user',content:payload}] }), // AI_MODEL — единая точка (parser.js)
         signal:ctrl.signal
       });
     } finally { clearTimeout(tid); }
@@ -1051,6 +1053,12 @@ function rpgIsPrivileged(){ const r=rpgRole(); return r==='admin'||r==='cmd'; }
 // текущим для репортажа начиная с RPG_CLOSE_HOUR:00 его последнего дня. До этого
 // момента берётся предыдущий завершённый период. Менять здесь.
 const RPG_CLOSE_HOUR=21;
+
+// Гейт «холодного старта» для опциональных блоков payload репортажа (ТЕХНИКА и СОБЫТИЯ):
+// минимум вылетов ДО периода, чтобы «новизна» имела смысл (иначе на холодном старте вся
+// история внутри периода → каждая модель/пилот ложно «дебютант»). Раньше было ДВЕ константы
+// одного смысла (TECH_BASE и EVT_BASE, обе =8) — объединены 02.07.2026.
+const COLDSTART_BASE=8;
 
 // Диапазон выбранного периода: календарная неделя (пн–вс) или календарный месяц.
 // Период становится «текущим» только после RPG_CLOSE_HOUR последнего дня (см. выше).
@@ -1175,7 +1183,7 @@ function rpgBuildPayload(range){
   if(periodModels.length){
     const D=vrIndexMap(periodModels,'Борт типа');
     const dtok=m=>D.toTok.get(m)||m;
-    const TECH_MIN=3, TECH_SHIFT_MIN=5, TECH_SHIFT=0.2, TECH_BASE=8; // пороги выразительности
+    const TECH_MIN=3, TECH_SHIFT_MIN=5, TECH_SHIFT=0.2; // пороги выразительности; гейт истории — общий COLDSTART_BASE
     // TECH_SHIFT_MIN — мин. вылетов в ТЕКУЩЕМ периоде для заявки о сдвиге результативности
     // (на 3 вылетах %-доля скачет шумом, напр. 3/3=100%); priorF-сторона достаточно TECH_MIN.
     const priorModels=new Set(priorF.map(f=>f.drone).filter(Boolean));
@@ -1183,7 +1191,7 @@ function rpgBuildPayload(range){
     const techLines=[];
     // Дебютанты — только при реальной истории до периода (иначе «новизна» бессмысленна,
     // напр. холодный старт: вся история внутри периода → каждая модель ложно «дебютант»).
-    if(priorF.length>=TECH_BASE){
+    if(priorF.length>=COLDSTART_BASE){
       const debut=periodModels.filter(m=>!priorModels.has(m));
       if(debut.length){
         techLines.push('ДЕБЮТАНТЫ (впервые применены в этом периоде):');
@@ -1236,14 +1244,15 @@ function rpgBuildPayload(range){
   // ===== СОБЫТИЯ (опционально): яркие сюжеты, выводимые из данных — дебют пилота,
   // первая награда новичка, смена держателя абсолютного рекорда (перехват). Имена —
   // только «Пилот N» через tok() (rpgDeanon уже их восстанавливает, новых токенов нет).
-  // Блок попадает в payload ТОЛЬКО при наличии истории до периода (priorF>=EVT_BASE,
-  // паритет с TECH_BASE — тот в области ТЕХНИКИ) и выразительного материала; иначе
+  // Блок попадает в payload ТОЛЬКО при наличии истории до периода (priorF>=COLDSTART_BASE,
+  // общий гейт с блоком ТЕХНИКА) и выразительного материала; иначе
   // секции нет и AI про события молчит (промпт это требует). Курируется: ≤4 строки,
   // приоритет record > debut_award > debut.
   {
-    const EVT_BASE=8;
-    if(priorF.length>=EVT_BASE){
-      const debutants=periodPilots.filter(p=>!priorF.some(f=>f.pilot===p));
+    if(priorF.length>=COLDSTART_BASE){
+      // «Дебют пилота» — СТАТИСТИКА (squadKey, сейчас = pilot; тождество расчёт≡пилот:
+      // при разделении дебют считается по персоне — вызовы squadKeyOf снять, ADR-001 §3).
+      const debutants=periodPilots.filter(p=>!priorF.some(f=>squadKeyOf(f.pilot)===squadKeyOf(p)));
       const evRecord=[], evAward=[], evDebut=[];
       // Перехват рекорда: щит сменил держателя (был прежний владелец before.shields[id]).
       // «Впервые установленный» рекорд (прежнего держателя нет) сюда НЕ идёт — остаётся
@@ -1350,7 +1359,7 @@ async function rpgGenerate(){
       resp=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:1000, system:RPG_PROMPT, messages:[{role:'user',content:payload}] }),
+        body:JSON.stringify({ model:AI_MODEL, max_tokens:1000, system:RPG_PROMPT, messages:[{role:'user',content:payload}] }), // AI_MODEL — единая точка (parser.js)
         signal:ctrl.signal
       });
     } finally { clearTimeout(tid); }

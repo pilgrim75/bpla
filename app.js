@@ -2,7 +2,9 @@
 // ============ STATE ============
 // Базовый каталог моделей (страховочный список). Реальный парк может опережать его —
 // для словарей/автодополнения/AI-парсера используется getDroneVocab() (каталог ∪ склад ∪ расчёты).
-const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','ПВХ2д','ПВХ2н','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16','Рейд'];
+// 'Рейд'→'Рейс15' (02.07.2026): adminRenameModel правил массив только в рантайме —
+// после перезагрузки 'Рейд' воскресал в getDroneVocab() и подсказках AI-парсера.
+const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','ПВХ2д','ПВХ2н','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16','Рейс15'];
 
 // Полный словарь моделей в обороте: каталог + всё, что реально есть на складе и в расчётах.
 // Так словарь не отстаёт от парка (новые борта появляются в stock/squads сразу). Дедуп,
@@ -738,12 +740,16 @@ function adjustReason(what){
   return r&&r.trim()?r.trim():null;
 }
 // Корректирующая запись движения. delta — со знаком (+ приход/исправление вверх, − выбытие).
+// location — squadKey расчёта либо 'склад' (сейчас squadKey = имя пилота; склад-семантика).
+// Резолв через squadKeyOf (marshrut.js) ЗДЕСЬ — одна точка на всех вызывающих
+// (adminEditStock/squadEditDrone/adminEditSquadDrone/_logAdminTransfer и т.д.).
 function recordAdjust(name,delta,location,reason){
   if(!name||!delta)return;
   if(!state.transfers)state.transfers=[];
+  const loc=squadKeyOf(location||''); // squadKey, сейчас = pilot (не-пилотские 'склад' — насквозь)
   const op=makeTransfer('adjust',{
-    drone:name,qty:delta,location:location||'',
-    from:delta<0?(location||''):'',to:delta>0?(location||''):'',
+    drone:name,qty:delta,location:loc,
+    from:delta<0?loc:'',to:delta>0?loc:'',
     note:'коррекция: '+(reason||'')+' ['+(authUser.login||state.role||'admin')+']'
   });
   state.transfers.unshift(op);

@@ -1,4 +1,21 @@
 // parser.js — импорт и AI-парсер сообщений (часть app.js, грузить ПЕРЕД reports.js/app.js)
+
+// ============ AI-КОНСТАНТЫ (единая точка, 02.07.2026) ============
+// Модель для ВСЕХ AI-вызовов проекта: парсер (здесь) + устный доклад и репортаж
+// (reports.js — грузится после parser.js, берёт константу в рантайме). Смена модели —
+// ТОЛЬКО здесь (раньше id был захардкожен в 3 местах, миграция = 3 правки в 2 файлах).
+const AI_MODEL='claude-sonnet-4-6';
+// Таймаут AI-вызова парсера, мс. У vr/rpg свои (10с/20с — короткие payload'ы);
+// парсер обрабатывает длинные простыни сообщений — даём больше.
+const AI_PARSE_TIMEOUT_MS=45000;
+// fetch с жёстким таймаутом: по истечении timeoutMs запрос отменяется (AbortController),
+// promise падает с AbortError (e.name==='AbortError' — ловить в catch вызывающего).
+function aiFetchWithTimeout(url,options,timeoutMs){
+  const ctrl=new AbortController();
+  const tid=setTimeout(()=>ctrl.abort(),timeoutMs);
+  return fetch(url,{...options,signal:ctrl.signal}).finally(()=>clearTimeout(tid));
+}
+
 // ============ API KEY ============
 function saveApiKey(val){
   try{localStorage.setItem('anthropicKey',val);}catch(e){}
@@ -36,7 +53,8 @@ async function parseMessages(){
   // иначе AI схлопывает новые борта к ближайшему старому (напр. «ПВХ 2» → «ПВХ1»).
   const droneVocab=(typeof getDroneVocab==='function')?getDroneVocab():DRONE_CATALOG;
   try{
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+    // Раньше был единственный AI-вызов БЕЗ таймаута — оборванная сеть вешала импорт навечно.
+    const resp=await aiFetchWithTimeout('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{
         'Content-Type':'application/json',
@@ -45,7 +63,7 @@ async function parseMessages(){
         'anthropic-dangerous-direct-browser-access':'true'
       },
       body:JSON.stringify({
-        model:'claude-sonnet-4-6',
+        model:AI_MODEL,
         max_tokens:2000,
         system:`Ты парсер военных сообщений о вылетах дронов ФПВ. Из входного текста извлеки КАЖДЫЙ вылет отдельно.
 Каждая строка входного текста помечена номером в квадратных скобках [N]. Используй этот номер как _line.
@@ -64,7 +82,7 @@ async function parseMessages(){
 Верни ТОЛЬКО JSON-массив.`,
         messages:[{role:'user',content:numberedInput}]
       })
-    });
+    },AI_PARSE_TIMEOUT_MS);
     if(!resp.ok){
       const err=await resp.json().catch(()=>({}));
       throw new Error(`HTTP ${resp.status}: ${err.error?.message||resp.statusText}`);
@@ -84,7 +102,11 @@ async function parseMessages(){
     setStatus(st,`Распознано: ${parsed.length} вылет(ов). Проверьте и сохраните.`,'ok');
     renderParsedCards(parsed);
   }catch(e){
-    setStatus(st,'Ошибка: '+e.message,'err');
+    // Отменённый по таймауту запрос — понятная ошибка, а не «AbortError»/вечное «Распознаю...»
+    if(e&&e.name==='AbortError')
+      setStatus(st,'Ошибка: сервер не ответил за '+(AI_PARSE_TIMEOUT_MS/1000)+' сек (сеть или API недоступны). Проверьте соединение и повторите.','err');
+    else
+      setStatus(st,'Ошибка: '+e.message,'err');
   }
 }
 

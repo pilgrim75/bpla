@@ -20,6 +20,19 @@
 //   exchange (легаси): get→+qty, give→−qty, локация = 'склад'   // TODO Этап 3 → handover
 //   transfer (легаси): from→−qty, to→+qty (как move)            // TODO Этап 3 → move/writeoff
 
+// ===== squadKey — идентификатор РАСЧЁТА (носителя склада) =====
+// (02.07.2026, подготовка к разделению «расчёт/пилот» — ARCHITECTURE §5, ADR-001 §3)
+// Расчёт (носитель СКЛАДА) и пилот (субъект СТАТИСТИКИ) — разные понятия, СЕЙЧАС
+// слитые: squadKey === имя пилота, функция — тождество, поведение не меняется.
+// ПРАВИЛО: любой код, использующий имя пилота как ключ склада/локации ЛИБО
+// опирающийся на тождество расчёт≡пилот, резолвит его ЧЕРЕЗ ЭТУ ФУНКЦИЮ —
+// допущение становится greppable (grep squadKeyOf) и меняемым в одной точке.
+// При будущем разделении: склад-точки (loss/adjust location, getBalance) остаются
+// на squadKeyOf; статистика (отчёты «по пилотам», дебюты) возвращается к персоне —
+// каждая точка вызова помечена комментарием, какая у неё семантика.
+// Не-пилотские локации ('склад', внешние единицы) проходят насквозь без изменений.
+function squadKeyOf(pilot){ return pilot; }
+
 // Нормализация имён — как в проекте (_stockAuditCompute): lowercase + trim.
 function _mNorm(s){ return (s==null?'':String(s)).toLowerCase().trim(); }
 
@@ -57,8 +70,10 @@ function _marshrutWalk(){
         break;
       }
       case 'loss': {
-        // Боевая потеря — у пилота. qty по умолчанию 1 (как в _stockAuditCompute).
-        _mAdd(map, t.drone, t.pilot||t.location||t.from, -(t.qty||1));
+        // Боевая потеря — списание с локации РАСЧЁТА (squadKey, сейчас = имя пилота
+        // t.pilot; склад-семантика — при разделении «расчёт/пилот» остаётся на
+        // squadKeyOf). qty по умолчанию 1 (как в _stockAuditCompute).
+        _mAdd(map, t.drone, squadKeyOf(t.pilot||t.location||t.from), -(t.qty||1));
         break;
       }
       case 'writeoff': {

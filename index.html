@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<meta name="referrer" content="no-referrer"><!-- URL с ?u=&t=&k= не должен утекать в Referer (аудит 02.07.2026); первым тегом — до любых загрузок -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>БПЛА Учёт</title>
 <link rel="icon" href="favicon.ico" type="image/x-icon">
@@ -834,7 +835,7 @@
 <script src="parser.js"></script>
 <script src="html2canvas.min.js"></script> <!-- локально (офлайн/file://): рендер «доски почёта» репортажа в PNG -->
 <script src="reports.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
+<script src="docx.umd.js"></script> <!-- docx@8.5.0 (build/index.umd.js) локально, был jsDelivr CDN — офлайн/file:// и без внешних запросов (аудит 02.07.2026) -->
 <script src="writeoff.js"></script>
 <script src="marshrut.js"></script> <!-- МАРШРУТ Этап 1: getBalance() рядом со старой системой (только чтение) -->
 <script src="vtx.js"></script> <!-- VTX: генератор Betaflight vtx-команд (автономный, учёта не трогает) -->
