@@ -658,6 +658,9 @@ async function syncPullAll(confirm_=false){
     // Путь Б: подтянуть облачные tombstones (чужие удаления) в локальный набор ДО
     // фильтрации — иначе удалённое на другом устройстве здесь бы не скрылось.
     loaded.tombstoneIds = syncMergeCloudTombstones(d.tombstones);
+    // actingRole (замещение, v0.26): освежить из блока users — назначение/снятие
+    // доезжает планово (5 мин) без перелогина. Рантайм-вызов функции app.js.
+    if(typeof syncApplyActingRole==='function') syncApplyActingRole(loaded.users);
     // Фильтруем tombstones (и удалённые вылеты, и удалённые loss-передачи)
     const tb = tombstones.load();
     loaded.flights   = loaded.flights.filter(f=>!tb.has(f.id));

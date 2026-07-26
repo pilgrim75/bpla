@@ -60,20 +60,16 @@ function guardAdmin(){
   return false;
 }
 
-// ===== Предикаты роли (Фаза 2: actingRole — замещение) =====
-// currentRole() — роль ПРЕДСТАВЛЕНИЯ/идентичности: переключатель (state.role), при
-// пустом — роль учётки. По ней определяется ВИД (пилотская форма, бейдж, вкладки).
+// ===== Предикаты текущей роли (Фаза 1 подготовки к actingRole) =====
+// Единая точка чтения ЭФФЕКТИВНОЙ роли: переключатель (state.role), при пустом —
+// роль учётки (authUser.role). Тот же паттерн state.role||authUser.role||'',
+// что был размазан прямыми сравнениями по app/reports/writeoff, — теперь одно место.
 // Вызовы из reports.js/writeoff.js — только в рантайме (файлы грузятся раньше app.js).
 function currentRole(){return state.role||authUser.role||'';}
-// actingRole() — назначенное админом ЗАМЕЩЕНИЕ (доп. роль на период, колонка
-// acting_role листа users, Backend v7.6). Расширяет ПРАВА, но НЕ меняет идентичность:
-// привязка sq.pilot===login, squadKeyOf, вид пилота — всё по базовой роли/логину.
-function actingRole(){return (authUser&&authUser.actingRole)||'';}
-// Проверка ЭФФЕКТИВНОЙ роли: текущая ИЛИ замещение. Пример: pilot + acting tech →
-// hasRole('tech')=true (права техника), isPilotRole(currentRole())=true (вид пилота).
-// Про роль УЧЁТКИ ничего не говорит — для прав учётки guardAdmin()/authUser.role.
-function hasRole(role){return currentRole()===role||(!!actingRole()&&actingRole()===role);}
-function hasAnyRole(roles){return roles.includes(currentRole())||(!!actingRole()&&roles.includes(actingRole()));}
+// Проверка ТЕКУЩЕЙ роли. Про роль УЧЁТКИ ничего не говорит — для прав учётки
+// по-прежнему guardAdmin()/authUser.role (admin в чужом «взгляде» сохраняет права учётки).
+function hasRole(role){return currentRole()===role;}
+function hasAnyRole(roles){return roles.includes(currentRole());}
 
 // Затемнённый модальный оверлей. Возвращает контейнер (.appendChild уже сделан).
 function modalOverlay(innerHTML){
@@ -256,8 +252,12 @@ function showPage(id,btn){
   if(id==='report'){fillReportFilters();buildReport();}
   if(id==='settings'){
     applySettingsVisibility(); // секции по ролям: admin — всё, остальные — ключ+статус
-    // Управление пользователями переехало в Администратор → Пользователи (v0.26)
+    const isAdminAcc=authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin';
+    const nuke=document.getElementById('nu-enckey');
+    if(nuke&&isAdminAcc)nuke.value=cfg.key||localStorage.getItem('cfg_key')||'';
+    if(authToken&&isAdminAcc)loadUsersList(); // список пользователей не грузим не-админам
     renderSettingsStatus();
+    if(typeof nuRoleChange==='function')nuRoleChange();
   }
   if(id==='admin'){
     // Инициализируем дефолтные даты фильтра
@@ -328,15 +328,6 @@ function showAdminTab(tab,btn){
   document.querySelectorAll('.adm-tab').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   if(tab==='flights')renderAdminFlights();
-  if(tab==='users'){
-    // Пользователи (переехали из Настроек, v0.26): мгновенный рендер из кэша actLog,
-    // затем повтор после подтяжки свежего журнала («Последний вход» без отставания)
-    const nuke=document.getElementById('nu-enckey');
-    if(nuke)nuke.value=cfg.key||localStorage.getItem('cfg_key')||'';
-    if(typeof nuRoleChange==='function')nuRoleChange();
-    loadUsersList();
-    loadActLogFromCloud().then(()=>loadUsersList());
-  }
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
   if(tab==='ammo')renderAmmoList();
@@ -2825,7 +2816,7 @@ function applyFontSize(sz){
 
 // ============ AUTH ============
 let authToken='';
-let authUser={login:'',role:'',actingRole:''};
+let authUser={login:'',role:''};
 
 // Заставка (#splashScreen, index.html) показана с первой отрисовки страницы;
 // прячется при любом исходе initAuth — вместе со снятием скрытия .app либо
@@ -2866,9 +2857,7 @@ async function authByToken(token){
     const d=await r.json();
     if(d.ok){
       authToken=token;
-      // actingRole (замещение, Backend v7.6) приходит при каждой авторизации —
-      // и по ссылке, и по сохранённому токену; отдельно не персистится
-      authUser={login:d.login,role:d.role,actingRole:String(d.acting_role||'').toLowerCase().trim()};
+      authUser={login:d.login,role:d.role};
       localStorage.setItem('auth_token',token);
       return true;
     }
@@ -2885,7 +2874,7 @@ async function initAuth(){
   const isLocal=window.location.protocol==='file:'||new URLSearchParams(window.location.search).get('local')==='1';
   if(isLocal){
     hideLoginScreen();
-    authUser={login:'local',role:'admin',actingRole:''};
+    authUser={login:'local',role:'admin'};
     state.role='admin';
     applyRoleFromAuth();
     console.log('[AUTH] Локальный режим — авторизация пропущена');
@@ -3031,9 +3020,7 @@ function applyRoleFromAuth(){
       // здесь перезаписывается логином — без добавки щиты видел только админ во
       // «взгляде пилота» (через переключатель, где бейдж не перезаписывается).
       const tbShields=r.startsWith('pilot_')?goldShieldsHtml(authUser.login,{inline:true}):'';
-      // «и.о.» — видимый признак действующего замещения (acting_role)
-      const actingBadge=authUser.actingRole?' · <span style="color:var(--accent2)">и.о. '+esc(authUser.actingRole)+'</span>':'';
-      badge.innerHTML='<b>'+esc(authUser.login)+'</b>'+tbShields+(authUser.role==='viewer'?' · Наблюдатель':'')+actingBadge;
+      badge.innerHTML='<b>'+esc(authUser.login)+'</b>'+tbShields+(authUser.role==='viewer'?' · Наблюдатель':'');
     }
   }
   setTimeout(applyRoleRestrictions,100);
@@ -3043,24 +3030,8 @@ function applyRoleFromAuth(){
 
 function logout(){
   localStorage.removeItem('auth_token');
-  authToken='';authUser={login:'',role:'',actingRole:''};
+  authToken='';authUser={login:'',role:''};
   location.reload();
-}
-
-// Подтяжка actingRole из блока users полного чтения (зовёт syncPullAll в рантайме —
-// раз в 5 мин и при входе). Замещение, назначенное/снятое админом, доезжает до
-// устройства без перелогина; при изменении — перерисовка прав (switchRole идемпотентен).
-function syncApplyActingRole(users){
-  if(!authUser.login||authUser.login==='local')return;
-  const u=(users||[]).find(x=>x.login===authUser.login);
-  if(!u)return;
-  const acting=String(u.acting_role||'').toLowerCase().trim();
-  if(acting===(authUser.actingRole||''))return;
-  authUser.actingRole=acting;
-  showSyncToast(acting?('Вам назначено замещение: '+acting):'Замещение снято');
-  switchRole(state.role);          // canEdit-кнопки/панели под новую эффективную роль
-  applyRoleFromAuth();             // бейдж «и.о.» в topbar
-  if(typeof fillDataLists==='function')fillDataLists(); // опции «не бг»/«списан» в передаче
 }
 
 // ============ УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ============
@@ -3151,13 +3122,6 @@ function copyUserLink(){
   showSyncToast('✓ Ссылка скопирована');
 }
 
-// Последний вход пользователя — по login-записям журнала действий (type='auth').
-// actLog может отставать от облака: showAdminTab('users') освежает его loadActLogFromCloud.
-function _userLastLogin(login){
-  const e=actLog.find(x=>x.type==='auth'&&x.action==='login'&&x.user===login); // actLog отсортирован по ts убыв.
-  return e?(e.date+' '+e.time):'—';
-}
-
 async function loadUsersList(){
   // Список пользователей (логины/роли/токен-операции) — только админской учётке
   if(!(authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin'))return;
@@ -3169,47 +3133,20 @@ async function loadUsersList(){
     const users=d.users||[];
     const el=document.getElementById('usersList');
     if(!el)return;
-    // Селект замещения: '' = нет; значение из листа users (acting_role, Backend v7.6)
-    const AR_OPTS=['','cmd','tech','pilot','admin','viewer'];
     el.innerHTML=users.length?`
       <table style="width:100%;font-size:12px">
-        <thead><tr><th>Логин</th><th>Роль</th><th>Замещение</th><th>Статус</th><th>Последний вход</th><th>Действие</th></tr></thead>
-        <tbody>${users.map((u,i)=>{const lj=esc(u.login).replace(/'/g,"\\'");const ar=String(u.acting_role||'').toLowerCase().trim();return `<tr>
+        <thead><tr><th>Логин</th><th>Роль</th><th>Статус</th><th>Действие</th></tr></thead>
+        <tbody>${users.map(u=>{const lj=esc(u.login).replace(/'/g,"\\'");return `<tr>
           <td style="padding:6px 8px">${esc(u.login)}</td>
           <td style="padding:6px 8px">${esc(u.role)}</td>
-          <td style="padding:6px 8px">${ar?`<span class="tag tag-warn">и.о. ${esc(ar)}</span>`:'<span style="color:var(--muted)">—</span>'}</td>
           <td style="padding:6px 8px"><span class="tag ${u.active?'tag-ok':'tag-danger'}">${u.active?'активен':'заблокирован'}</span></td>
-          <td style="padding:6px 8px;white-space:nowrap;color:var(--muted)">${esc(_userLastLogin(u.login))}</td>
-          <td style="padding:6px 8px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-            <select id="ar-sel-${i}" style="width:110px;font-size:11px;padding:2px 4px">
-              ${AR_OPTS.map(o=>`<option value="${o}"${o===ar?' selected':''}>${o?('и.о. '+o):'— нет —'}</option>`).join('')}
-            </select>
-            <button class="btn btn-sm" onclick="setActingRole('${lj}',document.getElementById('ar-sel-${i}').value)">Замещение</button>
+          <td style="padding:6px 8px;display:flex;gap:4px">
             <button class="btn btn-sm btn-primary" onclick="regenerateToken('${lj}')">Новая ссылка</button>
             <button class="btn btn-sm btn-danger" onclick="toggleUser('${lj}',${!u.active})">${u.active?'Блок':'Разблок'}</button>
           </td>
         </tr>`;}).join('')}</tbody>
       </table>`:'<div style="color:var(--muted);font-size:12px">Нет пользователей</div>';
   }catch(e){}
-}
-
-// Назначить/снять замещение (acting_role, Backend v7.6). Пустое значение = снять.
-// Только admin (клиентский guard; сервер гейтит по БАЗОВОЙ роли admin_token).
-async function setActingRole(login,acting){
-  if(!guardAdmin())return;
-  const {url}=syncGetCfg();
-  if(!url||!authToken)return;
-  const val=String(acting||'').toLowerCase().trim();
-  try{
-    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({action:'set_acting_role',admin_token:authToken,login,acting_role:val})});
-    await new Promise(r=>setTimeout(r,1500));
-    logAction('user','acting',val?('Назначено замещение «'+val+'» пользователю '+login):('Снято замещение у '+login));
-    showSyncToast(val?('✓ Замещение «'+val+'» — '+login):('✓ Замещение снято — '+login));
-    // Правка самого себя — применяем сразу, не дожидаясь 5-минутного sync
-    if(login===authUser.login){authUser.actingRole=val;switchRole(state.role);applyRoleFromAuth();}
-    loadUsersList();
-  }catch(e){alert('Ошибка: '+e.message);}
 }
 
 async function regenerateToken(login){
@@ -3701,15 +3638,15 @@ function actlogClearFilters(){
 
 // ============ ПРАВА ДОСТУПА ============
 // Видимость секций страницы Настройки по ролям. Вызывается из switchRole и showPage('settings').
-//  admin            — всё (Синхронизация/URL, Шифрование+смена ключа, Статус);
+//  admin            — всё (Синхронизация/URL, Шифрование+смена ключа, Пользователи, Статус);
 //  cmd/tech/pilot   — ключ шифрования (со своей кнопкой сохранения) + Статус с «Синхронизировать сейчас»;
 //  viewer           — ключ шифрования + только текст статуса (без кнопок).
-// Пользователи переехали в Администратор → Пользователи (v0.26, вкладка видна только admin).
 function applySettingsVisibility(){
   const isAdmin=hasRole('admin');
   const isViewer=isViewerRole(currentRole())||isViewerRole(authUser.role);
   const show=(id,v)=>{ const el=document.getElementById(id); if(el)el.style.display=v?'':'none'; };
   show('cfg-sync-card',isAdmin);        // URL Apps Script, проверка, загрузка/выгрузка
+  show('usersCard',isAdmin);            // список пользователей + создание (ключ в открытом виде)
   show('cfg-key-save-btn',!isAdmin);    // не-админам — своя кнопка сохранения ключа (общая «Сохранить настройки» скрыта вместе с картой синхронизации)
   show('cfg-status-actions',!isViewer); // viewer — только текст последней синхронизации
   updateEncryptBadge();                 // блок смены ключа — только admin (и только при заданном ключе)

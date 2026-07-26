@@ -33,8 +33,9 @@ function woRecordHint(h,key,val){
 // ISO → ДД.ММ.ГГГГ
 function woFmtDate(iso){ if(!iso)return ''; const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); return m?`${m[3]}.${m[2]}.${m[1]}`:iso; }
 
-// Текущая эффективная роль (переключатель → учётка)
-function woRole(){ return (typeof state!=='undefined'&&state.role) || (window.authUser&&authUser.role) || ''; }
+// Текущая эффективная роль (переключатель → учётка) — делегат к currentRole() из app.js
+// (вызов только в рантайме; s.role подписантов в документе — другое поле, не роль пользователя)
+function woRole(){ return currentRole(); }
 
 function woStatus(msg,kind){
   const el=document.getElementById('woStatus'); if(!el)return;
@@ -160,7 +161,7 @@ function woGroupByDate(losses){
 
 // ===== МАСТЕР ПО ДНЯМ =====
 function woOpenWriteoff(){
-  if(woRole()!=='cmd'){ alert('Документ на списание доступен только командиру (роль cmd)'); return; }
+  if(!hasRole('cmd')){ alert('Документ на списание доступен только командиру (роль cmd)'); return; }
   const losses=(window._writeoffLosses||[]).filter(x=>x&&x.returned==='no');
   if(!losses.length){ alert('За выбранный период потерь нет'); return; }
   window._woFlow={ days:woGroupByDate(losses), idx:0, collected:[] };

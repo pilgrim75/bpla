@@ -39,7 +39,7 @@
 <div class="app" style="visibility:hidden">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
-  <div class="version">v0.25</div>
+  <div class="version">v0.26</div>
   <select id="roleSwitch" class="tb-select" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -547,6 +547,7 @@
   <!-- Вкладки внутри раздела -->
   <div class="adm-tabs">
     <button class="adm-tab active" onclick="showAdminTab('flights',this)">Журнал вылетов</button>
+    <button class="adm-tab" onclick="showAdminTab('users',this)">Пользователи</button>
     <button class="adm-tab" onclick="showAdminTab('stock',this)">Склад</button>
     <button class="adm-tab" onclick="showAdminTab('squads',this)">Расчёты</button>
     <button class="adm-tab" onclick="showAdminTab('ammo',this)">Боеприпасы</button>
@@ -568,6 +569,55 @@
     </div>
     <div class="card" style="overflow-x:auto">
       <div id="adminFlightList"></div>
+    </div>
+  </div>
+
+  <!-- ВКЛАДКА: ПОЛЬЗОВАТЕЛИ (v0.26 — переехала из Настроек; вкладка доступна только
+       admin: раздел Администратор скрыт всем остальным ролям в switchRole).
+       Замещение (acting_role, Backend v7.6) назначается/снимается селектом в списке. -->
+  <div class="adm-panel" id="adm-users" style="display:none">
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Пользователи</div>
+      <div id="usersList" style="margin-bottom:12px;overflow-x:auto"></div>
+      <div style="font-size:11px;color:var(--muted)">Замещение (и.о.) — временная дополнительная роль: расширяет права, не меняя пилотскую идентичность и привязку к расчёту. Снимается вручную (выбрать «— нет —» → Замещение).</div>
+    </div>
+    <div class="card" id="usersCard">
+      <div class="card-title">Добавить пользователя</div>
+      <div class="form-row cols3">
+        <div><label>Логин</label><input id="nu-login" placeholder="pop" autocomplete="off"></div>
+        <div><label>Пароль</label><input id="nu-password" type="password" placeholder="пароль" autocomplete="new-password"></div>
+        <div><label>Роль</label>
+          <select id="nu-role" onchange="nuRoleChange()">
+            <option value="pilot">Пилот</option>
+            <option value="tech">Техник</option>
+            <option value="cmd">Командир</option>
+            <option value="admin">Администратор</option>
+            <option value="viewer">Наблюдатель (только просмотр)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row cols2" id="nu-callsign-row">
+        <div>
+          <label>Позывной в базе (имя пилота)</label>
+          <select id="nu-callsign">
+            <option value="">— выбрать из расчётов —</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:center;font-size:11px;color:var(--muted);padding-top:16px">
+          Свяжет логин с вылетами и дронами пилота
+        </div>
+      </div>
+      <div class="form-row cols2">
+        <div><label>Ключ шифрования для ссылки</label><input id="nu-enckey" placeholder="автозаполнение из настроек"></div>
+        <div style="display:flex;flex-direction:column;justify-content:flex-end">
+          <button class="btn btn-success btn-sm" onclick="createUser()">Создать и получить ссылку</button>
+        </div>
+      </div>
+      <div id="nu-link-result" style="display:none;margin-top:10px;padding:10px;background:var(--bg2);border:1px solid var(--border2);font-size:11px">
+        <div style="color:var(--green);font-weight:700;margin-bottom:6px">✓ Ссылка для пользователя:</div>
+        <div id="nu-link-text" style="word-break:break-all;color:var(--text);margin-bottom:8px"></div>
+        <button class="btn btn-sm btn-primary" onclick="copyUserLink()">Копировать ссылку</button>
+      </div>
     </div>
   </div>
 
@@ -771,50 +821,7 @@
     </div>
   </div>
 
-  <!-- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только admin — applySettingsVisibility).
-       Был дубль атрибута style — display:none игнорировался браузером, карточку видели ВСЕ роли -->
-  <div class="card" style="margin-bottom:10px;display:none" id="usersCard">
-    <div class="card-title">Пользователи (только Администратор)</div>
-    <div id="usersList" style="margin-bottom:12px"></div>
-    <div style="padding-top:10px;border-top:1px solid var(--border)">
-      <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text2)">Добавить пользователя</div>
-      <div class="form-row cols3">
-        <div><label>Логин</label><input id="nu-login" placeholder="pop" autocomplete="off"></div>
-        <div><label>Пароль</label><input id="nu-password" type="password" placeholder="пароль" autocomplete="new-password"></div>
-        <div><label>Роль</label>
-          <select id="nu-role" onchange="nuRoleChange()">
-            <option value="pilot">Пилот</option>
-            <option value="tech">Техник</option>
-            <option value="cmd">Командир</option>
-            <option value="admin">Администратор</option>
-            <option value="viewer">Наблюдатель (только просмотр)</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-row cols2" id="nu-callsign-row">
-        <div>
-          <label>Позывной в базе (имя пилота)</label>
-          <select id="nu-callsign">
-            <option value="">— выбрать из расчётов —</option>
-          </select>
-        </div>
-        <div style="display:flex;flex-direction:column;justify-content:center;font-size:11px;color:var(--muted);padding-top:16px">
-          Свяжет логин с вылетами и дронами пилота
-        </div>
-      </div>
-      <div class="form-row cols2">
-        <div><label>Ключ шифрования для ссылки</label><input id="nu-enckey" placeholder="автозаполнение из настроек"></div>
-        <div style="display:flex;flex-direction:column;justify-content:flex-end">
-          <button class="btn btn-success btn-sm" onclick="createUser()">Создать и получить ссылку</button>
-        </div>
-      </div>
-      <div id="nu-link-result" style="display:none;margin-top:10px;padding:10px;background:var(--bg2);border:1px solid var(--border2);font-size:11px">
-        <div style="color:var(--green);font-weight:700;margin-bottom:6px">✓ Ссылка для пользователя:</div>
-        <div id="nu-link-text" style="word-break:break-all;color:var(--text);margin-bottom:8px"></div>
-        <button class="btn btn-sm btn-primary" onclick="copyUserLink()">Копировать ссылку</button>
-      </div>
-    </div>
-  </div>
+  <!-- Управление пользователями переехало в Администратор → Пользователи (adm-users, v0.26) -->
 
   <!-- СТАТУС СИНХРОНИЗАЦИИ -->
   <div class="card" style="margin-bottom:10px">
