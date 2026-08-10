@@ -1724,7 +1724,22 @@ function renderDashboard(){
     `<div class="stat-row"><span>За месяц: ${fMonth.length}</span><span style="font-size:11px;color:var(--color-text-secondary)">база: ${fAll.length}</span></div>`;
 
   // --- Расчёты ---
-  document.getElementById('dashSquads').innerHTML=state.squads.map(sq=>{
+  // Скрываем пилота только если ОДНОВРЕМЕННО: нет вылетов, нет дронов (qty все 0),
+  // нет ни обычных медалей, ни золотых щитов (две РАЗНЫЕ системы: calcPilotMedals — окно
+  // 10 дней, pilotGoldShields — абсолютные рекорды за всё время). Сортировка: вылеты за
+  // сегодня убыв., при равенстве — по имени.
+  document.getElementById('dashSquads').innerHTML=state.squads
+    .filter(sq=>{
+      if(fAll.some(x=>x.pilot===sq.pilot)) return true;
+      if(sq.drones.some(d=>d.qty!==0)) return true;
+      return pilotGoldShields(sq.pilot).length>0||calcPilotMedals(sq.pilot).length>0;
+    })
+    .sort((a,b)=>{
+      const ca=fToday.filter(x=>x.pilot===a.pilot).length;
+      const cb=fToday.filter(x=>x.pilot===b.pilot).length;
+      return cb-ca||a.pilot.localeCompare(b.pilot,'ru');
+    })
+    .map(sq=>{
     const sqFlightsToday=fToday.filter(x=>x.pilot===sq.pilot);
     const sqFlightsWeek=fWeek.filter(x=>x.pilot===sq.pilot);
     const sqLossWeek=sqFlightsWeek.filter(x=>x.returned==='no').length;
@@ -3254,31 +3269,39 @@ async function toggleUser(login,active){
 }
 
 
-// ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА (10 минут для пилота) ============
-function canEditFlight(f){
-  // Наблюдатель — только просмотр, окно редактирования не показываем
-  if(isViewerRole(state.role)||isViewerRole(authUser.role))return false;
-  // Администратор редактирует через свой раздел — в общем журнале полоса не нужна.
-  // Семантика «роль ИЛИ учётка»: admin во «взгляде пилота» полосу тоже не видит.
-  if(hasRole('admin')||authUser.role==='admin')return false;
-  // Проверяем 10-минутное окно
-  const savedTs=f._savedTs||0;
-  if(!savedTs)return false; // нет метки времени — не показываем
-  const minsLeft=(10*60*1000-(Date.now()-savedTs));
-  if(minsLeft<=0)return false;
-  // Кто подал — тот и может редактировать
+// ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА В ЖУРНАЛЕ (окно 30 минут) ============
+// Единая точка окна правки — editWindowMs(f): 30 мин от МОМЕНТА ВВОДА (f._savedTs,
+// не f.time). tech/cmd/admin (эффективная роль) — любой вылет; пилот — свой
+// (исполнитель или автор записи); остальные — 0 (нет доступа). Полный доступ
+// админа через раздел Администратор → Вылеты — отдельный путь, окном не ограничен.
+const FLIGHT_EDIT_WINDOW_MS=30*60*1000;
+function editWindowMs(f){
+  if(isViewerRole(state.role)||isViewerRole(authUser.role))return 0;
+  if(hasAnyRole(['tech','cmd','admin'])||authUser.role==='admin')return FLIGHT_EDIT_WINDOW_MS;
   const submitter=f._submittedBy||f.pilot||'';
-  return submitter===authUser.login||f.pilot===authUser.login;
+  return (submitter===authUser.login||f.pilot===authUser.login)?FLIGHT_EDIT_WINDOW_MS:0;
+}
+
+function canEditFlight(f){
+  const win=editWindowMs(f);
+  const savedTs=f._savedTs||0;
+  if(!win||!savedTs)return false; // нет доступа или нет метки времени
+  return Date.now()-savedTs<win;
 }
 
 function renderFlightEditRow(x, realIdx){
   if(!canEditFlight(x))return '';
-  const minsLeft=Math.max(1,Math.round((10*60*1000-(Date.now()-(x._savedTs||0)))/60000));
-  return '<div style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
+  const minsLeft=Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));
+  // Пилот записи для picker'ов — через realIdx в рантайме (не вшиваем имя в inline-JS)
+  const pj='(state.flights['+realIdx+']||{}).pilot||\'\'';
+  return '<div class="fl-edit-row" style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
     +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap">✏ '+minsLeft+' мин</span>'
+    +'<input style="width:106px;font-size:11px;padding:2px 5px" type="date" value="'+esc(x.date||'')+'" id="edit-date-'+realIdx+'">'
+    +'<input style="width:66px;font-size:11px;padding:2px 5px" type="time" value="'+esc(x.time||'')+'" id="edit-time-'+realIdx+'">'
     +'<input style="width:36px;font-size:11px;padding:2px 5px;text-align:center" type="number" min="1" value="'+(x.flightnum||'')+'" placeholder="#" id="edit-flightnum-'+realIdx+'">'
-    +'<input style="width:90px;font-size:11px;padding:2px 5px" list="dl-ammo-catalog" value="'+esc(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off">'
-    +'<input style="width:75px;font-size:11px;padding:2px 5px" list="dl-drones-smart" value="'+esc(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off">'
+    +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.target||'')+'" placeholder="Точка" id="edit-target-'+realIdx+'" autocomplete="off">'
+    +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartAmmo('+pj+'),v=>{this.value=v})">'
+    +'<input style="width:75px;font-size:11px;padding:2px 5px" value="'+esc(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartDrones('+pj+'),v=>{this.value=v})">'
     +'<select style="font-size:11px;padding:2px 3px" id="edit-result-'+realIdx+'">'
     +'<option value="yes" '+(x.result==='yes'?'selected':'')+'>✅ выполнена</option>'
     +'<option value="no" '+(x.result==='no'?'selected':'')+'>❌ нет</option></select>'
@@ -3294,6 +3317,11 @@ function saveFlightEdit(idx){
   const f=state.flights[idx];
   if(!f||!canEditFlight(f))return;
   const oldReturned=f.returned;
+  // Дата/время: связка с loss-записью не рвётся — поиск идёт по flightId первым
+  // уровнем (writeDroneLoss пишет f.id), дата+время — только фолбэк для исторических
+  f.date=document.getElementById('edit-date-'+idx)?.value||f.date;
+  f.time=document.getElementById('edit-time-'+idx)?.value||f.time;
+  f.target=document.getElementById('edit-target-'+idx)?.value||f.target;
   f.ammo=document.getElementById('edit-ammo-'+idx)?.value||f.ammo;
   f.drone=document.getElementById('edit-drone-'+idx)?.value||f.drone;
   f.result=document.getElementById('edit-result-'+idx)?.value||f.result;
@@ -3323,23 +3351,60 @@ function saveFlightEdit(idx){
   renderInventory();
   logAction('flight','edit','Вылет #'+f.flightnum+' '+f.pilot+' отредактирован'+(oldReturned!==f.returned?' [смена статуса борта]':''));
 }
-// Умный список точек — часто используемые вверху, не используемые 7 дней скрыты
-function getSmartTargets(){
+// Частотный список значений поля вылета для пилота: окно 7 дней, при пустом
+// результате фолбэки (вся история пилота → вся история всех) — попап никогда не пустой
+function _smartFieldList(field,pilot){
   const cutoff=new Date();
   cutoff.setDate(cutoff.getDate()-7);
   const cutoffStr=localISO(cutoff);
+  const byFreq=list=>{
+    const freq={};
+    list.forEach(f=>{freq[f[field]]=(freq[f[field]]||0)+1;});
+    return Object.entries(freq).sort((a,b)=>b[1]-a[1]).map(([v])=>v);
+  };
+  let recent=state.flights.filter(f=>(!pilot||f.pilot===pilot)&&f[field]&&f.date>=cutoffStr);
+  if(!recent.length)recent=state.flights.filter(f=>(!pilot||f.pilot===pilot)&&f[field]);
+  if(!recent.length)recent=state.flights.filter(f=>f[field]);
+  return byFreq(recent);
+}
+
+// Умный список точек — часто используемые текущим пилотом вверху
+function getSmartTargets(){
   const pilot=document.getElementById('qf-pilot')?.value||'';
-  // Берём вылеты текущего пилота за последние 7 дней
-  const recent=state.flights.filter(f=>
-    (!pilot||f.pilot===pilot)&&f.target&&f.date>=cutoffStr
-  );
-  // Считаем частоту
-  const freq={};
-  recent.forEach(f=>{freq[f.target]=(freq[f.target]||0)+1;});
-  // Сортируем по частоте убыванием
-  return Object.entries(freq)
-    .sort((a,b)=>b[1]-a[1])
-    .map(([t])=>t);
+  return _smartFieldList('target',pilot);
+}
+
+// Умный список боеприпасов — частота по пилоту, справочник ammoCatalog хвостом
+function getSmartAmmo(pilot){
+  if(pilot==null)pilot=document.getElementById('qf-pilot')?.value||'';
+  const list=_smartFieldList('ammo',pilot);
+  ammoCatalog.forEach(a=>{if(a.name&&!list.includes(a.name))list.push(a.name);});
+  return list;
+}
+
+// Умный список бортов: пилот выбран и найден в расчётах → только его борта (qty>0);
+// иначе — борта всех расчётов (qty>0) + склад со статусом БГ (qty>0), без nbg/lost.
+// Список нестрогий — свободный ввод модели в поле сохранён.
+// Без аргумента — пилот из формы подачи (qf-pilot); полоса журнала передаёт пилота записи.
+function getSmartDrones(pilot){
+  if(pilot==null)pilot=document.getElementById('qf-pilot')?.value||'';
+  pilot=(pilot||'').trim();
+  const sq=pilot?state.squads.find(s=>s.pilot===pilot):null;
+  if(sq){
+    const own=[...new Set(sq.drones.filter(d=>d.qty>0).map(d=>d.name))].sort((a,b)=>a.localeCompare(b,'ru'));
+    if(own.length)return own;
+  }
+  return [...new Set([
+    ...state.squads.flatMap(s=>s.drones.filter(d=>d.qty>0).map(d=>d.name)),
+    ...state.stock.filter(d=>d.status==='bg'&&d.qty>0).map(d=>d.name)
+  ])].sort((a,b)=>a.localeCompare(b,'ru'));
+}
+
+// Список пилотов для пикера: расчёты (канонический источник, §9), фолбэк — вылеты
+function getSmartPilots(){
+  const sq=state.squads.map(s=>s.pilot).filter(Boolean);
+  const src=sq.length?sq:state.flights.map(f=>f.pilot).filter(Boolean);
+  return [...new Set(src)].sort((a,b)=>a.localeCompare(b,'ru'));
 }
 
 // ============ QUICK PICKER ============

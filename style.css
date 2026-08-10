@@ -376,6 +376,13 @@ label{
 #page-admin input[type="time"]{min-width:60px}
 #page-admin td input[type="number"]{min-width:42px;text-align:center}
 #page-admin input{text-overflow:clip;overflow:visible}
+/* Полоса редактирования в журнале (renderFlightEditRow) — тот же фикс, что выше в админке:
+   иконка нативного пикера съедала последнюю цифру времени («15:5») и хвост даты. Ввод с клавиатуры. */
+.fl-edit-row input[type="time"]::-webkit-calendar-picker-indicator,
+.fl-edit-row input[type="date"]::-webkit-calendar-picker-indicator{display:none;-webkit-appearance:none}
+.fl-edit-row input[type="date"]{min-width:104px}
+.fl-edit-row input[type="time"]{min-width:60px}
+.fl-edit-row input{text-overflow:clip;overflow:visible}
 
 /* ============ REPORTS ============ */
 .report-block{

@@ -133,13 +133,8 @@
   <!-- форма добавления -->
   <div class="card" id="addDroneCard" style="display:none;margin-bottom:12px">
     <div style="font-size:13px;font-weight:700;margin-bottom:12px">Добавить БПЛА на склад</div>
-    <div class="form-row cols3">
+    <div class="form-row cols2">
       <div><label>Название</label><input id="newDroneName" list="dl-drones-smart" placeholder="Гамаюн13д" autocomplete="off"></div>
-      <div><label>Тип</label>
-        <select id="newDroneType">
-          <option>ФПВ</option><option>Разведчик</option><option>Ударный</option><option>Доставка</option>
-        </select>
-      </div>
       <div><label>Количество</label><input type="number" id="newDroneQty" value="1" min="1"></div>
     </div>
     <div style="display:flex;gap:8px">
@@ -285,7 +280,8 @@
       <!-- Пилот — показывается только admin/cmd/local -->
       <div id="qf-pilot-wrap" style="min-width:90px;flex:1">
         <label>Пилот</label>
-        <input id="qf-pilot" list="dl-pilots" placeholder="Имя" autocomplete="off">
+        <input id="qf-pilot" placeholder="Имя" autocomplete="off"
+          onclick="event.stopPropagation();showQuickPicker(this,getSmartPilots(),v=>{this.value=v})">
       </div>
 
       <div style="min-width:100px;flex:1.2">
@@ -296,12 +292,12 @@
       <div style="min-width:90px;flex:1">
         <label>Боеприпас</label>
         <input id="qf-ammo" placeholder="Пом2" autocomplete="off"
-          onclick="event.stopPropagation();const al=ammoCatalog.length?ammoCatalog.map(a=>a.name):[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();showQuickPicker(this,al,v=>{this.value=v})">
+          onclick="event.stopPropagation();showQuickPicker(this,getSmartAmmo(),v=>{this.value=v})">
       </div>
       <div style="min-width:100px;flex:1">
         <label>БПЛА</label>
         <input id="qf-drone" placeholder="Гамаюн13" autocomplete="off"
-          onclick="event.stopPropagation();const dl=[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort();showQuickPicker(this,dl,v=>{this.value=v})">
+          onclick="event.stopPropagation();showQuickPicker(this,getSmartDrones(),v=>{this.value=v})">
       </div>
       <div style="width:90px">
         <label>Задача</label>
