@@ -52,10 +52,19 @@ function guardWrite(){
   alert('Роль «Наблюдатель» — только просмотр');
   return false;
 }
+// Админская УЧЁТНАЯ ЗАПИСЬ (не роль представления и не замещение). Единственный
+// источник правды для ОПАСНЫХ операций: перешифровка облака, URL Apps Script,
+// управление пользователями/токенами. Не зависит ни от переключателя ролей, ни от
+// acting_role — «и.о. admin» не существует (админ единственный, замещать можно только
+// cmd/tech/pilot, см. AR_OPTS). Предикат (без alert) — для видимости элементов;
+// для действий — guardAdmin() ниже, он же с сообщением.
+function isAdminAccount(){
+  return authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin';
+}
 // Guard операций администратора (создание пользователей, смена токенов и т.п.).
 // Проверка по УЧЁТКЕ (authUser), а не по переключателю — admin в роли cmd сохраняет права.
 function guardAdmin(){
-  if(authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin')return true;
+  if(isAdminAccount())return true;
   alert('Доступно только администратору');
   return false;
 }
@@ -968,7 +977,9 @@ function adminCleanOrphanLosses(){
 // до 100+ копий одной потери). Первая запись в массиве остаётся, id остальных
 // уходят в tombstones — иначе неразрушающий merge/поллинг вернёт их из облака.
 function adminDedupeLossTransfers(){
-  if(!hasRole('admin')){alert('Доступно только администратору');return;}
+  // По УЧЁТКЕ admin (isAdminAccount), не по роли представления: массовое удаление
+  // записей о потерях не должно зависеть от «взгляда» переключателя (12.08.2026)
+  if(!isAdminAccount()){alert('Доступно только администратору');return;}
   if(!(state.transfers||[]).some(t=>t.type==='loss')){
     setStatus('saveStatus','Записей о потерях в журнале нет','muted');
     return;
@@ -1283,7 +1294,9 @@ function syncStockLegacyPlan(){
 // существует (note со «стартовый учёт (легаси)»), пропускается с предупреждением;
 // плюс после успешного прогона diff_adj=0 и план сам становится пустым.
 function syncStockFixLegacy(confirm){
-  if(!hasRole('admin')){alert('Доступно только администратору');return;}
+  // По УЧЁТКЕ admin (isAdminAccount), не по роли представления: создание легаси-приходов
+  // в журнале движений не должно зависеть от «взгляда» переключателя (12.08.2026)
+  if(!isAdminAccount()){alert('Доступно только администратору');return;}
   const LEGACY_NOTE='стартовый учёт (легаси), принято до ведения журнала';
   const LEGACY_DATE='2000-01-01';
   const norm=s=>(s||'').toLowerCase().trim();
@@ -1725,11 +1738,18 @@ function renderDashboard(){
 
   // --- Расчёты ---
   // Скрываем пилота только если ОДНОВРЕМЕННО: нет вылетов ЗА НЕДЕЛЮ (fWeek — то же
-  // окно, что «За неделю: N» выше) И нет обычных медалей (calcPilotMedals — окно 10 дней).
-  // Золотые щиты и дроны в критерий НЕ входят.
+  // окно, что «За неделю: N» выше), НЕТ БОРТОВ НА РУКАХ и нет обычных медалей
+  // (calcPilotMedals — окно 10 дней). Борта добавлены 12.08.2026: расчёт с техникой
+  // на руках, но без вылетов за неделю (отпуск/ремонт/затишье), исчезал с Обзора
+  // ВМЕСТЕ СО СВОИМ СКЛАДОМ — борта переставали быть видны. Проверка бортов стоит
+  // ДО медалей: она дешёвая, а calcPilotMedals гоняет computeMedalWinners на каждого.
+  // Золотые щиты в критерий не входят (щит без бортов и без активности — история,
+  // не текущее состояние). Пустой расчёт без вылетов по-прежнему скрыт.
   // Сортировка: вылеты за сегодня убыв., при равенстве — по имени.
   document.getElementById('dashSquads').innerHTML=state.squads
-    .filter(sq=>fWeek.some(x=>x.pilot===sq.pilot)||calcPilotMedals(sq.pilot).length>0)
+    .filter(sq=>fWeek.some(x=>x.pilot===sq.pilot)
+      ||(sq.drones||[]).some(d=>(d.qty||0)>0)
+      ||calcPilotMedals(sq.pilot).length>0)
     .sort((a,b)=>{
       const ca=fToday.filter(x=>x.pilot===a.pilot).length;
       const cb=fToday.filter(x=>x.pilot===b.pilot).length;
@@ -3170,8 +3190,8 @@ function _userLastLogin(login){
 }
 
 async function loadUsersList(){
-  // Список пользователей (логины/роли/токен-операции) — только админской учётке
-  if(!(authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin'))return;
+  // Список пользователей (логины/роли/токен-операции) — только админской УЧЁТКЕ
+  if(!isAdminAccount())return;
   const {url}=syncGetCfg();
   if(!url||!authToken)return;
   try{
@@ -3180,8 +3200,18 @@ async function loadUsersList(){
     const users=d.users||[];
     const el=document.getElementById('usersList');
     if(!el)return;
-    // Селект замещения: '' = нет; значение из листа users (acting_role, Backend v7.6)
-    const AR_OPTS=['','cmd','tech','pilot','admin','viewer'];
+    // Селект замещения: '' = нет; значение из листа users (acting_role, Backend v7.6).
+    // ЗАМЕЩАТЬ МОЖНО ТОЛЬКО cmd/tech/pilot (аудит 12.08.2026):
+    //  • VIEWER — сужение прав, а замещение только РАСШИРЯЕТ. Ломается тихо: серверный
+    //    viewerGuard (backend.gs) считает ЭФФЕКТИВНУЮ роль и режет запись, клиент
+    //    (guardWrite/syncReadOnly) смотрит на базовую и писать разрешает → POST уходит
+    //    no-cors, ответ непроверяем, на экране «сохранено», в облаке пусто = ТИХАЯ
+    //    ПОТЕРЯ ДАННЫХ. Снятие прав — блокировкой учётки («Блок») или сменой роли.
+    //  • ADMIN — админ единственный, «и.о. admin» не существует. Сервер и так не давал
+    //    замещающему админ-операций (ADMIN_ACTIONS по БАЗОВОЙ роли), но клиент по
+    //    hasRole('admin') открывал ему опасное: перешифровку облака, URL Apps Script.
+    //    Опасные операции теперь строго по УЧЁТКЕ — isAdminAccount(), см. ниже.
+    const AR_OPTS=['','cmd','tech','pilot'];
     el.innerHTML=users.length?`
       <table style="width:100%;font-size:12px">
         <thead><tr><th>Логин</th><th>Роль</th><th>Замещение</th><th>Статус</th><th>Последний вход</th><th>Действие</th></tr></thead>
@@ -3285,6 +3315,18 @@ function canEditFlight(f){
   return Date.now()-savedTs<win;
 }
 
+// Резолв вылета по ключу полосы редактирования: сначала стабильный id, затем
+// индексный фолбэк 'iN' (записи без id) и голое число (совместимость со старой
+// разметкой, оставшейся в DOM до перерисовки).
+function _flightByKey(key){
+  if(key==null)return null;
+  const k=String(key);
+  const byId=state.flights.find(f=>f&&f.id!=null&&String(f.id)===k);
+  if(byId)return byId;
+  const m=/^i?(\d+)$/.exec(k);
+  return m?(state.flights[+m[1]]||null):null;
+}
+
 function renderFlightEditRow(x, realIdx){
   if(!canEditFlight(x))return '';
   const minsLeft=Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));
@@ -3292,49 +3334,66 @@ function renderFlightEditRow(x, realIdx){
   // атрибут, Chromium рендерит контрол пустым; паддинг как в toMs (renderFlights)
   const _hm=(x.time||'').trim();
   const hmNorm=_hm.includes(':')?_hm.split(':').map(p=>p.padStart(2,'0')).join(':'):_hm;
-  // Пилот записи для picker'ов — через realIdx в рантайме (не вшиваем имя в inline-JS)
-  const pj='(state.flights['+realIdx+']||{}).pilot||\'\'';
+  // Адресация полосы — по СТАБИЛЬНОМУ id записи, не по индексу: syncPushAll при merge
+  // доливает облачные вылеты и пересортировывает state.flights БЕЗ перерисовки
+  // (sync.js), поэтому зашитый в DOM индекс устаревал — правка уходила в чужой вылет
+  // либо тихо не проходила (canEditFlight у соседа false → молчаливый return).
+  // Фолбэк 'i'+realIdx — только для исторических записей без id.
+  const key=x.id?String(x.id):('i'+realIdx);
+  const fid=esc(key);                                          // в id атрибутов
+  const kjs=key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");     // в inline-JS (одинарные кавычки)
+  // Пилот записи для picker'ов — резолвим в рантайме (не вшиваем имя в inline-JS)
+  const pj='(_flightByKey(\''+kjs+'\')||{}).pilot||\'\'';
   return '<div class="fl-edit-row" style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
     +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap">✏ '+minsLeft+' мин</span>'
-    +'<input style="width:106px;font-size:11px;padding:2px 5px" type="date" value="'+esc(x.date||'')+'" id="edit-date-'+realIdx+'">'
-    +'<input style="width:66px;font-size:11px;padding:2px 5px" type="time" value="'+esc(hmNorm)+'" id="edit-time-'+realIdx+'">'
-    +'<input style="width:36px;font-size:11px;padding:2px 5px;text-align:center" type="number" min="1" value="'+(x.flightnum||'')+'" placeholder="#" id="edit-flightnum-'+realIdx+'">'
-    +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.target||'')+'" placeholder="Точка" id="edit-target-'+realIdx+'" autocomplete="off">'
-    +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartAmmo('+pj+'),v=>{this.value=v})">'
-    +'<input style="width:75px;font-size:11px;padding:2px 5px" value="'+esc(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+realIdx+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartDrones('+pj+'),v=>{this.value=v})">'
-    +'<select style="font-size:11px;padding:2px 3px" id="edit-result-'+realIdx+'">'
+    +'<input style="width:106px;font-size:11px;padding:2px 5px" type="date" value="'+esc(x.date||'')+'" id="edit-date-'+fid+'">'
+    +'<input style="width:66px;font-size:11px;padding:2px 5px" type="time" value="'+esc(hmNorm)+'" id="edit-time-'+fid+'">'
+    +'<input style="width:36px;font-size:11px;padding:2px 5px;text-align:center" type="number" min="1" value="'+(x.flightnum||'')+'" placeholder="#" id="edit-flightnum-'+fid+'">'
+    +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.target||'')+'" placeholder="Точка" id="edit-target-'+fid+'" autocomplete="off">'
+    +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+fid+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartAmmo('+pj+'),v=>{this.value=v})">'
+    +'<input style="width:75px;font-size:11px;padding:2px 5px" value="'+esc(x.drone||'')+'" placeholder="БПЛА" id="edit-drone-'+fid+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartDrones('+pj+'),v=>{this.value=v})">'
+    +'<select style="font-size:11px;padding:2px 3px" id="edit-result-'+fid+'">'
     +'<option value="yes" '+(x.result==='yes'?'selected':'')+'>✅ выполнена</option>'
     +'<option value="no" '+(x.result==='no'?'selected':'')+'>❌ нет</option></select>'
-    +'<select style="font-size:11px;padding:2px 3px" id="edit-returned-'+realIdx+'">'
+    +'<select style="font-size:11px;padding:2px 3px" id="edit-returned-'+fid+'">'
     +'<option value="yes" '+(x.returned==='yes'?'selected':'')+'>вернул</option>'
     +'<option value="no" '+(x.returned==='no'?'selected':'')+'>потерян</option></select>'
-    +'<input style="flex:1;min-width:80px;font-size:11px;padding:2px 5px" value="'+esc(x.note||'')+'" placeholder="Примечание" id="edit-note-'+realIdx+'">'
-    +'<button class="btn btn-success btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="saveFlightEdit('+realIdx+')">✓</button>'
+    +'<input style="flex:1;min-width:80px;font-size:11px;padding:2px 5px" value="'+esc(x.note||'')+'" placeholder="Примечание" id="edit-note-'+fid+'">'
+    +'<button class="btn btn-success btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="saveFlightEdit(\''+kjs+'\')">✓</button>'
     +'</div>';
 }
 
-function saveFlightEdit(idx){
-  const f=state.flights[idx];
-  if(!f||!canEditFlight(f))return;
+// key — стабильный id вылета (фолбэк 'iN' для записей без id), см. renderFlightEditRow.
+// Молчаливый провал недопустим: раньше при устаревшем индексе функция просто выходила,
+// и клик по ✓ выглядел как сохранение (ни очереди, ни записи, после F5 старое значение).
+function saveFlightEdit(key){
+  const f=_flightByKey(key);
+  if(!f){ alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.'); return; }
+  if(!canEditFlight(f)){
+    alert('Окно правки (30 мин) истекло или нет прав. Полный доступ — Администратор → Вылеты.');
+    renderFlights();   // убрать устаревшую полосу из DOM
+    return;
+  }
+  const sfx=String(key); // суффикс id полей полосы = ключ кнопки (esc в разметке декодируется браузером)
   const oldReturned=f.returned;
   // Дата/время: связка с loss-записью не рвётся — поиск идёт по flightId первым
   // уровнем (writeDroneLoss пишет f.id), дата+время — только фолбэк для исторических
-  f.date=document.getElementById('edit-date-'+idx)?.value||f.date;
+  f.date=document.getElementById('edit-date-'+sfx)?.value||f.date;
   // Время: у частично заполненного time-контрола value==='' (спецификация), молчаливый
   // фолбэк выглядел как «откат при сохранении». badInput отличает недобитый ввод
   // (например «15:--») от нетронутого пустого поля — предупреждаем, не глотаем.
-  const tEl=document.getElementById('edit-time-'+idx);
+  const tEl=document.getElementById('edit-time-'+sfx);
   if(tEl){
     if(tEl.value) f.time=tEl.value;
     else if(tEl.validity&&tEl.validity.badInput) alert('Время введено не полностью (часы И минуты) — оставлено прежнее: '+(f.time||'—'));
   }
-  f.target=document.getElementById('edit-target-'+idx)?.value||f.target;
-  f.ammo=document.getElementById('edit-ammo-'+idx)?.value||f.ammo;
-  f.drone=document.getElementById('edit-drone-'+idx)?.value||f.drone;
-  f.result=document.getElementById('edit-result-'+idx)?.value||f.result;
-  f.returned=document.getElementById('edit-returned-'+idx)?.value||f.returned;
-  f.note=document.getElementById('edit-note-'+idx)?.value??f.note;
-  const fn=document.getElementById('edit-flightnum-'+idx)?.value;
+  f.target=document.getElementById('edit-target-'+sfx)?.value||f.target;
+  f.ammo=document.getElementById('edit-ammo-'+sfx)?.value||f.ammo;
+  f.drone=document.getElementById('edit-drone-'+sfx)?.value||f.drone;
+  f.result=document.getElementById('edit-result-'+sfx)?.value||f.result;
+  f.returned=document.getElementById('edit-returned-'+sfx)?.value||f.returned;
+  f.note=document.getElementById('edit-note-'+sfx)?.value??f.note;
+  const fn=document.getElementById('edit-flightnum-'+sfx)?.value;
   if(fn)f.flightnum=parseInt(fn);
   f._edited=true;
   // Смена статуса борта в окне редактирования — пересчёт склада, как в админском пути
@@ -3777,8 +3836,12 @@ function actlogClearFilters(){
 //  cmd/tech/pilot   — ключ шифрования (со своей кнопкой сохранения) + Статус с «Синхронизировать сейчас»;
 //  viewer           — ключ шифрования + только текст статуса (без кнопок).
 // Пользователи переехали в Администратор → Пользователи (v0.26, вкладка видна только admin).
+// Карточка синхронизации (URL Apps Script) и блок смены ключа — по УЧЁТКЕ admin
+// (isAdminAccount), не по эффективной роли: это опасные операции, а «и.о. admin» не
+// существует (12.08.2026). Побочно: админ во «взгляде командира/пилота» их теперь видит —
+// переключатель ролей меняет представление данных, а не права учётки.
 function applySettingsVisibility(){
-  const isAdmin=hasRole('admin');
+  const isAdmin=isAdminAccount();
   const isViewer=isViewerRole(currentRole())||isViewerRole(authUser.role);
   const show=(id,v)=>{ const el=document.getElementById(id); if(el)el.style.display=v?'':'none'; };
   show('cfg-sync-card',isAdmin);        // URL Apps Script, проверка, загрузка/выгрузка
@@ -3865,6 +3928,7 @@ function cfgSaveSettings(){
   cfg.url=(document.getElementById('cfg-url').value||'').trim();
   const keyField=(document.getElementById('cfg-key').value||'').trim();
   // Не затираем ключ если поле пустое — берём текущий из памяти
+  if(keyField&&keyField!==cfg.key) getKeyCacheClear(); // ключ реально сменился — сбросить кэш деривации
   if(keyField) cfg.key=keyField;
   try{
     localStorage.setItem('cfg_url',cfg.url);
@@ -3886,6 +3950,7 @@ function cfgSaveSettings(){
 function cfgSaveKeyOnly(){
   const keyField=(document.getElementById('cfg-key').value||'').trim();
   if(!keyField){ showSyncToast('⚠ Введите ключ шифрования'); return; }
+  if(keyField!==cfg.key) getKeyCacheClear(); // смена ключа — сбросить кэш деривации
   cfg.key=keyField;
   try{ localStorage.setItem('cfg_key',cfg.key); }catch(e){}
   updateEncryptBadge();
@@ -3897,7 +3962,8 @@ function updateEncryptBadge(){
   const el=document.getElementById('cfg-encrypt-on');
   if(el)el.style.display=cfg.key?'block':'none';
   const rb=document.getElementById('cfg-reencrypt-block');
-  if(rb)rb.style.display=(cfg.key&&hasRole('admin'))?'block':'none';
+  // Смена ключа — опасная операция: гейт по УЧЁТКЕ admin, не по эффективной роли
+  if(rb)rb.style.display=(cfg.key&&isAdminAccount())?'block':'none';
 }
 
 // Смена ключа шифрования: читает все зашифрованные листы старым ключом,
@@ -3910,7 +3976,10 @@ async function cfgReencrypt(){
   const newKey=(document.getElementById('cfg-newkey').value||'').trim();
   const newKey2=(document.getElementById('cfg-newkey2').value||'').trim();
   const {url,token}=syncGetCfg();
-  const isAdmin=hasRole('admin')||authUser.role==='admin'; // «роль ИЛИ учётка» — admin в чужом взгляде может менять ключ
+  // Перешифровка ВСЕГО облака — самая опасная операция приложения: строго по УЧЁТКЕ
+  // admin (isAdminAccount). Раньше «роль ИЛИ учётка» с hasRole('admin') пускало сюда
+  // и.о. admin — замещение admin запрещено (AR_OPTS), гейт приведён к учётке явно.
+  const isAdmin=isAdminAccount();
 
   if(!isAdmin){setStatus(STAT,'Только администратор может менять ключ','err');return;}
   if(!url||!token){setStatus(STAT,'Нет подключения к облаку или прав','err');return;}
@@ -3950,7 +4019,9 @@ async function cfgReencrypt(){
     const res=await syncPost(url,JSON.stringify({action:'write',token,data}));
     if(!res.ok)throw new Error(res.error||'ошибка записи');
 
-    // 5. Сохраняем новый ключ локально
+    // 5. Сохраняем новый ключ локально. Кэш деривации чистим ЗДЕСЬ, а не раньше:
+    // выше в этой же функции старый ключ ещё нужен (чтение облака старым → запись новым).
+    getKeyCacheClear();
     cfg.key=newKey;
     try{localStorage.setItem('cfg_key',newKey);}catch(e){}
     const kField=document.getElementById('cfg-key');
@@ -3996,10 +4067,30 @@ function renderSettingsStatus(){
 }
 
 // AES-256-GCM
-async function getKey(password){
+// Кэш выведенных ключей (аудит 12.08.2026). PBKDF2 100k итераций ≈40 мс, а getKey
+// звался на КАЖДУЮ запись: полная загрузка (~1700 строк) ≈69 с CPU, ambient-merge
+// syncPushAll (чтение+шифрование ~1200 записей через 2 с после каждой правки) ≈97 с.
+// Теперь деривация одна на ключ. Соль/итерации/алгоритм ПРЕЖНИЕ — формат данных не
+// меняется, старые записи читаются как раньше.
+// Кэшируем сам Promise, а не разрешённый ключ: строки шифруются/расшифровываются
+// пачкой через Promise.all — к моменту возврата первой деривации остальные вызовы
+// уже стартовали бы, и кэш «готового ключа» их не поймал бы.
+const _keyCache=new Map();
+// Сброс — при смене ключа шифрования (cfgReencrypt / сохранение нового ключа),
+// чтобы в памяти не оставался старый выведенный ключ. Корректность от этого не
+// зависит (кэш адресуется паролем), это гигиена.
+function getKeyCacheClear(){ _keyCache.clear(); }
+function getKey(password){
+  const pw=String(password??'');
+  const hit=_keyCache.get(pw);
+  if(hit) return hit;
   const enc=new TextEncoder();
-  const km=await crypto.subtle.importKey('raw',enc.encode(password),{name:'PBKDF2'},false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('asu-bpla-v1'),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  const p=crypto.subtle.importKey('raw',enc.encode(pw),{name:'PBKDF2'},false,['deriveKey'])
+    .then(km=>crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('asu-bpla-v1'),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']))
+    .catch(e=>{ _keyCache.delete(pw); throw e; }); // неудачную деривацию не кэшируем
+  if(_keyCache.size>8) _keyCache.clear(); // страховка от роста при опечатках в поле ключа
+  _keyCache.set(pw,p);
+  return p;
 }
 async function aesEncrypt(text,password){
   const key=await getKey(password);

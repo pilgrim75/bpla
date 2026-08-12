@@ -153,6 +153,18 @@ async function syncPost(url, body){
   }
 }
 
+// Отметка времени успешной синхронизации с облаком. Читается renderSettingsStatus
+// (app.js, «Последняя синхронизация: …»). До 12.08.2026 ключ 'last_sync' только
+// ЧИТАЛСЯ и никем не писался — индикатор в Настройках всегда показывал
+// «Ещё не синхронизировано», даже когда обмен шёл нормально.
+// Ставится в двух точках успеха: полное чтение (syncPullAll) и полная выгрузка
+// (syncPushAll). Дельта-поллинг не отмечаем — он идёт каждые 30 с и обесценил бы
+// показатель; точечные выгрузки (stock/flights-only) тоже, чтобы «последняя
+// синхронизация» означала полный обмен, а не частичный.
+function syncStampLastSync(){
+  try{ localStorage.setItem('last_sync', String(Date.now())); }catch(e){}
+}
+
 function syncIndicator(state){
   const ind = document.getElementById('syncIndicator');
   if(!ind) return;
@@ -585,6 +597,7 @@ async function syncPushAll(silent=false){
   const res = await syncPost(url, body);
   if(res.ok){
     _lastStockTs = _stockVersion; // Не перезагружаем склад который только что сами отправили
+    syncStampLastSync();          // полная выгрузка удалась — отметка для индикатора
     console.log('[SYNC] pushAll OK');
     await syncFlushQueue();
     if(!silent){ syncIndicator('ok'); showSyncToast('✓ Данные выгружены'); }
@@ -684,6 +697,7 @@ async function syncPullAll(confirm_=false){
       const remoteStockVersion = Math.max(...(await syncDecryptRows(d.stock,key)).map(s=>s._sv||0));
       _lastStockTs = remoteStockVersion;
     }
+    syncStampLastSync(); // облако прочитано целиком — отметка для индикатора в Настройках
     return loaded;
   }catch(e){
     console.error('[SYNC] pullAll error:', e.message);

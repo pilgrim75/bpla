@@ -39,7 +39,7 @@
 <div class="app" style="visibility:hidden">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
-  <div class="version">v0.26</div>
+  <div class="version">v0.27</div>
   <select id="roleSwitch" class="tb-select" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -444,7 +444,9 @@
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-primary" id="repRunBtn" onclick="runReport()">Сформировать</button>
-      <button class="btn btn-sm" style="color:var(--muted)" onclick="copyReport()">Копировать текст</button>
+      <!-- id — стабильный хук для copyReport («✓ Скопировано»): раньше кнопка искалась
+           по тексту атрибута onclick, селектор молча ломался от правки разметки -->
+      <button class="btn btn-sm" id="repCopyBtn" style="color:var(--muted)" onclick="copyReport()">Копировать текст</button>
       <button class="btn btn-sm" style="color:var(--muted)" onclick="printReport()">Печать / PDF</button>
     </div>
   </div>
@@ -475,8 +477,10 @@
         <div class="vtx-card-head">
           <div class="card-title" style="margin:0">Готовый набор команд</div>
           <div class="vtx-card-actions">
-            <button class="btn btn-primary btn-sm" onclick="vtxGenerate()">Сгенерировать</button>
-            <button class="btn btn-sm" style="color:var(--muted)" onclick="vtxCopyCommands()">Копировать</button>
+            <!-- id — стабильные хуки для vtxSyncButtons/vtxCopyCommands (раньше искали
+                 по тексту атрибута onclick: селектор ломался от любой правки разметки) -->
+            <button class="btn btn-primary btn-sm" id="vtxGenBtn" onclick="vtxGenerate()">Сгенерировать</button>
+            <button class="btn btn-sm" id="vtxCopyBtn" style="color:var(--muted)" onclick="vtxCopyCommands()">Копировать</button>
           </div>
         </div>
         <pre id="vtxOutput" class="vtx-output"></pre>
@@ -489,8 +493,10 @@
         <div class="vtx-card-head">
           <div class="card-title" style="margin:0">Конструктор AUX → команды</div>
           <div class="vtx-card-actions">
-            <button class="btn btn-sm" onclick="vtxAddBlock('power')"><i class="ti ti-bolt"></i> + Блок мощности</button>
-            <button class="btn btn-sm" onclick="vtxAddBlock('freq')"><i class="ti ti-antenna"></i> + Блок частоты</button>
+            <!-- vtx-addblock-btn — стабильный хук для vtxSyncButtons (их две, поэтому класс,
+                 а не id; такие же кнопки рендерит vtxRenderBlocks в пустом состоянии) -->
+            <button class="btn btn-sm vtx-addblock-btn" onclick="vtxAddBlock('power')"><i class="ti ti-bolt"></i> + Блок мощности</button>
+            <button class="btn btn-sm vtx-addblock-btn" onclick="vtxAddBlock('freq')"><i class="ti ti-antenna"></i> + Блок частоты</button>
           </div>
         </div>
         <div id="vtxBlocks"></div>

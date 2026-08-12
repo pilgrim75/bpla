@@ -217,8 +217,8 @@ function vtxRenderBlocks(){
         '<div class="vtx-empty-title">Блоки не добавлены</div>'+
         '<div class="vtx-empty-sub">Соберите привязку AUX-каналов к мощности и частотам.</div>'+
         '<div class="vtx-card-actions" style="justify-content:center">'+
-          '<button class="btn btn-sm"'+(_vtxTable?'':' disabled')+' onclick="vtxAddBlock(\'power\')"><i class="ti ti-bolt"></i> + Блок мощности</button>'+
-          '<button class="btn btn-sm"'+(_vtxTable?'':' disabled')+' onclick="vtxAddBlock(\'freq\')"><i class="ti ti-antenna"></i> + Блок частоты</button>'+
+          '<button class="btn btn-sm vtx-addblock-btn"'+(_vtxTable?'':' disabled')+' onclick="vtxAddBlock(\'power\')"><i class="ti ti-bolt"></i> + Блок мощности</button>'+
+          '<button class="btn btn-sm vtx-addblock-btn"'+(_vtxTable?'':' disabled')+' onclick="vtxAddBlock(\'freq\')"><i class="ti ti-antenna"></i> + Блок частоты</button>'+
         '</div>'+
       '</div>';
     return;
@@ -237,13 +237,17 @@ function vtxResetOutput(){
   vtxSyncButtons();
 }
 // «Сгенерировать» доступна при загруженной таблице; «Копировать» — когда есть команды.
+// Хуки — id/класс (12.08.2026). Раньше кнопки искались по ТЕКСТУ атрибута onclick
+// ([onclick="vtxGenerate()"]) — селектор молча переставал находить их от любой правки
+// разметки (пробел, порядок атрибутов, переименование обработчика), и кнопки навсегда
+// оставались в неверном состоянии disabled.
 function vtxSyncButtons(){
-  const gen=document.querySelector('#vtxCmdCard [onclick="vtxGenerate()"]');
-  const cp=document.querySelector('#vtxCmdCard [onclick="vtxCopyCommands()"]');
+  const gen=document.getElementById('vtxGenBtn');
+  const cp=document.getElementById('vtxCopyBtn');
   if(gen) gen.disabled = !_vtxTable;
   if(cp) cp.disabled = !_vtxHasCmd;
-  // Кнопки добавления блоков в шапке конструктора — недоступны без таблицы
-  document.querySelectorAll('#vtxBuilderCard .vtx-card-actions [onclick^="vtxAddBlock"]').forEach(b=>{ b.disabled=!_vtxTable; });
+  // Кнопки добавления блоков — и в шапке конструктора, и в пустом состоянии (vtxRenderBlocks)
+  document.querySelectorAll('.vtx-addblock-btn').forEach(b=>{ b.disabled=!_vtxTable; });
 }
 
 function vtxBlockHtml(b){
@@ -424,7 +428,7 @@ function vtxCopyCommands(){
   const txt = out ? out.textContent : '';
   if(!txt) return;
   navigator.clipboard.writeText(txt).then(()=>{
-    const btn=document.querySelector('[onclick="vtxCopyCommands()"]');
+    const btn=document.getElementById('vtxCopyBtn'); // стабильный хук вместо поиска по onclick
     if(btn){ const o=btn.textContent; btn.textContent='✓ Скопировано'; setTimeout(()=>{btn.textContent=o;},1500); }
   }).catch(()=>{
     const el=document.createElement('textarea'); el.value=txt; document.body.appendChild(el); el.select();

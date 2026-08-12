@@ -747,8 +747,11 @@ function buildDetailedReport(f,filterLabel,out){
 function copyReport(){
   const txt=window._reportText||document.getElementById('reportOutput').innerText;
   navigator.clipboard.writeText(txt).then(()=>{
-    const btns=document.querySelectorAll('[onclick="copyReport()"]');
-    btns.forEach(btn=>{const orig=btn.textContent;btn.textContent='✓ Скопировано';setTimeout(()=>{btn.textContent=orig;},1500);});
+    // Хук по id (12.08.2026): раньше кнопка искалась по ТЕКСТУ атрибута onclick —
+    // селектор молча переставал находить её от любой правки разметки, и подтверждение
+    // «✓ Скопировано» не показывалось (сам буфер при этом заполнялся — дефект незаметный)
+    const btn=document.getElementById('repCopyBtn');
+    if(btn){const orig=btn.textContent;btn.textContent='✓ Скопировано';setTimeout(()=>{btn.textContent=orig;},1500);}
   }).catch(()=>{
     const el=document.createElement('textarea');
     el.value=txt;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);
@@ -790,7 +793,7 @@ function reportVerbal(out){
     <div id="vrResultWrap" style="display:${txt?'block':'none'}">
       <textarea id="vrResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn btn-sm" onclick="vrCopy()">Копировать</button>
+        <button class="btn btn-sm" id="vrCopyBtn" onclick="vrCopy()">Копировать</button>
         <button class="btn btn-sm" onclick="vrPrint()">Печать</button>
       </div>
     </div>
@@ -1025,7 +1028,7 @@ function vrCopy(){
   const ta=document.getElementById('vrResult'); if(!ta) return;
   window._vrText=ta.value; // сохраняем правки
   navigator.clipboard.writeText(ta.value).then(()=>{
-    const b=document.querySelector('[onclick="vrCopy()"]');
+    const b=document.getElementById('vrCopyBtn'); // стабильный хук вместо поиска по onclick
     if(b){ const o=b.textContent; b.textContent='✓ Скопировано'; setTimeout(()=>b.textContent=o,1500); }
   }).catch(()=>{ ta.select(); document.execCommand('copy'); });
 }
@@ -1339,7 +1342,7 @@ function reportReportage(out){
     <div id="rpgResultWrap" style="display:${txt?'block':'none'}">
       <textarea id="rpgResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn btn-sm" onclick="rpgCopyTelegram()">📋 Копировать для Telegram</button>
+        <button class="btn btn-sm" id="rpgCopyBtn" onclick="rpgCopyTelegram()">📋 Копировать для Telegram</button>
       </div>
     </div>
   </div>`;
@@ -1389,7 +1392,7 @@ async function rpgGenerate(){
 function rpgCopyTelegram(){
   const ta=document.getElementById('rpgResult'); if(!ta) return;
   window._rpgText=ta.value; // сохраняем правки
-  const done=()=>{ const b=document.querySelector('[onclick="rpgCopyTelegram()"]'); if(b){ const o=b.textContent; b.textContent='✓ Скопировано!'; setTimeout(()=>b.textContent=o,2000); } };
+  const done=()=>{ const b=document.getElementById('rpgCopyBtn'); if(b){ const o=b.textContent; b.textContent='✓ Скопировано!'; setTimeout(()=>b.textContent=o,2000); } }; // хук по id, не по onclick
   navigator.clipboard.writeText(ta.value).then(done).catch(()=>{ ta.select(); document.execCommand('copy'); done(); });
 }
 

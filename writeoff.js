@@ -33,9 +33,12 @@ function woRecordHint(h,key,val){
 // ISO → ДД.ММ.ГГГГ
 function woFmtDate(iso){ if(!iso)return ''; const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); return m?`${m[3]}.${m[2]}.${m[1]}`:iso; }
 
-// Текущая эффективная роль (переключатель → учётка) — делегат к currentRole() из app.js
-// (вызов только в рантайме; s.role подписантов в документе — другое поле, не роль пользователя)
-function woRole(){ return currentRole(); }
+// Доступ к документу на списание — роль cmd, проверяется ЭФФЕКТИВНОЙ ролью hasRole('cmd')
+// (app.js, вызов в рантайме): и.о. cmd акт оформляет. Два гейта, оба на hasRole('cmd'):
+// рендер кнопки в отчёте «Потери» (reports.js, isCmd) и вход в мастер (woOpenWriteoff).
+// Прежний делегат woRole()→currentRole() удалён 12.08.2026 — он не вызывался ниоткуда
+// (мёртвый код с Фазы 1 v0.26) и вводил в заблуждение: выглядел как гейт, игнорирующий
+// замещение. NB: поле `role` у подписантов документа — должность в акте, не роль доступа.
 
 function woStatus(msg,kind){
   const el=document.getElementById('woStatus'); if(!el)return;
