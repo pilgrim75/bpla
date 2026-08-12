@@ -1724,16 +1724,12 @@ function renderDashboard(){
     `<div class="stat-row"><span>За месяц: ${fMonth.length}</span><span style="font-size:11px;color:var(--color-text-secondary)">база: ${fAll.length}</span></div>`;
 
   // --- Расчёты ---
-  // Скрываем пилота только если ОДНОВРЕМЕННО: нет вылетов, нет дронов (qty все 0),
-  // нет ни обычных медалей, ни золотых щитов (две РАЗНЫЕ системы: calcPilotMedals — окно
-  // 10 дней, pilotGoldShields — абсолютные рекорды за всё время). Сортировка: вылеты за
-  // сегодня убыв., при равенстве — по имени.
+  // Скрываем пилота только если ОДНОВРЕМЕННО: нет вылетов ЗА НЕДЕЛЮ (fWeek — то же
+  // окно, что «За неделю: N» выше) И нет обычных медалей (calcPilotMedals — окно 10 дней).
+  // Золотые щиты и дроны в критерий НЕ входят.
+  // Сортировка: вылеты за сегодня убыв., при равенстве — по имени.
   document.getElementById('dashSquads').innerHTML=state.squads
-    .filter(sq=>{
-      if(fAll.some(x=>x.pilot===sq.pilot)) return true;
-      if(sq.drones.some(d=>d.qty!==0)) return true;
-      return pilotGoldShields(sq.pilot).length>0||calcPilotMedals(sq.pilot).length>0;
-    })
+    .filter(sq=>fWeek.some(x=>x.pilot===sq.pilot)||calcPilotMedals(sq.pilot).length>0)
     .sort((a,b)=>{
       const ca=fToday.filter(x=>x.pilot===a.pilot).length;
       const cb=fToday.filter(x=>x.pilot===b.pilot).length;
@@ -3292,12 +3288,16 @@ function canEditFlight(f){
 function renderFlightEditRow(x, realIdx){
   if(!canEditFlight(x))return '';
   const minsLeft=Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));
+  // Нормализация времени для type="time": «9:53» (легаси AI-импорта) — невалидный
+  // атрибут, Chromium рендерит контрол пустым; паддинг как в toMs (renderFlights)
+  const _hm=(x.time||'').trim();
+  const hmNorm=_hm.includes(':')?_hm.split(':').map(p=>p.padStart(2,'0')).join(':'):_hm;
   // Пилот записи для picker'ов — через realIdx в рантайме (не вшиваем имя в inline-JS)
   const pj='(state.flights['+realIdx+']||{}).pilot||\'\'';
   return '<div class="fl-edit-row" style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
     +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap">✏ '+minsLeft+' мин</span>'
     +'<input style="width:106px;font-size:11px;padding:2px 5px" type="date" value="'+esc(x.date||'')+'" id="edit-date-'+realIdx+'">'
-    +'<input style="width:66px;font-size:11px;padding:2px 5px" type="time" value="'+esc(x.time||'')+'" id="edit-time-'+realIdx+'">'
+    +'<input style="width:66px;font-size:11px;padding:2px 5px" type="time" value="'+esc(hmNorm)+'" id="edit-time-'+realIdx+'">'
     +'<input style="width:36px;font-size:11px;padding:2px 5px;text-align:center" type="number" min="1" value="'+(x.flightnum||'')+'" placeholder="#" id="edit-flightnum-'+realIdx+'">'
     +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.target||'')+'" placeholder="Точка" id="edit-target-'+realIdx+'" autocomplete="off">'
     +'<input style="width:90px;font-size:11px;padding:2px 5px" value="'+esc(x.ammo||'')+'" placeholder="Боеприпас" id="edit-ammo-'+realIdx+'" autocomplete="off" onclick="event.stopPropagation();showQuickPicker(this,getSmartAmmo('+pj+'),v=>{this.value=v})">'
@@ -3320,7 +3320,14 @@ function saveFlightEdit(idx){
   // Дата/время: связка с loss-записью не рвётся — поиск идёт по flightId первым
   // уровнем (writeDroneLoss пишет f.id), дата+время — только фолбэк для исторических
   f.date=document.getElementById('edit-date-'+idx)?.value||f.date;
-  f.time=document.getElementById('edit-time-'+idx)?.value||f.time;
+  // Время: у частично заполненного time-контрола value==='' (спецификация), молчаливый
+  // фолбэк выглядел как «откат при сохранении». badInput отличает недобитый ввод
+  // (например «15:--») от нетронутого пустого поля — предупреждаем, не глотаем.
+  const tEl=document.getElementById('edit-time-'+idx);
+  if(tEl){
+    if(tEl.value) f.time=tEl.value;
+    else if(tEl.validity&&tEl.validity.badInput) alert('Время введено не полностью (часы И минуты) — оставлено прежнее: '+(f.time||'—'));
+  }
   f.target=document.getElementById('edit-target-'+idx)?.value||f.target;
   f.ammo=document.getElementById('edit-ammo-'+idx)?.value||f.ammo;
   f.drone=document.getElementById('edit-drone-'+idx)?.value||f.drone;
