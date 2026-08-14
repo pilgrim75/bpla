@@ -95,8 +95,11 @@ function modalOverlay(innerHTML){
 
 // Конструктор записи перемещения с дефолтами id/date/time.
 // type: 'transfer'|'arrival'|'loss'|'exchange'
+// _submittedBy — автор записи (как у вылетов): для окна правки в «Изменениях»
+// (у записей до 14.08.2026 поля нет — их правят только tech/cmd/admin).
 function makeTransfer(type,fields){
-  return {id:genId('t'),type,date:todayISO(),time:nowHM(),...fields};
+  const by=(typeof authUser!=='undefined'&&authUser&&authUser.login)||'';
+  return {id:genId('t'),type,date:todayISO(),time:nowHM(),...(by?{_submittedBy:by}:{}),...fields};
 }
 
 function rebuildRoleSelector(){
@@ -2104,14 +2107,18 @@ function renderTransfersLog(){
     return;
   }
   document.getElementById('transfersLog').innerHTML=state.transfers.slice(0,30).map(op=>{
+    // Серая фиксация правок (паттерн вылетов): 'sent'/'locked' приглушают строку
+    const _tst=op.id!=null?_trEditState.get(String(op.id)):undefined;
+    const grey=(_tst==='sent'||_tst==='locked')?' tr-row-sent':'';
+    let row;
     if(op.type==='loss'){
-      return `<div class="change-row">
+      row=`<div class="change-row${grey}">
         <div class="badge-danger">Потеря</div>
         <div class="change-detail"><span>${esc(op.drone)}</span> · пилот: ${esc(op.pilot)}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else if(op.type==='arrival'){
-      return `<div class="change-row">
+      row=`<div class="change-row${grey}">
         <div class="change-badge-in">Поступление</div>
         <div class="change-detail"><span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
@@ -2125,25 +2132,244 @@ function renderTransfersLog(){
       } else {
         exDetail=`получили: ${esc(op.get)} × ${op.getQty}`;
       }
-      return `<div class="change-row">
+      row=`<div class="change-row${grey}">
         <div class="badge-warn">${op.give&&op.get?'Обмен':'Передача'}</div>
         <div class="change-detail"><span>${esc(op.unit)}</span> · ${exDetail}${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else if(op.type==='adjust'){
-      return `<div class="change-row">
+      row=`<div class="change-row${grey}">
         <div class="badge-warn">Коррекция</div>
         <div class="change-detail">${esc(op.location||'')} · <span>${esc(op.drone)} ${op.qty>0?'+':''}${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     } else {
-      return `<div class="change-row">
+      row=`<div class="change-row${grey}">
         <div class="change-badge-in">Передача</div>
         <div class="change-detail">${esc(op.from)} → ${esc(op.to)} · <span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
       </div>`;
     }
+    return row+renderTransferEditRow(op);
   }).join('');
+}
+
+// ============ РЕДАКТИРОВАНИЕ ЗАПИСЕЙ СКЛАДА В «ИЗМЕНЕНИЯХ» (окно 10 минут) ============
+// Гибрид по диагностике 14.08.2026: note/date/time — правка НА МЕСТЕ (остатки не трогаются,
+// id стабилен, перешифровка штатным push); qty/модель/направление — СТОРНО (откат эффекта
+// старой записи + tombstone + новая запись с новым id и новым эффектом). LOSS не правится
+// (владелец — вылет, биекция ADR-001; подсказка вместо полосы). ADJUST — только реквизиты
+// (запись документирует ручную правку остатка, её эффект к остаткам не применялся).
+// EXCHANGE — только полное сторно (обе стороны разом). Состояние серой фиксации —
+// рантайм-Map (НЕ поле t._*: syncEncrypt сериализует запись целиком, вычистки _* нет).
+const TRANSFER_EDIT_WINDOW_MS=10*60*1000;
+const _trEditState=new Map(); // id → 'sent'|'editing'|'locked' (паттерн _flEditState)
+
+// Момент создания записи: id из genId начинается с Date.now() (мс) — надёжнее date+time
+// (это время ОПЕРАЦИИ, не ввода); фолбэк для нестандартных id — date+time.
+function _transferTs(t){
+  const n=parseInt(t&&t.id,10);
+  if(Number.isFinite(n)&&n>1e12)return n;
+  const d=Date.parse((t&&t.date||'')+'T'+(t&&t.time||'00:00'));
+  return Number.isFinite(d)?d:0;
+}
+function _transferByKey(key){
+  if(key==null)return null;
+  const k=String(key);
+  return state.transfers.find(t=>t&&t.id!=null&&String(t.id)===k)||null;
+}
+// Роли: tech/cmd/admin (эффективная роль) — любую запись; автор (_submittedBy) — свою.
+function _trRolesOk(t){
+  if(isViewerRole(state.role)||isViewerRole(authUser.role))return false;
+  if(hasAnyRole(['tech','cmd','admin'])||authUser.role==='admin')return true;
+  return !!(t&&t._submittedBy&&t._submittedBy===authUser.login);
+}
+function canEditTransfer(t){
+  if(!t||t.id==null)return false;                 // без id не адресуемся и не tombstone-им
+  if(t.type==='loss')return false;                // правится только через вылет
+  if(_trEditState.get(String(t.id))==='locked')return false; // финализировано
+  if(!_trRolesOk(t))return false;
+  const ts=_transferTs(t);
+  return !!ts&&(Date.now()-ts<TRANSFER_EDIT_WINDOW_MS);
+}
+
+// Применение (sign=+1) / откат (−1) эффекта записи на остатки. Балансовая семантика —
+// как _stockAuditCompute/getBalance. БЕЗ клампов и confirm: сторно обязано быть
+// симметричным; минус не маскируется (сигнал расхождения, отобразится красным).
+// adjust/loss сюда НЕ попадают (adjust остатков сам не менял, loss не правится).
+function _trEffect(t,sign){
+  const q=n=>sign*(parseInt(n)||1);
+  if(t.type==='arrival'){
+    _trStockAdd(t.drone,'bg',q(t.qty));
+  } else if(t.type==='exchange'){
+    if(t.give)_trStockAdd(t.give,'bg',-q(t.giveQty));
+    if(t.get)_trStockAdd(t.get,'bg',q(t.getQty));
+  } else if(t.type==='transfer'){
+    const d=q(t.qty);
+    const side=(loc,delta)=>{
+      if(loc==='склад')_trStockAdd(t.drone,'bg',delta);
+      else if(loc==='не бг')_trStockAdd(t.drone,'nbg',delta);
+      else if(loc==='списан'){} // выбытие — физической строки-приёмника нет
+      else _trSquadAdd(loc,t.drone,delta);
+    };
+    side(t.from,-d);
+    side(t.to,d);
+  }
+}
+function _trStockAdd(name,status,delta){
+  if(!name||!delta)return;
+  const nl=String(name).toLowerCase();
+  let r=state.stock.find(d=>d.name.toLowerCase()===nl&&d.status===status);
+  if(!r){r={id:genId('s'),name:String(name),qty:0,status};state.stock.push(r);}
+  r.qty+=delta;
+  if(r.qty===0)state.stock=state.stock.filter(d=>d!==r); // нулевые строки не копим
+}
+function _trSquadAdd(pilot,name,delta){
+  if(!pilot||!name||!delta)return;
+  let sq=state.squads.find(s=>s.pilot===pilot);
+  if(!sq){sq={id:genId('sq'),pilot,drones:[]};state.squads.push(sq);} // как writeDroneLoss
+  const nl=String(name).toLowerCase();
+  let d=sq.drones.find(x=>x.name.toLowerCase()===nl);
+  if(!d){d={name:String(name),qty:0};sq.drones.push(d);}
+  d.qty+=delta;
+  if(d.qty===0)sq.drones=sq.drones.filter(x=>x!==d);
+}
+
+// Селект от/кому для полосы transfer: склад + пилоты + спецприёмники (легаси-значение не теряем)
+function _trFromToSel(which,cur,fid){
+  const opts=['склад',...state.squads.map(s=>s.pilot),'не бг'].concat(which==='to'?['списан']:[]);
+  if(cur&&!opts.includes(cur))opts.unshift(cur);
+  return '<select style="font-size:11px;padding:2px 3px" id="tredit-'+which+'-'+fid+'">'
+    +opts.map(o=>'<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>').join('')+'</select>';
+}
+
+function renderTransferEditRow(t){
+  if(!t||t.id==null)return '';
+  const key=String(t.id);
+  const st=_trEditState.get(key);
+  if(st==='locked')return '';
+  // LOSS: в окне и при правах — подсказка вместо полосы (владелец записи — вылет)
+  if(t.type==='loss'){
+    const ts=_transferTs(t);
+    const inWin=!!ts&&(Date.now()-ts<TRANSFER_EDIT_WINDOW_MS);
+    return (inWin&&_trRolesOk(t))
+      ?'<div class="tr-edit-row" style="padding:2px 10px 4px 12px;font-size:10px;color:var(--muted);border-left:2px solid var(--muted)">✎ Запись потери правится через вылет (журнал / Администратор → Вылеты)</div>'
+      :'';
+  }
+  if(!canEditTransfer(t))return '';
+  const minsLeft=Math.max(1,Math.round((TRANSFER_EDIT_WINDOW_MS-(Date.now()-_transferTs(t)))/60000));
+  const fid=esc(key);
+  const kjs=key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  if(st==='sent'){
+    return '<div class="tr-edit-row" style="display:flex;gap:8px;align-items:center;padding:3px 10px 3px 12px;background:var(--inset);border-left:2px solid var(--muted);flex-wrap:wrap">'
+      +'<span style="font-size:10px;color:var(--muted);letter-spacing:1px;white-space:nowrap">✓ отправлено</span>'
+      +'<button class="btn btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="trEditReopen(\''+kjs+'\')">✏ Править ('+minsLeft+' мин)</button>'
+      +'<button class="btn btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="trEditFinalize(\''+kjs+'\')">✓ Зафиксировать</button>'
+      +'</div>';
+  }
+  const inp=(f,val,w,ph)=>'<input style="width:'+w+'px;font-size:11px;padding:2px 5px" value="'+esc(val==null?'':val)+'" placeholder="'+ph+'" id="tredit-'+f+'-'+fid+'" autocomplete="off">';
+  const num=(f,val,w)=>'<input type="number" min="1" style="width:'+w+'px;font-size:11px;padding:2px 5px;text-align:center" value="'+(parseInt(val)||1)+'" id="tredit-'+f+'-'+fid+'">';
+  let body='';
+  if(t.type==='arrival'){
+    body=inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46);
+  } else if(t.type==='transfer'){
+    body=inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46)+_trFromToSel('from',t.from,fid)+'<span style="color:var(--muted)">→</span>'+_trFromToSel('to',t.to,fid);
+  } else if(t.type==='exchange'){
+    body=inp('unit',t.unit,90,'Подразделение')+inp('give',t.give,80,'Отдали')+num('giveQty',t.giveQty,46)+inp('get',t.get,80,'Получили')+num('getQty',t.getQty,46);
+  } else if(t.type==='adjust'){
+    body='<span style="font-size:10px;color:var(--muted)">кол-во/модель коррекции не правятся — при необходимости новая коррекция в складе</span>';
+  } else {
+    return ''; // неизвестный тип — не правим
+  }
+  return '<div class="tr-edit-row" style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
+    +'<span style="font-size:10px;color:var(--green3);letter-spacing:1px;white-space:nowrap">✏ '+minsLeft+' мин</span>'
+    +'<input type="date" style="width:106px;font-size:11px;padding:2px 5px" value="'+esc(t.date||'')+'" id="tredit-date-'+fid+'">'
+    +'<input type="time" style="width:66px;font-size:11px;padding:2px 5px" value="'+esc(t.time||'')+'" id="tredit-time-'+fid+'">'
+    +body
+    +'<input style="flex:1;min-width:80px;font-size:11px;padding:2px 5px" value="'+esc(t.note||'')+'" placeholder="Примечание" id="tredit-note-'+fid+'">'
+    +'<button class="btn btn-success btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="trSaveEdit(\''+kjs+'\')">✓</button>'
+    +'</div>';
+}
+
+function trSaveEdit(key){
+  const t=_transferByKey(key);
+  if(!t){alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.');return;}
+  if(!canEditTransfer(t)){
+    const locked=_trEditState.get(String(t.id))==='locked';
+    alert(locked?'Запись зафиксирована — правка закрыта.':'Окно правки (10 мин) истекло или нет прав.');
+    renderTransfersLog();
+    return;
+  }
+  const g=f=>document.getElementById('tredit-'+f+'-'+String(key));
+  const val=f=>{const el=g(f);return el?el.value:undefined;};
+  const date=val('date')||t.date;
+  const time=val('time')||t.time;
+  const noteEl=g('note');
+  const note=noteEl?noteEl.value.trim():(t.note||'');
+  // Типизированные (сторно) поля: любое отличие → полное пересоздание записи
+  let changed=false;
+  const take=(f,old,isNum)=>{
+    const v=val(f);
+    if(v===undefined)return old;
+    const nv=isNum?(parseInt(v)||1):String(v).trim();
+    if(String(nv)!==String(old==null?'':old))changed=true;
+    return nv;
+  };
+  let typed={};
+  if(t.type==='arrival'){
+    typed={drone:take('drone',t.drone),qty:take('qty',t.qty,true)};
+    if(!typed.drone){alert('Укажите БПЛА');return;}
+  } else if(t.type==='transfer'){
+    typed={drone:take('drone',t.drone),qty:take('qty',t.qty,true),from:take('from',t.from),to:take('to',t.to)};
+    if(!typed.drone){alert('Укажите БПЛА');return;}
+    if(typed.from===typed.to){alert('Отправитель и получатель совпадают');return;}
+  } else if(t.type==='exchange'){
+    typed={unit:take('unit',t.unit),give:take('give',t.give),giveQty:take('giveQty',t.giveQty,true),get:take('get',t.get),getQty:take('getQty',t.getQty,true)};
+    if(!typed.give&&!typed.get){alert('Заполните отданный или полученный борт');return;}
+  } // adjust: typed нет — только реквизиты
+  let finalId=String(t.id);
+  if(changed){
+    // СТОРНО: откат эффекта старой записи → tombstone → новая запись с новым эффектом.
+    // Синхронно, без await между шагами — остатки не остаются в промежуточном состоянии.
+    _trEffect(t,-1);
+    state.transfers=state.transfers.filter(x=>x!==t);
+    if(typeof syncPublishTombstones==='function')syncPublishTombstones([String(t.id)]);
+    const newOp={...t,...typed,id:genId('t'),date,time,note};
+    if(authUser&&authUser.login)newOp._submittedBy=authUser.login;
+    state.transfers.unshift(newOp);
+    _trEffect(newOp,1);
+    finalId=String(newOp.id);
+    syncBumpStockVersion();
+    syncPushStockSquads();
+    syncAddTransfer(newOp);
+    logAction('transfer','edit','Сторно-правка записи склада ('+t.type+'): '+(t.drone||t.give||t.get||'')+' → '+(newOp.drone||newOp.give||newOp.get||''));
+  } else {
+    // Правка НА МЕСТЕ: только реквизиты, остатки не трогаются, id стабилен —
+    // перешифрованная версия уедет штатным debounce-push (merge по id не вернёт старую)
+    t.date=date;t.time=time;t.note=note;
+    logAction('transfer','edit','Правка реквизитов записи склада ('+t.type+')');
+  }
+  // Серая фиксация (паттерн вылетов): первый ✓ → 'sent'; ✓ из переоткрытой → 'locked'.
+  // После сторно состояние переезжает на НОВЫЙ id (старая запись удалена).
+  const prev=_trEditState.get(String(t.id));
+  _trEditState.delete(String(t.id));
+  _trEditState.set(finalId,prev==='editing'?'locked':'sent');
+  saveLocal();
+  renderTransfersLog();
+  renderInventory();
+  renderDashboard();
+}
+
+function trEditReopen(key){
+  const t=_transferByKey(key);
+  if(!t||!canEditTransfer(t)){renderTransfersLog();return;}
+  _trEditState.set(String(t.id),'editing');
+  renderTransfersLog();
+}
+function trEditFinalize(key){
+  const t=_transferByKey(key);
+  if(t&&t.id!=null)_trEditState.set(String(t.id),'locked');
+  renderTransfersLog();
 }
 
 // ============ FLIGHTS ============
@@ -2352,7 +2578,10 @@ function renderFlights(){
             +', '+(x.result==='yes'?'выполнена':'не выполнена')
             +', '+(x.returned==='yes'?'вернул':'потерян')
             +(x.note?', '+x.note:'');
-          return `${dayHead}<tr style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
+          // Серая фиксация: после ✓ строка приглушена ('sent' и 'locked')
+          const _st=x.id!=null?_flEditState.get(String(x.id)):undefined;
+          const sentCls=(_st==='sent'||_st==='locked')?' class="fl-row-sent"':'';
+          return `${dayHead}<tr${sentCls} style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
             <td style="white-space:nowrap;color:var(--muted)">${esc(x.time||'—')}</td>
             <td style="text-align:center;color:var(--muted);font-size:10px;white-space:nowrap">${num?'#'+num:''}</td>
             <td style="font-weight:700;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.pilot||'—')}</td>
@@ -3295,12 +3524,21 @@ async function toggleUser(login,active){
 }
 
 
-// ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА В ЖУРНАЛЕ (окно 30 минут) ============
-// Единая точка окна правки — editWindowMs(f): 30 мин от МОМЕНТА ВВОДА (f._savedTs,
+// ============ РЕДАКТИРОВАНИЕ ВЫЛЕТА В ЖУРНАЛЕ (окно 10 минут) ============
+// Единая точка окна правки — editWindowMs(f): 10 мин от МОМЕНТА ВВОДА (f._savedTs,
 // не f.time). tech/cmd/admin (эффективная роль) — любой вылет; пилот — свой
 // (исполнитель или автор записи); остальные — 0 (нет доступа). Полный доступ
 // админа через раздел Администратор → Вылеты — отдельный путь, окном не ограничен.
-const FLIGHT_EDIT_WINDOW_MS=30*60*1000;
+const FLIGHT_EDIT_WINDOW_MS=10*60*1000;
+
+// Серая фиксация после ✓ (ключ — id вылета): 'sent' — правка отправлена, строка серая,
+// полоса свёрнута в плашку «Править/Зафиксировать»; 'editing' — серость снята повторным
+// открытием, полоса обычная; 'locked' — финализация (второй ✓ или кнопка «Зафиксировать»),
+// правка в журнале закрыта досрочно (canEditFlight=false). СОЗНАТЕЛЬНО НЕ поле f._*:
+// syncPushAll шифрует запись целиком, _savedTs/_edited уходят в облако как есть — новый
+// флаг стал бы вечным мусорным полем во всех копиях. Плата за рантайм-Map: после F5
+// состояние сбрасывается (запись снова просто в окне 10 мин — приемлемо).
+const _flEditState=new Map();
 function editWindowMs(f){
   if(isViewerRole(state.role)||isViewerRole(authUser.role))return 0;
   if(hasAnyRole(['tech','cmd','admin'])||authUser.role==='admin')return FLIGHT_EDIT_WINDOW_MS;
@@ -3309,6 +3547,7 @@ function editWindowMs(f){
 }
 
 function canEditFlight(f){
+  if(f&&f.id!=null&&_flEditState.get(String(f.id))==='locked')return false; // финализировано досрочно
   const win=editWindowMs(f);
   const savedTs=f._savedTs||0;
   if(!win||!savedTs)return false; // нет доступа или нет метки времени
@@ -3328,6 +3567,8 @@ function _flightByKey(key){
 }
 
 function renderFlightEditRow(x, realIdx){
+  const st=x.id!=null?_flEditState.get(String(x.id)):undefined;
+  if(st==='locked')return ''; // финализировано — полоса больше не открывается
   if(!canEditFlight(x))return '';
   const minsLeft=Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));
   // Нормализация времени для type="time": «9:53» (легаси AI-импорта) — невалидный
@@ -3342,6 +3583,15 @@ function renderFlightEditRow(x, realIdx){
   const key=x.id?String(x.id):('i'+realIdx);
   const fid=esc(key);                                          // в id атрибутов
   const kjs=key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");     // в inline-JS (одинарные кавычки)
+  // Серая фиксация: после ✓ полоса свёрнута — «Править» снимает серость (правка
+  // продолжается), «Зафиксировать» финализирует досрочно (как второй ✓)
+  if(st==='sent'){
+    return '<div class="fl-edit-row fl-edit-sent" style="display:flex;gap:8px;align-items:center;padding:3px 10px 3px 12px;background:var(--inset);border-left:2px solid var(--muted);flex-wrap:wrap">'
+      +'<span style="font-size:10px;color:var(--muted);letter-spacing:1px;white-space:nowrap">✓ отправлено</span>'
+      +'<button class="btn btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="flEditReopen(\''+kjs+'\')">✏ Править ('+minsLeft+' мин)</button>'
+      +'<button class="btn btn-sm" style="padding:2px 8px;font-size:10px;letter-spacing:0" onclick="flEditFinalize(\''+kjs+'\')">✓ Зафиксировать</button>'
+      +'</div>';
+  }
   // Пилот записи для picker'ов — резолвим в рантайме (не вшиваем имя в inline-JS)
   const pj='(_flightByKey(\''+kjs+'\')||{}).pilot||\'\'';
   return '<div class="fl-edit-row" style="display:flex;gap:5px;align-items:center;padding:3px 10px 3px 12px;background:rgba(57,255,20,0.03);border-left:2px solid var(--green3);flex-wrap:wrap">'
@@ -3370,7 +3620,9 @@ function saveFlightEdit(key){
   const f=_flightByKey(key);
   if(!f){ alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.'); return; }
   if(!canEditFlight(f)){
-    alert('Окно правки (30 мин) истекло или нет прав. Полный доступ — Администратор → Вылеты.');
+    const locked=f.id!=null&&_flEditState.get(String(f.id))==='locked';
+    alert(locked?'Запись зафиксирована — правка в журнале закрыта. Полный доступ — Администратор → Вылеты.'
+                :'Окно правки (10 мин) истекло или нет прав. Полный доступ — Администратор → Вылеты.');
     renderFlights();   // убрать устаревшую полосу из DOM
     return;
   }
@@ -3411,11 +3663,32 @@ function saveFlightEdit(key){
     if(f.result==='no'&&f.returned==='no'){ delete f.range_km; delete f.distance_km; } // борт не долетел
     else { const r=geoComputeFlight(f); if(r){ f.range_km=r.range_km; f.distance_km=r.distance_km; f.geo_locked=true; } }
   }
+  // Серая фиксация: первый ✓ → 'sent' (серая, полоса свёрнута); ✓ из переоткрытой
+  // полосы ('editing') → 'locked' (финализация, правка закрыта досрочно).
+  // Записи без id (исторические) состояние не ведут — ведут себя как раньше.
+  if(f.id!=null){
+    const k=String(f.id);
+    _flEditState.set(k,_flEditState.get(k)==='editing'?'locked':'sent');
+  }
   saveLocal();
   renderFlights();
   renderDashboard();
   renderInventory();
   logAction('flight','edit','Вылет #'+f.flightnum+' '+f.pilot+' отредактирован'+(oldReturned!==f.returned?' [смена статуса борта]':''));
+}
+
+// Кнопки серой плашки: повторное открытие полосы (серость снимается, правка продолжается)
+// и досрочная финализация (замок; окно 10 мин в остальном добивает само).
+function flEditReopen(key){
+  const f=_flightByKey(key);
+  if(!f||!canEditFlight(f)){renderFlights();return;} // окно истекло/замок — просто перерисовать
+  if(f.id!=null)_flEditState.set(String(f.id),'editing');
+  renderFlights();
+}
+function flEditFinalize(key){
+  const f=_flightByKey(key);
+  if(f&&f.id!=null)_flEditState.set(String(f.id),'locked');
+  renderFlights();
 }
 // Частотный список значений поля вылета для пилота: окно 7 дней, при пустом
 // результате фолбэки (вся история пилота → вся история всех) — попап никогда не пустой

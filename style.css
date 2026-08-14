@@ -383,6 +383,10 @@ label{
 .fl-edit-row input[type="date"]{min-width:104px}
 .fl-edit-row input[type="time"]{min-width:60px}
 .fl-edit-row input{text-overflow:clip;overflow:visible}
+/* Серая фиксация вылета после ✓ (окно правки): строка приглушена, пока 'sent'/'locked' */
+#flightList tr.fl-row-sent td{opacity:.5}
+/* То же для записей склада в «Изменениях» */
+#transfersLog .change-row.tr-row-sent{opacity:.5}
 
 /* ============ REPORTS ============ */
 .report-block{
