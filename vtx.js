@@ -7,12 +7,15 @@
 //   index   — сквозной 0,1,2,... по всем строкам
 //   aux     — AUX-канал в 0-based нумерации Betaflight = (пультовый AUX − 1).
 //             В поле оператор вводит привычный 1-based (с 1); система вычитает 1.
-//   band    — индекс банда в bands_list + 1 (1-based; A=1,B=2,E=3,...)
+//   band    — НОВЫЙ 1-based номер банда после пересборки по выбранным чекбоксами бандам
+//             (позиция в выбранном наборе); при всех отмеченных = индекс в bands_list + 1
 //   channel — индекс канала (столбца 0..7) + 1 (1-based)
 //   power   — индекс уровня в powerlevels_list + 1 (1-based); в частотных строках 0
 //   pwm     — пресеты ЗАШИТЫ (см. VTX_PWM)
 //
-// Эталон (воспроизводится точно), вход меняется на 1-based AUX:
+// Перед vtx-строками ВСЕГДА идёт vtxtable-секция (прореженная таблица по выбранным бандам,
+// номера подряд) + пустая строка-разделитель.
+// Эталон vtx-части (воспроизводится точно при ВСЕХ отмеченных бандах), вход — 1-based AUX:
 //   блок мощности AUX=1 (дизарм 3W, арм 8W); блок частоты AUX=2, 3-поз 5384(E4),5546(A5),5420(E6) →
 //   vtx 0 0 0 0 3 900 1100
 //   vtx 1 0 0 0 5 1700 2100
@@ -27,7 +30,8 @@ const VTX_PWM = {
 };
 
 // Состояние модуля (только рантайм, не персистится).
-let _vtxTable = null;        // {bands:[{name,letter,frequencies:[8]}], powerlevels:[{value,label}]}
+let _vtxTable = null;        // {bands:[{name,letter,frequencies:[8],factory:[8],isFactory}], powerlevels:[{value,label}]}
+let _vtxBandSel = null;      // Set выбранных индексов бандов (чекбоксы строк); null до загрузки = все выбраны
 let _vtxBlocks = [];         // [{id, type:'power'|'freq', aux, ...}]
 let _vtxPick = null;         // активная цель выбора кликом по таблице: {blockId, pos} | null
 let _vtxNextId = 1;
@@ -52,6 +56,7 @@ function vtxImportFile(input){
       return;
     }
     _vtxTable = t;
+    vtxBandSelReset(); // новая таблица — все банды отмечены
     setStatus('vtxLoadStatus','✓ Загружено: банд '+t.bands.length+', уровней мощности '+t.powerlevels.length,'ok');
     vtxRenderTable();
     vtxRenderBlocks();
@@ -75,10 +80,17 @@ function vtxParseTable(json){
     const freqs = Array.isArray(b.frequencies) ? b.frequencies.map(x=>{
       const n = Number(x); return Number.isFinite(n) ? n : 0;
     }) : [];
+    // factory-частоты — страховка для будущей vtxtable-секции; нет в JSON → дубль frequencies
+    const factory = Array.isArray(b.factory) ? b.factory.map(x=>{
+      const n = Number(x); return Number.isFinite(n) ? n : 0;
+    }) : freqs.slice();
     bands.push({
       name: (b.name!=null ? String(b.name) : ''),
       letter: (b.letter!=null && String(b.letter).length ? String(b.letter) : '?'),
-      frequencies: freqs
+      frequencies: freqs,
+      factory: factory,
+      // FACTORY/CUSTOM для vtxtable; поля нет → CUSTOM (безопаснее: частоты задаются явно)
+      isFactory: (b.is_factory_band===true || b.isFactory===true)
     });
   });
   const powerlevels = [];
@@ -111,25 +123,40 @@ function vtxRenderTable(){
   let maxCh = 0;
   _vtxTable.bands.forEach(b=> maxCh = Math.max(maxCh, b.frequencies.length));
   if(!maxCh) maxCh = 8;
-  // множество выбранных ячеек "b,c" (для подсветки)
+  // множество выбранных ячеек "b,c" (для подсветки) + занятые банды (их чекбоксы disabled)
   const sel = vtxSelectedCells();
+  const used = vtxUsedBands();
   let h = '<table class="vtx-table"><thead><tr><th class="vtx-band-h">Банд</th>';
   for(let c=0;c<maxCh;c++) h += '<th>'+(c+1)+'</th>';
-  h += '</tr></thead><tbody>';
+  h += '<th class="vtx-band-num">№</th></tr></thead><tbody>';
+  let num = 0; // итоговый номер банда после пересборки (только выбранные, подряд)
   _vtxTable.bands.forEach((b,bi)=>{
-    h += '<tr><td class="vtx-band-h"><span class="vtx-band-letter">'+esc(b.letter)+'</span><span class="vtx-band-name">'+esc(b.name)+'</span></td>';
+    const on = vtxBandOn(bi);
+    const myNum = on ? ++num : null;
+    h += '<tr'+(on?'':' class="vtx-band-off"')+'><td class="vtx-band-h">'+
+      '<input type="checkbox" class="vtx-band-cb"'+(on?' checked':'')+
+        (used.has(bi)?' disabled title="используется в блоке частоты"':'')+
+        ' onchange="vtxToggleBand('+bi+')">'+
+      '<span class="vtx-band-letter">'+esc(b.letter)+'</span><span class="vtx-band-name">'+esc(b.name)+'</span></td>';
     for(let c=0;c<maxCh;c++){
       const f = b.frequencies[c];
       const key = bi+','+c;
       const cls = ['vtx-cell'];
       if(sel.has(key)) cls.push('vtx-cell-sel');
-      if(_vtxPick) cls.push('vtx-cell-arm'); // режим выбора активен
+      if(_vtxPick && on) cls.push('vtx-cell-arm'); // режим выбора активен (снятый банд не участвует)
       const has = (f!=null && f!==0);
-      h += '<td class="'+cls.join(' ')+'" '+(has?('onclick="vtxCellClick('+bi+','+c+')"'):'')+'>'+(has?('<span class="vtx-num">'+esc(f)+'</span>'):'<span class="vtx-num vtx-num-empty">—</span>')+'</td>';
+      const clickable = has && on; // частоты снятого банда видны, но не кликабельны
+      h += '<td class="'+cls.join(' ')+'" '+(clickable?('onclick="vtxCellClick('+bi+','+c+')"'):'')+'>'+(has?('<span class="vtx-num">'+esc(f)+'</span>'):'<span class="vtx-num vtx-num-empty">—</span>')+'</td>';
     }
-    h += '</tr>';
+    h += '<td class="vtx-band-num">'+(myNum?('<span class="vtx-num">'+myNum+'</span>'):'')+'</td></tr>';
   });
   h += '</tbody></table>';
+  // Полоска доступных уровней мощности из powerlevels_list загруженного файла
+  if(_vtxTable.powerlevels.length){
+    h += '<div class="vtx-powbar"><span class="vtx-powbar-title">Мощности:</span>'+
+      _vtxTable.powerlevels.map(p=>'<span class="vtx-pow-chip">'+esc(String(p.label).trim())+'</span>').join('')+
+    '</div>';
+  }
   if(_vtxPick) h = '<div class="vtx-pick-hint">Кликните по ячейке таблицы, чтобы задать частоту выбранному положению. <button class="btn btn-sm" onclick="vtxCancelPick()">Отмена</button></div>' + h;
   wrap.innerHTML = h;
 }
@@ -144,9 +171,37 @@ function vtxSelectedCells(){
   return s;
 }
 
+// ── Выбор бандов (чекбоксы строк) ──
+// Выбран ли банд. До первой загрузки (_vtxBandSel=null) — все выбраны.
+function vtxBandOn(bi){ return !_vtxBandSel || _vtxBandSel.has(bi); }
+// Сброс: все банды отмечены (зовётся при загрузке новой таблицы).
+function vtxBandSelReset(){
+  _vtxBandSel = new Set(_vtxTable ? _vtxTable.bands.map((_,i)=>i) : []);
+}
+// Банды, занятые блоками частоты конструктора (снять нельзя — чекбокс disabled).
+function vtxUsedBands(){
+  const s = new Set();
+  _vtxBlocks.forEach(blk=>{
+    if(blk.type!=='freq') return;
+    (blk.sel||[]).forEach(x=>{ if(x) s.add(x.b); });
+  });
+  return s;
+}
+function vtxToggleBand(bi){
+  if(!_vtxBandSel) vtxBandSelReset();
+  if(_vtxBandSel.has(bi)){
+    if(vtxUsedBands().has(bi)){ vtxRenderTable(); return; } // страховка: чекбокс и так disabled
+    _vtxBandSel.delete(bi);
+  } else {
+    _vtxBandSel.add(bi);
+  }
+  vtxRenderTable();
+  vtxRenderBlocks(); // fsel-панели показывают только выбранные банды
+}
+
 // Клик по ячейке таблицы — если активна цель выбора, заносим частоту в неё.
 function vtxCellClick(bi,ci){
-  if(!_vtxPick) return;
+  if(!_vtxPick || !vtxBandOn(bi)) return;
   const blk = _vtxBlocks.find(b=>b.id===_vtxPick.blockId);
   if(blk && blk.type==='freq'){
     blk.sel[_vtxPick.pos] = { b:bi, c:ci };
@@ -161,9 +216,13 @@ function vtxCancelPick(){ _vtxPick=null; vtxRenderTable(); vtxRenderBlocks(); }
 function vtxAddBlock(type){
   if(!_vtxTable) return;
   if(type==='power'){
-    _vtxBlocks.push({ id:_vtxId(), type:'power', aux:1, disarm:0, arm:(_vtxTable.powerlevels.length>1?_vtxTable.powerlevels.length-1:0) });
+    // Дефолты от загруженной таблицы: дизарм — средний уровень, арм — максимальный
+    // (0-based индексы в powerlevels; пустой список — фолбэк 0/0)
+    const N = _vtxTable.powerlevels.length;
+    _vtxBlocks.push({ id:_vtxId(), type:'power', aux:1, disarm:(N?Math.floor(N/2):0), arm:(N?N-1:0) });
   } else {
-    _vtxBlocks.push({ id:_vtxId(), type:'freq', aux:1, positions:3, sel:[null,null,null] });
+    // aux:2 — дефолт по практике эксплуатации (мощность обычно на AUX 1, частота на AUX 2)
+    _vtxBlocks.push({ id:_vtxId(), type:'freq', aux:2, positions:3, sel:[null,null,null] });
   }
   vtxRenderBlocks();
 }
@@ -311,6 +370,7 @@ function vtxFselLabel(sel){
 function vtxFselPanelHtml(bid,pos){
   let h='';
   _vtxTable.bands.forEach((band,bi)=>{
+    if(!vtxBandOn(bi)) return; // снятые банды в списке не предлагаются
     let rows='';
     band.frequencies.forEach((f,ci)=>{
       if(f==null||f===0) return;
@@ -382,8 +442,37 @@ function vtxFreqOf(sel){
 }
 
 // ── Генерация команд ──
+// vtxtable-секция: прореженная таблица по ВЫБРАННЫМ бандам, номера подряд 1,2,3...
+// Возвращает {lines, remap}; remap: исходный индекс банда (0-based) → новый 1-based номер.
+function vtxBuildTableSection(){
+  const lines=[], remap={}, selBands=[];
+  _vtxTable.bands.forEach((b,bi)=>{
+    if(!vtxBandOn(bi)) return;
+    remap[bi] = selBands.length+1;
+    selBands.push(b);
+  });
+  let maxCh = 0;
+  _vtxTable.bands.forEach(b=> maxCh = Math.max(maxCh, b.frequencies.length));
+  if(!maxCh) maxCh = 8;
+  const pl = _vtxTable.powerlevels;
+  lines.push('vtxtable bands '+selBands.length);
+  lines.push('vtxtable channels '+maxCh);
+  lines.push('vtxtable powerlevels '+pl.length);
+  // CLI Betaflight разбирает аргументы по пробелам — пробелы внутри значений/меток/имён убираем
+  lines.push('vtxtable powervalues '+pl.map(p=>String(p.value).replace(/\s+/g,'')).join(' '));
+  lines.push('vtxtable powerlabels '+pl.map(p=>String(p.label).replace(/\s+/g,'')).join(' '));
+  selBands.forEach((b,k)=>{
+    const freqs=[];
+    for(let c=0;c<maxCh;c++){ const f=b.frequencies[c]; freqs.push(Number.isFinite(f)?f:0); }
+    const name=(b.name||'BAND'+(k+1)).replace(/\s+/g,'_');
+    lines.push('vtxtable band '+(k+1)+' '+name+' '+b.letter+' '+(b.isFactory?'FACTORY':'CUSTOM')+' '+freqs.join(' '));
+  });
+  return { lines, remap };
+}
+
 function vtxBuildCommands(){
-  const lines=[]; let idx=0;
+  const table = vtxBuildTableSection(); // всегда в выводе (решение подтверждено)
+  const cmds=[]; let idx=0;
   _vtxBlocks.forEach(b=>{
     // 2-й столбец команды = AUX-канал в 0-based нумерации Betaflight = (пультовый AUX − 1).
     // Кламп ≥0 на случай, если в b.aux каким-то путём затесался 0.
@@ -391,19 +480,23 @@ function vtxBuildCommands(){
     if(b.type==='power'){
       const preset = VTX_PWM[2];
       // строка 0 — дизарм (низкое), строка 1 — арм (высокое); power = индекс уровня + 1
-      lines.push('vtx '+(idx++)+' '+aux0+' 0 0 '+((b.disarm|0)+1)+' '+preset[0][0]+' '+preset[0][1]);
-      lines.push('vtx '+(idx++)+' '+aux0+' 0 0 '+((b.arm|0)+1)+' '+preset[1][0]+' '+preset[1][1]);
+      cmds.push('vtx '+(idx++)+' '+aux0+' 0 0 '+((b.disarm|0)+1)+' '+preset[0][0]+' '+preset[0][1]);
+      cmds.push('vtx '+(idx++)+' '+aux0+' 0 0 '+((b.arm|0)+1)+' '+preset[1][0]+' '+preset[1][1]);
     } else {
       const preset = VTX_PWM[b.positions] || VTX_PWM[3];
       for(let i=0;i<b.positions;i++){
         const s=b.sel[i];
         if(!s) continue; // незаданное положение пропускаем
+        // band = НОВЫЙ номер после пересборки (позиция в выбранном наборе), не исходный индекс.
+        // Банд заблокирован от снятия, пока используется, — но страхуемся (старая таблица и т.п.).
+        const nb = table.remap[s.b];
+        if(!nb) continue;
         const pwm = preset[i] || [0,0];
-        lines.push('vtx '+(idx++)+' '+aux0+' '+(s.b+1)+' '+(s.c+1)+' 0 '+pwm[0]+' '+pwm[1]);
+        cmds.push('vtx '+(idx++)+' '+aux0+' '+nb+' '+(s.c+1)+' 0 '+pwm[0]+' '+pwm[1]);
       }
     }
   });
-  return lines;
+  return cmds.length ? table.lines.concat('', cmds) : table.lines;
 }
 
 function vtxGenerate(){

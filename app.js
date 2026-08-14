@@ -3466,6 +3466,32 @@ function getSmartDrones(pilot){
   ])].sort((a,b)=>a.localeCompare(b,'ru'));
 }
 
+// Модели, реально доступные у ИСТОЧНИКА передачи (читает селект «От кого» #transFrom
+// в момент клика — смена источника при открытой форме сразу даёт актуальный список):
+// склад → stock qty>0 со статусами bg И nbg (передача не вылет — «не бг → склад/пилот»
+// легитимна, lost исключён); «не бг» → только nbg; пилот → его drones qty>0.
+// Список нестрогий — свободный ввод сохранён; пусто у источника → picker не открывается.
+function getTransferDrones(){
+  const from=(document.getElementById('transFrom')?.value||'склад').trim();
+  let names=[];
+  if(from==='склад'){
+    names=state.stock.filter(d=>d.qty>0&&(d.status==='bg'||d.status==='nbg')).map(d=>d.name);
+  } else if(from==='не бг'){
+    names=state.stock.filter(d=>d.qty>0&&d.status==='nbg').map(d=>d.name);
+  } else {
+    const sq=state.squads.find(s=>s.pilot===from);
+    names=sq?sq.drones.filter(d=>d.qty>0).map(d=>d.name):[];
+  }
+  return [...new Set(names)].sort((a,b)=>a.localeCompare(b,'ru'));
+}
+
+// Модели, доступные к отдаче в обмене: строго склад БГ qty>0 —
+// saveExchange списывает отданное только со строки status='bg'
+function getExchangeGiveDrones(){
+  return [...new Set(state.stock.filter(d=>d.status==='bg'&&d.qty>0).map(d=>d.name))]
+    .sort((a,b)=>a.localeCompare(b,'ru'));
+}
+
 // Список пилотов для пикера: расчёты (канонический источник, §9), фолбэк — вылеты
 function getSmartPilots(){
   const sq=state.squads.map(s=>s.pilot).filter(Boolean);

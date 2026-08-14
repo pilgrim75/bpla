@@ -200,7 +200,8 @@
       </div>
     </div>
     <div class="form-row cols2">
-      <div><label>БПЛА</label><input id="transDrone" list="dl-drones-smart" placeholder="Гамаюн13" autocomplete="off"></div>
+      <div><label>БПЛА</label><input id="transDrone" placeholder="Гамаюн13" autocomplete="off"
+        onclick="event.stopPropagation();const l=getTransferDrones();if(l.length)showQuickPicker(this,l,v=>{this.value=v})"></div>
       <div><label>Количество</label><input type="number" id="transQty" value="1" min="1"></div>
     </div>
     <div style="margin-bottom:10px"><label>Примечание</label><input id="transNote" placeholder="Задание командира / причина"></div>
@@ -238,7 +239,8 @@
     <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:8px;align-items:end;margin-bottom:10px">
       <div id="exGiveBlock">
         <label>Отдали (списать со склада)</label>
-        <input id="exGive" list="dl-drones-smart" placeholder="Гамаюн13т" autocomplete="off">
+        <input id="exGive" placeholder="Гамаюн13т" autocomplete="off"
+          onclick="event.stopPropagation();const l=getExchangeGiveDrones();if(l.length)showQuickPicker(this,l,v=>{this.value=v})">
         <input type="number" id="exGiveQty" value="1" min="1" style="margin-top:6px" placeholder="кол-во">
       </div>
       <div id="exArrow" style="text-align:center;font-size:18px;padding-bottom:8px;color:var(--muted)">⇄</div>
