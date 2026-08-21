@@ -23,9 +23,61 @@ function geoBuildIndex(){
   }
 }
 
-function geoLoad(){ try{ geoDB = JSON.parse(localStorage.getItem('geo_points_db')||'[]'); }catch(e){ geoDB=[]; } geoBuildIndex(); }
-function geoSave(){ try{ localStorage.setItem('geo_points_db', JSON.stringify(geoDB)); }catch(e){} }
-geoLoad();
+// ===== Хранилище гео — IndexedDB (21.08.2026) =====
+// geo_points_db (~4.6 МБ на устройстве admin) занимал почти всю квоту localStorage
+// (~5.24M символов): droneState переставал сохраняться, saveLocal молча падал —
+// соучастник дрейфа склада (устаревший droneState). Гео — только локальное (в облако
+// не ходит), поэтому переезжает в IndexedDB: та же БД `bpla_backups`/store `bak`, что
+// уже используется для снимков state (ключ 'geo_points_db'). Миграция при старте:
+// ключ есть в localStorage → перенести в IDB (с проверкой чтения) → удалить из LS.
+// Загрузка асинхронная: geoDB нужен только при расчёте дистанций/импорте/вкладке
+// Карта — к этому моменту данные уже на месте; промис `geoReady` — для ожидания.
+const GEO_IDB_DB='bpla_backups', GEO_IDB_STORE='bak', GEO_IDB_KEY='geo_points_db';
+function _geoIdb(){
+  return new Promise((res,rej)=>{
+    if(typeof indexedDB==='undefined'){ rej(new Error('IndexedDB недоступен')); return; }
+    const q=indexedDB.open(GEO_IDB_DB,1);
+    q.onupgradeneeded=()=>{ if(!q.result.objectStoreNames.contains(GEO_IDB_STORE)) q.result.createObjectStore(GEO_IDB_STORE); };
+    q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error);
+  });
+}
+async function _geoIdbGet(k){ const db=await _geoIdb(); return new Promise((res,rej)=>{ const r=db.transaction(GEO_IDB_STORE).objectStore(GEO_IDB_STORE).get(k); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function _geoIdbPut(k,v){ const db=await _geoIdb(); return new Promise((res,rej)=>{ const tx=db.transaction(GEO_IDB_STORE,'readwrite'); tx.objectStore(GEO_IDB_STORE).put(v,k); tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); }); }
+let _geoLoaded=false;
+async function geoLoad(){
+  let fromIdb=null;
+  try{ fromIdb=await _geoIdbGet(GEO_IDB_KEY); }catch(e){ console.warn('[GEO] IDB read:', e&&e.message); }
+  const ls=localStorage.getItem('geo_points_db');
+  if(fromIdb!==undefined && fromIdb!==null){
+    try{ geoDB=typeof fromIdb==='string'?JSON.parse(fromIdb):fromIdb; }catch(e){ geoDB=[]; }
+    if(!Array.isArray(geoDB)) geoDB=[];
+    // Остаток в LS при уже заполненной IDB (прерванная миграция) — IDB авторитетна, LS чистим
+    if(ls!==null){ try{ localStorage.removeItem('geo_points_db'); console.log('[GEO] остаток geo_points_db удалён из localStorage (IDB авторитетна)'); }catch(e){} }
+  } else if(ls!==null){
+    // Миграция LS → IDB: пишем, перечитываем, только затем удаляем из LS
+    try{ geoDB=JSON.parse(ls||'[]'); }catch(e){ geoDB=[]; }
+    if(!Array.isArray(geoDB)) geoDB=[];
+    try{
+      await _geoIdbPut(GEO_IDB_KEY, geoDB);
+      const back=await _geoIdbGet(GEO_IDB_KEY);
+      if(Array.isArray(back)&&back.length===geoDB.length){
+        localStorage.removeItem('geo_points_db');
+        console.log('[GEO] geo_points_db перенесён в IndexedDB ('+geoDB.length+' точек, '+ls.length+' символов освобождено в localStorage)');
+        if(typeof showSyncToast==='function') showSyncToast('✓ База гео-точек перенесена в IndexedDB — localStorage освобождён', 5000);
+      } else console.error('[GEO] миграция не подтверждена — localStorage оставлен');
+    }catch(e){ console.error('[GEO] миграция в IDB не удалась:', e&&e.message); }
+  } else geoDB=[];
+  geoBuildIndex(); _geoLoaded=true;
+  if(typeof renderGeoTab==='function') try{ const el=document.getElementById('adm-geo'); if(el&&el.offsetParent!==null) renderGeoTab(); }catch(e){}
+  return geoDB;
+}
+function geoSave(){
+  _geoIdbPut(GEO_IDB_KEY, geoDB).catch(e=>{
+    console.error('[GEO] сохранение базы точек в IndexedDB не удалось:', e&&e.message);
+    if(typeof showSyncToast==='function') showSyncToast('⚠ База гео-точек НЕ сохранена (IndexedDB)', 8000);
+  });
+}
+const geoReady = geoLoad();
 
 // Алиасы промежуточных/неизвестных точек: { нормализованное_имя: 'NNN цвет' }
 let geoAliases = {};

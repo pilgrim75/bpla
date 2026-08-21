@@ -148,16 +148,42 @@ let state = {
   transfers: []
 };
 
-// Однократное предупреждение при переполнении localStorage (иначе данные тихо теряются)
-let _lsQuotaWarned=false;
+// Отказ localStorage НЕ должен быть молчаливым (21.08.2026): прежнее однократное
+// 6-секундное предупреждение за сессию пропускалось, droneState месяц не сохранялся
+// (квота съедена geo_points_db) — устройство жило с устаревшим складом и затирало облако.
+// Теперь: console.error при КАЖДОМ отказе + несгораемый красный баннер #lsQuotaBar
+// поверх интерфейса + тост (не чаще раза в 15 с) + saveStatus. Баннер снимается при
+// первой же успешной записи (lsQuotaOk).
+let _lsQuotaLastToast=0, _lsQuotaActive=false;
 function lsQuotaWarn(e){
-  console.error('[STORAGE] localStorage write failed:', e&&e.name);
-  if(_lsQuotaWarned)return;
-  _lsQuotaWarned=true;
-  try{ if(typeof showSyncToast==='function') showSyncToast('⚠ Хранилище переполнено — данные не сохранены локально', 6000); }catch(_){}
+  console.error('[STORAGE] localStorage write failed — ДАННЫЕ НЕ СОХРАНЕНЫ ЛОКАЛЬНО:', e&&e.name, e&&e.message);
+  _lsQuotaActive=true;
+  try{
+    let bar=document.getElementById('lsQuotaBar');
+    if(!bar){
+      bar=document.createElement('div'); bar.id='lsQuotaBar';
+      bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:10001;background:#b91c1c;color:#fff;font:600 13px/1.4 var(--font-sans,sans-serif);padding:8px 14px;text-align:center;box-shadow:0 2px 8px #0006';
+      document.body.appendChild(bar);
+    }
+    bar.textContent='⛔ ХРАНИЛИЩЕ ПЕРЕПОЛНЕНО — данные НЕ сохраняются локально (localStorage). Освободите место (гео-база/бэкапы) или обратитесь к администратору. Записи уходят в облако только через очередь.';
+    const now=Date.now();
+    if(now-_lsQuotaLastToast>15000){ _lsQuotaLastToast=now; if(typeof showSyncToast==='function') showSyncToast('⛔ ХРАНИЛИЩЕ ПЕРЕПОЛНЕНО — данные НЕ сохранены локально', 10000); }
+    setStatus('saveStatus','⛔ Хранилище переполнено — не сохранено локально','err');
+  }catch(_){}
+}
+function lsQuotaOk(){
+  if(!_lsQuotaActive)return;
+  _lsQuotaActive=false;
+  const bar=document.getElementById('lsQuotaBar'); if(bar)bar.remove();
+  console.log('[STORAGE] localStorage снова пишется');
+}
+// Единственная точка записи droneState: бросает наружу ТОЛЬКО через lsQuotaWarn (видимо).
+function lsWriteState(){
+  try{ localStorage.setItem('droneState',JSON.stringify(state)); lsQuotaOk(); return true; }
+  catch(e){ lsQuotaWarn(e); return false; }
 }
 function saveLocal(){
-  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){lsQuotaWarn(e);}
+  lsWriteState();
   // Debounce — отправляем в облако через 2 сек после последнего изменения
   clearTimeout(saveLocal._timer);
   saveLocal._timer=setTimeout(()=>{
@@ -169,7 +195,7 @@ function saveLocal(){
 // Для операций, которые сами выгружают нужные листы точечно (append/stock),
 // чтобы не делать деструктивный полный write массива flights (Risk 3).
 function saveLocalQuiet(){
-  try{localStorage.setItem('droneState',JSON.stringify(state));}catch(e){lsQuotaWarn(e);}
+  lsWriteState();
   clearTimeout(saveLocal._timer); // отменяем отложенный полный write, если был запланирован
 }
 function loadLocal(){

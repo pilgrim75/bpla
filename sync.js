@@ -193,7 +193,7 @@ function _qid(x){
 const pendingQueue = {
   _key: 'sync_pending_queue',
   load(){ try{ return JSON.parse(localStorage.getItem(this._key)||'[]'); }catch(e){ return []; } },
-  save(q){ try{ localStorage.setItem(this._key, JSON.stringify(q)); }catch(e){} updateQueueIndicator(); },
+  save(q){ try{ localStorage.setItem(this._key, JSON.stringify(q)); }catch(e){ if(typeof lsQuotaWarn==='function') lsQuotaWarn(e); else console.error('[STORAGE] queue write failed', e&&e.name); } updateQueueIndicator(); },
   add(item){
     const id=_qid(item);
     const q=this.load();
@@ -294,7 +294,7 @@ const tombstones = {
       return raw.map(x=>(x&&typeof x==='object'&&'id' in x)?x:{id:x,ts:now});
     }catch(e){ return []; }
   },
-  _save(list){ try{ localStorage.setItem(this._key, JSON.stringify(list)); }catch(e){} },
+  _save(list){ try{ localStorage.setItem(this._key, JSON.stringify(list)); }catch(e){ if(typeof lsQuotaWarn==='function') lsQuotaWarn(e); else console.error('[STORAGE] tombstones write failed', e&&e.name); } },
   load(){ return new Set(this._load().map(x=>x.id)); },
   add(id){ this.addMany([id]); },
   // Массовое добавление одним чтением/записью localStorage (adminClearFlights и т.п.)
@@ -414,7 +414,7 @@ function syncStockLoadBase(){ try{ _stockBase = JSON.parse(localStorage.getItem(
 syncStockLoadBase();
 function syncStockSetBase(stock, squads, version){
   _stockBase = { stock: JSON.parse(JSON.stringify(stock||[])), squads: JSON.parse(JSON.stringify(squads||[])), version: version||0 };
-  try{ localStorage.setItem('sync_stock_base', JSON.stringify(_stockBase)); }catch(e){}
+  try{ localStorage.setItem('sync_stock_base', JSON.stringify(_stockBase)); }catch(e){ if(typeof lsQuotaWarn==='function') lsQuotaWarn(e); else console.error('[STORAGE] stock base write failed', e&&e.name); }
 }
 // Забыть базу — для операций полной замены state (импорт JSON, сброс): следующий пуш
 // идёт без merge (импорт = полная замена, а не дельта к прежнему снимку).
@@ -522,7 +522,7 @@ function syncStockReconcileOnLoad(){
     state.stock=JSON.parse(JSON.stringify(_stockBase.stock));
     state.squads=JSON.parse(JSON.stringify(_stockBase.squads));
     if(_stockVersion < _stockBase.version){ _stockVersion=_stockBase.version; syncPersistStockVersion(); }
-    try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){}
+    if(typeof lsWriteState==='function') lsWriteState(); else try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){ console.error('[STORAGE] write failed', e&&e.name); }
   }
 }
 // Дешёвая проверка серверного времени последней записи склада (пустые дельты + stock_updated_ts).
@@ -723,7 +723,7 @@ async function _syncPushStockSquadsNow(){
       // Выгруженное = новая база. При недоступной проверке базу ставим только если её
       // ещё нет (bootstrap); иначе оставляем прежнюю — дельта сохранится до следующего пуша.
       if(landed===true || !_stockBase) syncStockSetBase(state.stock, state.squads, _stockVersion);
-      try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){} // _sv строк в droneState (сверка при загрузке)
+      if(typeof lsWriteState==='function') lsWriteState(); else try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){ console.error('[STORAGE] write failed', e&&e.name); } // _sv строк в droneState (сверка при загрузке)
       console.log('[SYNC] stock+squads OK, sv:', _stockVersion, landed===true?'(подтверждено)':'(без подтверждения)');
     } else {
       console.warn('[SYNC] stock push: запись в облако НЕ подтверждена (stock_updated_ts не сдвинулся) — дельта сохранена, повтор при следующем пуше');
