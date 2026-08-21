@@ -192,9 +192,23 @@ function loadLocal(){
   }catch(e){}
 }
 loadLocal();
+// Сверка склада со своей базой (sync.js, LWW-защита 21.08.2026): если другая вкладка
+// перезаписала droneState устаревшим складом при уже принятой новой версии — берём базу.
+if(typeof syncStockReconcileOnLoad==='function') try{ syncStockReconcileOnLoad(); }catch(e){ console.warn('[SYNC] reconcile on load:', e.message); }
 
+// Разовая миграция легаси-выдач (01.06.2026) в transfers ('_mig_', дата 2000-01-01).
+// ГЕЙТ — ПО ДАННЫМ, не по устройству (форензика 21.08.2026): прежний флаг
+// `_transfers_migrated_v1` жил в localStorage устройства, и каждое новое/очищенное
+// устройство, загрузившееся с squads, но без transfers, переливало легаси заново —
+// 6 прогонов (05.06, 10.06, 09.07 ×2, 11.07, 14.08), дубли ломали баланс по пилотам
+// (getBalance). Теперь: есть хоть одна '_mig_'-запись → миграция уже была (везде, т.к.
+// transfers общие в облаке) → выход; transfers пусты → данных для вывода нет → выход
+// БЕЗ флага (после загрузки облака '_mig_' будут видны). Флаг оставлен как вторичный.
 function migrateSquadsToTransfers(){
   if(localStorage.getItem('_transfers_migrated_v1'))return;
+  const tr=state.transfers||[];
+  if(tr.some(t=>t&&typeof t.id==='string'&&t.id.includes('_mig_'))){ localStorage.setItem('_transfers_migrated_v1','1'); return; }
+  if(!tr.length) return; // нечего сверять — не плодим легаси из одних squads
   const existing=new Set(
     (state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад').map(t=>t.to+'||'+t.drone)
   );
@@ -500,9 +514,13 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
     // 1) вернуть старый борт пилоту
     const od=sq.drones.find(d=>d.name.toLowerCase()===oldDrone.toLowerCase());
     if(od) od.qty++; else sq.drones.push({name:oldDrone,qty:1});
-    // 2) списать новый борт у пилота (если есть — иначе не плодим фантом qty:-1)
-    const nd=sq.drones.find(d=>d.name.toLowerCase()===newDrone.toLowerCase());
-    if(nd){ nd.qty--; if(nd.qty<=0) sq.drones=sq.drones.filter(d=>d!==nd); }
+    // 2) списать новый борт у пилота — в минус, если его нет (ADR-001 §4: минус = сигнал,
+    //    как в writeDroneLoss; строка снимается только при точном нуле)
+    let nd=sq.drones.find(d=>d.name.toLowerCase()===newDrone.toLowerCase());
+    if(!nd){ nd={name:newDrone,qty:0}; sq.drones.push(nd); }
+    nd.qty--;
+    if(nd.qty===0) sq.drones=sq.drones.filter(d=>d!==nd);
+    if(nd.qty<0) lossDeficitWarn({deficit:true,pilot,drone:newDrone,qty:nd.qty});
     // 3) обновить запись о потере в transfers
     updateLossTransferDrone(f, oldDrone, newDrone);
     syncBumpStockVersion();
@@ -569,7 +587,7 @@ async function adminEditReturned(idx, newReturned){
   if(apply){
     if(loss){
       // списать борт у пилота + запись о потере в transfers
-      writeDroneLoss(f.pilot, drone, f.date, f.time, f.id);
+      lossDeficitWarn(writeDroneLoss(f.pilot, drone, f.date, f.time, f.id));
       f._lossWritten=true;
     } else {
       // вернуть борт пилоту + убрать запись о потере (сам пушит склад)
@@ -596,7 +614,8 @@ function returnLossDrone(f){
   const sq=state.squads.find(s=>s.pilot===f.pilot);
   if(sq){
     const d=sq.drones.find(d=>d.name.toLowerCase()===dLow);
-    if(d) d.qty++; else sq.drones.push({name:f.drone,qty:1});
+    if(d){ d.qty++; if(d.qty===0) sq.drones=sq.drones.filter(x=>x!==d); } // −1→0: минус закрыт, строку снимаем
+    else sq.drones.push({name:f.drone,qty:1});
   }
   const before=(state.transfers||[]).length;
   let removedTransfers=[];
@@ -754,7 +773,7 @@ function renderAdminSquads(){
           <td>${di===0?pilotCell:'&nbsp;'}</td>
           <td>${di===0?startCell:'&nbsp;'}</td>
           <td><input style="width:90px" value="${esc(d.name)}" onchange="adminEditSquadDrone(${si},${di},'name',this.value)"></td>
-          <td><input style="width:55px" type="number" min="0" value="${d.qty}" onchange="adminEditSquadDrone(${si},${di},'qty',parseInt(this.value)||0)"></td>
+          <td><input style="width:55px${d.qty<0?';color:var(--red);border-color:var(--red)':''}" type="number" value="${d.qty}"${d.qty<0?' title="Баланс в минусе — борт списан без передачи со склада"':''} onchange="adminEditSquadDrone(${si},${di},'qty',parseInt(this.value)||0)">${d.qty<0?' <span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}</td>
           <td>${di===0?delCell:'&nbsp;'}</td>
         </tr>`);
       }).join('')}
@@ -892,6 +911,7 @@ function adminImportJSON(input){
       saveLocal();
       // Импортированные склад/расчёты выгружаем явно: syncPushAll после Дефекта B
       // (09.06) их не пишет — только flights/transfers. syncToCloud догоняет flights/transfers.
+      syncStockForgetBase(); // импорт = полная замена снимка, не дельта (без 3-way merge)
       syncBumpStockVersion();
       syncPushStockSquads();
       syncToCloud(true);
@@ -932,6 +952,7 @@ function adminResetAll(){
   // и уйдёт в облако после перезагрузки
   logAction('admin','reset','ПОЛНЫЙ СБРОС локальных данных');
   localStorage.removeItem('droneState');
+  syncStockForgetBase(); // иначе сверка при загрузке восстановила бы склад из базы
   location.reload();
 }
 
@@ -1751,7 +1772,7 @@ function renderDashboard(){
   // Сортировка: вылеты за сегодня убыв., при равенстве — по имени.
   document.getElementById('dashSquads').innerHTML=state.squads
     .filter(sq=>fWeek.some(x=>x.pilot===sq.pilot)
-      ||(sq.drones||[]).some(d=>(d.qty||0)>0)
+      ||(sq.drones||[]).some(d=>(d.qty||0)!==0)   // минус тоже виден — это сигнал (ADR-001 §4)
       ||calcPilotMedals(sq.pilot).length>0)
     .sort((a,b)=>{
       const ca=fToday.filter(x=>x.pilot===a.pilot).length;
@@ -1778,7 +1799,7 @@ function renderDashboard(){
         <div class="crew-flights">${sqFlightsToday.length?sqFlightsToday.length+' сегодня':'нет вылетов'}</div>
       </div>
       <div class="crew-tags">
-        ${drones.map(d=>`<div class="crew-tag">${esc(d.name)} × ${d.qty}</div>`).join('')}
+        ${drones.map(d=>`<div class="crew-tag"${d.qty<0?' style="color:var(--color-text-danger);border-color:var(--color-border-danger)" title="Баланс в минусе — борт списан без передачи со склада. Оформите передачу склад → пилот"':''}>${esc(d.name)} × ${d.qty}${d.qty<0?' ⚠':''}</div>`).join('')}
         ${drones.length===0?'<div class="crew-tag" style="color:var(--color-text-secondary)">нет дронов</div>':''}
       </div>
       <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px">За неделю: ${sqFlightsWeek.length} вылетов${sqLossWeek?` · <span style="color:var(--color-text-danger)">потери: ${sqLossWeek}</span>`:''}</div>
@@ -2024,7 +2045,7 @@ function saveTransfer(){
     let sq=state.squads.find(s=>s.pilot===to);
     if(!sq){sq={pilot:to,drones:[]};state.squads.push(sq);}
     const di=sq.drones.find(d=>d.name.toLowerCase()===drone.toLowerCase());
-    if(di){di.qty+=qty;}
+    if(di){di.qty+=qty; if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);} // минус закрыт передачей → строку снимаем
     else{sq.drones.push({name:drone,qty});}
   }
 
@@ -2066,15 +2087,19 @@ function saveExchange(){
     alert('Заполните отданный и полученный борт');return;
   }
 
-  // Списать отданный борт со склада
+  // Списать отданный борт со склада. Слепой путь закрыт по ADR-001 §4 (21.08.2026,
+  // минус = сигнал): раньше клэмп Math.max(0,…) и «не найден — всё равно оформить»
+  // писали exchange-движение БЕЗ списания qty → наличие расходилось с движениями
+  // (onhand > движ.), а недостающий приход на склад прятался. Теперь qty уходит в
+  // минус (строка создаётся при отсутствии), строка снимается только при точном нуле,
+  // оператору — НЕ блокирующее предупреждение (lossDeficitWarn — общий механизм).
+  let giveDeficit=null;
   if(give){
-    const giveItem=state.stock.find(d=>d.name.toLowerCase()===give.toLowerCase()&&d.status==='bg');
-    if(giveItem){
-      giveItem.qty=Math.max(0,giveItem.qty-giveQty);
-      if(giveItem.qty===0)state.stock=state.stock.filter(d=>d!==giveItem);
-    } else {
-      if(!confirm(`"${give}" не найден на складе. Всё равно оформить?`))return;
-    }
+    let giveItem=state.stock.find(d=>d.name.toLowerCase()===give.toLowerCase()&&d.status==='bg');
+    if(!giveItem){ giveItem={name:give,qty:0,status:'bg'}; state.stock.push(giveItem); }
+    giveItem.qty-=giveQty;
+    if(giveItem.qty===0)state.stock=state.stock.filter(d=>d!==giveItem);
+    if(giveItem.qty<0) giveDeficit={deficit:true,pilot:'склад',drone:give,qty:giveItem.qty};
   }
 
   // Оприходовать полученный борт на склад
@@ -2091,7 +2116,13 @@ function saveExchange(){
   saveLocal();
   syncAddTransfer(exOp);
   syncPushStockSquads();
-  logAction('transfer','exchange','Обмен с '+unit+': '+[give?('отдали '+give+' ×'+giveQty):'',get?('получили '+get+' ×'+getQty):''].filter(Boolean).join(', '));
+  if(giveDeficit){
+    const msg=`⚠ Склад (БГ) не имеет ${give} ×${giveQty} — остаток уходит в минус (${giveDeficit.qty}). Обмен оформлен; если борт был на складе без прихода — оформите приход/коррекцию (минус закроется).`;
+    console.warn('[учёт] '+msg);
+    if(typeof showSyncToast==='function')showSyncToast(msg,8000);
+    setStatus('saveStatus',msg,'warn');
+  }
+  logAction('transfer','exchange','Обмен с '+unit+': '+[give?('отдали '+give+' ×'+giveQty):'',get?('получили '+get+' ×'+getQty):''].filter(Boolean).join(', ')+(giveDeficit?' [склад в минус: '+giveDeficit.qty+']':''));
   renderInventory();
   renderDashboard();
   document.getElementById('exchangeCard').style.display='none';
@@ -2682,7 +2713,7 @@ function renderSquadEditor(){
       ${sq.drones.map((d,di)=>`
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px${d.qty===0?';opacity:0.5':''}">
           <input style="flex:1" list="dl-drones-smart" value="${esc(d.name)}" onchange="squadEditDrone(${si},${di},'name',this.value)" autocomplete="off">
-          <input type="number" style="width:60px${d.qty===0?';color:var(--red)':''}" min="0" value="${d.qty}" onchange="squadEditDrone(${si},${di},'qty',parseInt(this.value)||0)">
+          <input type="number" style="width:60px${d.qty<=0?';color:var(--red)':''}${d.qty<0?';border-color:var(--red)':''}" value="${d.qty}"${d.qty<0?' title="Баланс в минусе — борт списан без передачи со склада. Оформите передачу склад → пилот"':''} onchange="squadEditDrone(${si},${di},'qty',parseInt(this.value)||0)">${d.qty<0?'<span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}
           <button class="btn btn-sm" style="color:var(--red)" onclick="squadDeleteDrone(${si},${di})">✕</button>
         </div>`).join('')}
       <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 10px" onclick="squadAddDrone(${si})">+ БПЛА</button>
@@ -2876,25 +2907,29 @@ function squadAddPilot(){
   document.getElementById('sq-newDrones').value='';
 }
 
-// Списать дрон при потере — ищем сначала у пилота, потом на складе
+// Списать дрон при потере — всегда у пилота-исполнителя.
+// Слепой путь закрыт по ADR-001 §4 (минус = сигнал, не ошибка; 21.08.2026):
+// если у пилота нет строки модели (или qty уже 0) — loss-запись ВСЁ РАВНО создаётся
+// (биекция вылет↔loss не рвётся), а баланс пилота уходит в минус: строка qty:-1
+// создаётся/декрементируется и НЕ удаляется (раньше «не плодим фантом» + клэмп `<=0`
+// молча прятали недостающий приход — борт, выданный со склада без передачи, исчезал
+// из учёта без следа). Строка снимается только при точном нуле (приход/возврат закрыл минус).
+// Возвращает {deficit:true, pilot, drone, qty} если списание ушло в минус — вызывающий
+// показывает оператору НЕ блокирующее предупреждение (см. lossDeficitWarn).
 function writeDroneLoss(pilot, drone, date, time, flightId){
-  if(!drone)return;
+  if(!drone)return null;
   const dn=drone.toLowerCase();
 
-  // Всегда списываем у пилота — даже если уйдёт в минус
   let sq=state.squads.find(s=>s.pilot===pilot);
   if(!sq){
     sq={pilot,drones:[]};
     state.squads.push(sq);
   }
-  const di=sq.drones.find(d=>d.name.toLowerCase()===dn);
-  if(di){
-    di.qty--;
-    if(di.qty<=0)sq.drones=sq.drones.filter(d=>d!==di);
-  } else {
-    // Борта нет в списке — логируем расхождение, но не создаём запись qty:-1
-    // чтобы не засорять список пилота фантомными бортами
-  }
+  let di=sq.drones.find(d=>d.name.toLowerCase()===dn);
+  if(!di){ di={name:drone,qty:0}; sq.drones.push(di); }
+  di.qty--;
+  if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);
+  const deficit=di.qty<0;
 
   // Логируем в историю перемещений
   if(!state.transfers)state.transfers=[];
@@ -2907,6 +2942,20 @@ function writeDroneLoss(pilot, drone, date, time, flightId){
   });
   state.transfers.unshift(lossOp);
   syncAddTransfer(lossOp);
+  return deficit?{deficit:true,pilot,drone,qty:di.qty}:null;
+}
+
+// Текст/показ предупреждения о списании в минус (ADR-001 §4). Не блокирует —
+// вылет уже сохранён, потеря списана; минус закроется оформлением передачи склад→пилот.
+function lossDeficitMsg(r){
+  return `⚠ ${r.pilot} не имеет ${r.drone} на балансе — баланс уходит в минус (${r.qty}). `+
+    'Если борт был выдан со склада, оформите передачу склад → пилот (минус закроется).';
+}
+function lossDeficitWarn(r){
+  if(!r||!r.deficit)return;
+  const msg=lossDeficitMsg(r);
+  console.warn('[учёт] '+msg);
+  if(typeof showSyncToast==='function')showSyncToast(msg,8000);
 }
 
 
@@ -3652,7 +3701,7 @@ function saveFlightEdit(key){
   // (раньше «вернул↔потерян» здесь менял только текст и склад расходился с журналом)
   if(oldReturned!==f.returned&&(f.drone||'').trim()){
     if(f.returned==='no'){
-      applyLossIfNeeded(f);             // списание ровно один раз (_lossWritten) + push склада
+      lossDeficitWarn(applyLossIfNeeded(f)); // списание ровно один раз (_lossWritten) + push склада; минус → предупреждение
     } else {
       returnLossDrone(f);               // возврат борта + удаление loss-записи (сам пушит склад)
       f._lossWritten=false;
@@ -4034,7 +4083,7 @@ async function saveQuickFlight(){
     note
   };
   geoApplyToFlight(f);  // дистанции если есть гео и точка старта
-  applyLossIfNeeded(f);
+  const lossDef=applyLossIfNeeded(f);  // {deficit} если списание ушло в минус (ADR-001 §4)
   // unshift+saveLocal+pendingQueue выполняются синхронно (гарантия доставки),
   // сетевая отправка — в фоне; UI (статус/сброс формы) её НЕ ждёт (без await).
   syncAddFlight(f);
@@ -4045,9 +4094,15 @@ async function saveQuickFlight(){
   document.getElementById('qf-note').value='';
   document.getElementById('qf-result').value='yes';
   document.getElementById('qf-returned').value='yes';
-  setStatus('qf-status','✓ Вылет #'+f.flightnum+' записан — '+f.time,'ok');
-  logAction('flight','add','Вылет #'+f.flightnum+' '+pilot+' '+drone+(f.returned==='no'?' [потеря]':''));
-  setTimeout(()=>{const st=document.getElementById('qf-status');if(st)st.textContent='';},3000);
+  // Списание в минус — вылет сохранён и потеря списана; оператору сигнал, не ошибка
+  if(lossDef){
+    setStatus('qf-status','✓ Вылет #'+f.flightnum+' записан — '+f.time+'. '+lossDeficitMsg(lossDef),'warn');
+    lossDeficitWarn(lossDef);
+  } else {
+    setStatus('qf-status','✓ Вылет #'+f.flightnum+' записан — '+f.time,'ok');
+  }
+  logAction('flight','add','Вылет #'+f.flightnum+' '+pilot+' '+drone+(f.returned==='no'?' [потеря]':'')+(lossDef?' [баланс в минус: '+lossDef.qty+']':''));
+  setTimeout(()=>{const st=document.getElementById('qf-status');if(st)st.textContent='';},lossDef?12000:3000);
 }
 
 // ============ ACTIVITY LOG ============

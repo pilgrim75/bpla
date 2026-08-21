@@ -244,12 +244,16 @@ async function confirmDuplicateOrAbort(date,time,pilot){
 // Списывает борт как потерю — РОВНО ОДИН РАЗ за вылет. Флаг _lossWritten
 // фиксирует, что списание уже выполнено, чтобы повторные вызовы (например при
 // редактировании или приёме того же вылета из облака) не вычитали борт снова.
+// Возвращает результат writeDroneLoss ({deficit:true,…} если списание ушло в минус, иначе null) —
+// вызывающий показывает НЕ блокирующее предупреждение (lossDeficitWarn, ADR-001 §4).
 function applyLossIfNeeded(f){
   if(f.returned==='no'&&f.drone&&!f._lossWritten){
-    writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);
+    const r=writeDroneLoss(f.pilot,f.drone,f.date,f.time,f.id);
     f._lossWritten=true;
     setTimeout(()=>syncPushStockSquads(),500);
+    return r;
   }
+  return null;
 }
 
 // Диалог подтверждения дубликата. Возвращает: 'save'|'cancel'
@@ -334,7 +338,7 @@ async function confirmParsed(i){
 
   f.id=f.id||genId('f');
   geoApplyToFlight(f);  // дистанции если есть гео и точка старта
-  applyLossIfNeeded(f);
+  lossDeficitWarn(applyLossIfNeeded(f));  // минус у пилота — предупреждение, не блок (ADR-001 §4)
   // 1. Скрываем карточку сразу — не дожидаясь отправки вылета на сервер
   const card=document.getElementById(`pcard-${i}`);
   const src=document.getElementById(`psrc-${i}`);

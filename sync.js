@@ -381,6 +381,170 @@ function syncBumpStockVersion(){
   _stockVersion = Date.now();
   localStorage.setItem('sync_stock_version', String(_stockVersion));
 }
+function syncPersistStockVersion(){ try{ localStorage.setItem('sync_stock_version', String(_stockVersion)); }catch(e){} }
+
+// ===== Склад/расчёты: защита от LWW-гонки (форензика 21.08.2026) =====
+// Раньше stock/squads выгружались полным снимком «последний пишущий побеждает» по _sv:
+// вкладка с устаревшим складом любой операцией затирала облако на часы назад, а
+// flights/transfers (append-only + merge) оставались полными → наличие расходилось с
+// движениями ровно на «чужие» операции. Плюс гейт приёма был строгим `remote > local`:
+// вкладка, унаследовавшая из localStorage НОВУЮ версию при СТАРОМ содержимом
+// (две вкладки одного устройства, стейл-перезапись droneState), замену не получала.
+// Механика:
+//  • _stockBase — последний снимок, ПРИНЯТЫЙ из облака или УСПЕШНО выгруженный нами
+//    (персистится в localStorage `sync_stock_base`). Дельта «локаль − база» = наши
+//    несинхронизированные правки.
+//  • Перед пушем — дешёвая проверка `read_since&since=∞` → stock_updated_ts (серверное
+//    время последней записи склада). Если новее нашей отметки — читаем облачный снимок и
+//    НЕ затираем его, а накладываем на него нашу дельту (3-way merge количеств:
+//    остатки аддитивны, поэтому корректно и для разных, и для одних и тех же позиций),
+//    затем пушим объединённое. Отказ/«повторите действие» не годится: записи
+//    transfers/loss уже созданы и доставляются очередью — повтор задвоил бы их.
+//  • Гейт приёма: remote.version > local ИЛИ (== и содержимое отличается от БАЗЫ) —
+//    закрывает «равная версия, старое содержимое». Сравнение с базой, а не со state:
+//    state может нести ещё не выгруженную локальную дельту — её не теряем (merge).
+//  • При загрузке страницы — сверка state со своей же базой по max(_sv) строк:
+//    если строки state старее базы (другая вкладка перезаписала droneState старым
+//    складом), stock/squads берутся из базы.
+//  • Пуши сериализуются (_stockPushChain) и схлопываются — параллельные вызовы
+//    syncPushStockSquads не гоняются друг с другом.
+// pendingQueue (flights/transfers/actlog) не затрагивается — склад в очереди не живёт.
+let _stockBase = null;
+function syncStockLoadBase(){ try{ _stockBase = JSON.parse(localStorage.getItem('sync_stock_base')||'null'); }catch(e){ _stockBase=null; } }
+syncStockLoadBase();
+function syncStockSetBase(stock, squads, version){
+  _stockBase = { stock: JSON.parse(JSON.stringify(stock||[])), squads: JSON.parse(JSON.stringify(squads||[])), version: version||0 };
+  try{ localStorage.setItem('sync_stock_base', JSON.stringify(_stockBase)); }catch(e){}
+}
+// Забыть базу — для операций полной замены state (импорт JSON, сброс): следующий пуш
+// идёт без merge (импорт = полная замена, а не дельта к прежнему снимку).
+function syncStockForgetBase(){ _stockBase=null; try{ localStorage.removeItem('sync_stock_base'); }catch(e){} }
+const _stN = s => String(s||'').trim().toLowerCase();
+const _stKey = r => _stN(r.name)+'|'+(r.status||'bg');
+// Канонический отпечаток содержимого (без id/_sv): сортированные количества по ключам.
+function syncStockHash(stock, squads){
+  const st=new Map(); (stock||[]).forEach(r=>{ const k=_stKey(r); st.set(k,(st.get(k)||0)+(+r.qty||0)); });
+  const sq=new Map(); (squads||[]).forEach(q=>{
+    const k=_stN(q.pilot); const cur=sq.get(k)||{sp:'',d:new Map()};
+    cur.sp = q.start_point||cur.sp;
+    (q.drones||[]).forEach(d=>{ const dk=_stN(d.name); cur.d.set(dk,(cur.d.get(dk)||0)+(+d.qty||0)); });
+    sq.set(k,cur);
+  });
+  const a=[...st.entries()].sort((x,y)=>x[0].localeCompare(y[0]));
+  const b=[...sq.entries()].sort((x,y)=>x[0].localeCompare(y[0])).map(([k,v])=>[k,v.sp,[...v.d.entries()].sort((x,y)=>x[0].localeCompare(y[0]))]);
+  return JSON.stringify([a,b]);
+}
+function syncStockMaxSv(stock, squads){ return Math.max(0, ...(stock||[]).map(r=>+r._sv||0), ...(squads||[]).map(r=>+r._sv||0)); }
+
+// 3-way merge: результат = remote + (local − base) по количествам. Структурные изменения
+// (новая строка/расчёт, удаление, точка старта) — локальные, если локаль отличается от базы,
+// иначе облачные. Возвращает {stock,squads}.
+function syncStockMerge3(base, local, remote){
+  const clone=o=>JSON.parse(JSON.stringify(o));
+  // --- stock ---
+  const qtyIdx=arr=>{ const m=new Map(); (arr||[]).forEach(r=>{ const k=_stKey(r); m.set(k,(m.get(k)||0)+(+r.qty||0)); }); return m; };
+  const rowIdx=arr=>{ const m=new Map(); (arr||[]).forEach(r=>{ const k=_stKey(r); if(!m.has(k)) m.set(k,r); }); return m; };
+  const bS=qtyIdx(base.stock), lS=qtyIdx(local.stock), rS=qtyIdx(remote.stock);
+  const rRow=rowIdx(remote.stock), lRow=rowIdx(local.stock);
+  const stock=[];
+  new Set([...bS.keys(),...lS.keys(),...rS.keys()]).forEach(k=>{
+    const inL=lS.has(k), inR=rS.has(k), inB=bS.has(k);
+    if(!inL&&!inR) return;                                   // было только в базе — удалено везде
+    const delta=(lS.get(k)||0)-(bS.get(k)||0);
+    if(!inL&&inR&&inB&&delta===-(bS.get(k)||0)&&(rS.get(k)||0)===(bS.get(k)||0)) return; // удалено локально, облако не трогало
+    const qty=(rS.get(k)||0)+delta;
+    if(!inR&&qty===0) return;                                // локальная строка, сведённая в ноль
+    const src=rRow.get(k)||lRow.get(k);
+    stock.push(Object.assign(clone(src),{qty}));
+  });
+  // --- squads ---
+  const sqIdx=arr=>{ const m=new Map(); (arr||[]).forEach(q=>{ const k=_stN(q.pilot); if(!m.has(k)) m.set(k,q); }); return m; };
+  const bQ=sqIdx(base.squads), lQ=sqIdx(local.squads), rQ=sqIdx(remote.squads);
+  const sqHash=q=>q?syncStockHash([], [q]):'';
+  const squads=[];
+  new Set([...bQ.keys(),...lQ.keys(),...rQ.keys()]).forEach(k=>{
+    const b=bQ.get(k), l=lQ.get(k), r=rQ.get(k);
+    if(!l&&!r) return;
+    if(l&&!r){ if(b&&sqHash(l)===sqHash(b)) return; squads.push(clone(l)); return; } // облако удалило, локаль не меняла → удаляем; иначе — локальная
+    if(r&&!l){ if(b&&sqHash(r)===sqHash(b)) return; squads.push(clone(r)); return; } // локаль удалила, облако не меняло → удаляем; иначе — облачная
+    const out=clone(r);
+    if((l.start_point||'')!==((b&&b.start_point)||'')) out.start_point=l.start_point||'';
+    const dq=arr=>{ const m=new Map(); (arr||[]).forEach(d=>{ const dk=_stN(d.name); m.set(dk,(m.get(dk)||0)+(+d.qty||0)); }); return m; };
+    const drow=arr=>{ const m=new Map(); (arr||[]).forEach(d=>{ const dk=_stN(d.name); if(!m.has(dk)) m.set(dk,d); }); return m; };
+    const bD=dq(b&&b.drones), lD=dq(l.drones), rD=dq(r.drones), rDr=drow(r.drones), lDr=drow(l.drones);
+    const drones=[];
+    new Set([...bD.keys(),...lD.keys(),...rD.keys()]).forEach(dk=>{
+      const inL=lD.has(dk), inR=rD.has(dk), inB=bD.has(dk);
+      if(!inL&&!inR) return;
+      const delta=(lD.get(dk)||0)-(bD.get(dk)||0);
+      if(!inL&&inR&&inB&&delta===-(bD.get(dk)||0)&&(rD.get(dk)||0)===(bD.get(dk)||0)) return;
+      const qty=(rD.get(dk)||0)+delta;
+      if(!inR&&qty===0) return;
+      const src=rDr.get(dk)||lDr.get(dk);
+      drones.push(Object.assign(clone(src),{qty}));
+    });
+    out.drones=drones;
+    squads.push(out);
+  });
+  return {stock, squads};
+}
+
+// Облачный снимок новее нашего? (строго по версии ИЛИ равная версия с иным содержимым, чем БАЗА)
+function syncStockRemoteIsNewer(remote){
+  if(remote.version > _stockVersion) return true;
+  if(remote.version === _stockVersion && _stockBase && syncStockHash(remote.stock,remote.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads)) return true;
+  return false;
+}
+// Единая точка приёма облачного снимка склада. Локальная дельта относительно базы
+// накладывается поверх (merge), иначе — чистая замена. Возвращает true, если локальная
+// дельта была (вызывающий планирует пуш объединённого снимка).
+function syncAcceptRemoteStock(remote){
+  const hadDelta = !!(_stockBase && syncStockHash(state.stock,state.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads));
+  if(hadDelta){
+    const m=syncStockMerge3(_stockBase, {stock:state.stock,squads:state.squads}, remote);
+    state.stock=m.stock; state.squads=m.squads;
+    console.warn('[SYNC] склад: облачный снимок новее — локальная дельта объединена (3-way merge)');
+  } else {
+    state.stock=remote.stock; state.squads=remote.squads;
+  }
+  _stockVersion=remote.version; syncPersistStockVersion();
+  syncStockSetBase(remote.stock, remote.squads, remote.version);
+  return hadDelta;
+}
+// Сверка при загрузке страницы: state (из droneState) против своей же базы.
+// Строки state старее базы при равной/большей версии в localStorage → state перезаписан
+// другой вкладкой устаревшим складом → берём базу. Вызывается из app.js после loadLocal().
+function syncStockReconcileOnLoad(){
+  if(!_stockBase||!state) return;
+  const stateSv=syncStockMaxSv(state.stock,state.squads);
+  if(stateSv < (_stockBase.version||0) && syncStockHash(state.stock,state.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads)){
+    console.warn('[SYNC] склад в droneState старее принятой базы ('+stateSv+' < '+_stockBase.version+') — восстановлен из базы');
+    state.stock=JSON.parse(JSON.stringify(_stockBase.stock));
+    state.squads=JSON.parse(JSON.stringify(_stockBase.squads));
+    if(_stockVersion < _stockBase.version){ _stockVersion=_stockBase.version; syncPersistStockVersion(); }
+    try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){}
+  }
+}
+// Дешёвая проверка серверного времени последней записи склада (пустые дельты + stock_updated_ts).
+async function syncFetchStockTs(){
+  const {url,token}=syncGetCfg(); if(!url||!token) return null;
+  try{
+    const r=await fetch(url+'?action=read_since&since=9000000000000000&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
+    const d=await r.json(); if(d.error) return null;
+    return +d.stock_updated_ts||0;
+  }catch(e){ return null; }
+}
+// Полный облачный снимок склада → {stock,squads,version} | null
+async function syncFetchStockSnapshot(){
+  const {url,key,token}=syncGetCfg(); if(!url||!token) return null;
+  try{
+    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
+    const d=await r.json(); if(d.error) return null;
+    const stock=await syncDecryptRows(d.stock||[],key,'stock');
+    const squads=(await syncDecryptRows(d.squads||[],key,'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
+    return {stock,squads,version:syncStockMaxSv(stock,squads)};
+  }catch(e){ return null; }
+}
 
 // --- Время последнего поллинга ---
 let _lastPollTs = Date.now();
@@ -501,10 +665,38 @@ async function syncAddTransfer(op){
 }
 
 // Отправить склад и расчёты (last-write-wins)
-async function syncPushStockSquads(){
+// Сериализация + схлопывание пушей склада: параллельные вызовы (setTimeout 300/500 мс из
+// разных функций) раньше могли перегонять друг друга; теперь — по одному, повторный вызов
+// во время пуша планирует ровно один дополнительный прогон.
+let _stockPushChain = Promise.resolve(), _stockPushQueued = false;
+function syncPushStockSquads(){
+  if(_stockPushQueued) return _stockPushChain;
+  _stockPushQueued = true;
+  _stockPushChain = _stockPushChain
+    .then(()=>{ _stockPushQueued=false; return _syncPushStockSquadsNow(); })
+    .catch(e=>console.warn('[SYNC] stock push error:', e&&e.message));
+  return _stockPushChain;
+}
+async function _syncPushStockSquadsNow(){
   if(syncReadOnly()) return; // viewer не выгружает склад
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;
+  // Защита от LWW-гонки: чужая запись склада, которой мы ещё не видели? Тогда сначала
+  // принять её (с наложением нашей дельты), и только потом писать объединённый снимок.
+  // Без базы (первый пуш после обновления) дельту не вычислить — приём облака здесь
+  // затёр бы только что сделанную правку; в этом окне — прежнее поведение, база
+  // фиксируется ниже после пуша.
+  const remoteTs = _stockBase ? await syncFetchStockTs() : null;
+  if(remoteTs!==null && remoteTs > _lastStockTs){
+    const remote = await syncFetchStockSnapshot();
+    if(remote && syncStockRemoteIsNewer(remote)){
+      const hadDelta = syncAcceptRemoteStock(remote);
+      showSyncToast(hadDelta ? '⚠ Склад изменён на другом устройстве — изменения объединены' : '↓ Склад обновлён с другого устройства', 5000);
+      if(typeof renderInventory==='function') try{ renderInventory(); renderDashboard(); }catch(e){}
+      if(!hadDelta){ _lastStockTs = remoteTs; return; } // нашей дельты нет — пушить нечего
+    }
+    _lastStockTs = remoteTs;
+  }
   syncBumpStockVersion();
   const ts = Date.now();
   // Пишем актуальные id/_sv ОБРАТНО в объекты state — чтобы любые последующие
@@ -519,10 +711,24 @@ async function syncPushStockSquads(){
   const squads = await Promise.all(state.squads.map((sq,i)=>encRow(sq,i)));
   const data = geoStripFromSync({stock, squads}); // ГЕО (geo_points_db) НИКОГДА не уходит в облако
   const body = JSON.stringify({action:'write', token, data});
+  const prevTs = _lastStockTs;
   const res = await syncPost(url, body);
   if(res.ok){
-    _lastStockTs = _stockVersion; // Помним что эту версию мы сами отправили — не перезагружаем
-    console.log('[SYNC] stock+squads OK, sv:', _stockVersion);
+    // POST no-cors непроверяем → подтверждаем запись сдвигом СЕРВЕРНОГО stock_updated_ts
+    // (заодно отметка «свою запись видели» в серверном времени, без смешения часов).
+    const srvTs = await syncFetchStockTs();
+    const landed = srvTs!==null ? srvTs>prevTs : null; // null — проверить не удалось (сеть)
+    if(landed!==false){
+      _lastStockTs = srvTs!==null ? srvTs : _stockVersion;
+      // Выгруженное = новая база. При недоступной проверке базу ставим только если её
+      // ещё нет (bootstrap); иначе оставляем прежнюю — дельта сохранится до следующего пуша.
+      if(landed===true || !_stockBase) syncStockSetBase(state.stock, state.squads, _stockVersion);
+      try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){} // _sv строк в droneState (сверка при загрузке)
+      console.log('[SYNC] stock+squads OK, sv:', _stockVersion, landed===true?'(подтверждено)':'(без подтверждения)');
+    } else {
+      console.warn('[SYNC] stock push: запись в облако НЕ подтверждена (stock_updated_ts не сдвинулся) — дельта сохранена, повтор при следующем пуше');
+      showSyncToast('⚠ Склад не записан в облако — повтор при следующей синхронизации', 5000);
+    }
   }
   else console.warn('[SYNC] stock push failed:', res.error);
 }
@@ -596,7 +802,8 @@ async function syncPushAll(silent=false){
   console.log('[SYNC] pushAll flights:', state.flights.length, 'size:', body.length);
   const res = await syncPost(url, body);
   if(res.ok){
-    _lastStockTs = _stockVersion; // Не перезагружаем склад который только что сами отправили
+    // (_lastStockTs здесь НЕ трогаем — pushAll склад не пишет; прежняя строка
+    //  `_lastStockTs=_stockVersion` прятала чужие записи склада, сделанные до нашего bump)
     syncStampLastSync();          // полная выгрузка удалась — отметка для индикатора
     console.log('[SYNC] pushAll OK');
     await syncFlushQueue();
@@ -725,8 +932,10 @@ async function syncPullOnLogin(){
   // облака новее локальной — иначе затрём несохранённые локальные правки
   // (stock/squads НЕ кэшируются в pendingQueue, поэтому "нет pending" ещё не значит
   //  "локальные данные склада уже выгружены").
-  const remoteStockVersion = Math.max(0,...loaded.stock.map(s=>s._sv||0));
-  const stockNewer = remoteStockVersion > _stockVersion;
+  const remoteStock = {stock:loaded.stock, squads:loaded.squads, version:syncStockMaxSv(loaded.stock,loaded.squads)};
+  // Гейт приёма: версия новее ИЛИ равная с иным содержимым, чем база (см. блок LWW выше).
+  const stockNewer = syncStockRemoteIsNewer(remoteStock);
+  let stockDelta = false;
   if(!hasPending){
     // Защита от потери только что добавленных вылетов/передач: полная замена
     // допустима ТОЛЬКО если локальный массив является подмножеством облачного
@@ -750,11 +959,7 @@ async function syncPullOnLogin(){
       state.transfers = [...loaded.transfers, ...localOnlyT]
         .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
     }
-    if(stockNewer){
-      state.stock   = loaded.stock;
-      state.squads  = loaded.squads;
-      _stockVersion = remoteStockVersion;   // синхронизируем версию после замены
-    }
+    if(stockNewer) stockDelta = syncAcceptRemoteStock(remoteStock); // замена либо merge локальной дельты
   } else {
     // Есть несинхронизированное — сливаем только новое из облака
     console.log('[SYNC] pending queue not empty, merging only new records');
@@ -764,15 +969,12 @@ async function syncPullOnLogin(){
     const localTIds = new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
     const newT = loaded.transfers.filter(t=>t.id&&!localTIds.has(t.id));
     state.transfers = [...(state.transfers||[]),...newT].sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
-    // Склад берём из облака только если наша версия старее
-    if(stockNewer){
-      state.stock   = loaded.stock;
-      state.squads  = loaded.squads;
-      _stockVersion = remoteStockVersion;
-    }
+    // Склад берём из облака только если его снимок новее (merge локальной дельты)
+    if(stockNewer) stockDelta = syncAcceptRemoteStock(remoteStock);
     // Отправляем накопленное
     setTimeout(()=>syncFlushQueue(), 1000);
   }
+  if(stockDelta) setTimeout(()=>syncPushStockSquads(), 800); // объединённый снимок — в облако
   saveLocal();
   syncIndicator('ok');
   syncRenderAll();
@@ -796,6 +998,9 @@ async function syncFromCloud(){
   state.stock     = loaded.stock;
   state.squads    = loaded.squads;
   state.transfers = loaded.transfers;
+  // Принудительная загрузка = облако авторитетно: версия и база — облачные
+  _stockVersion = syncStockMaxSv(loaded.stock,loaded.squads); syncPersistStockVersion();
+  syncStockSetBase(loaded.stock, loaded.squads, _stockVersion);
   pendingQueue.clear();
   saveLocal();
   syncIndicator('ok');
@@ -853,7 +1058,8 @@ async function pollCloud(){
         // на устройстве-источнике (флаг приходит вместе с вылетом). Viewer не участвует:
         // не списывает и не пушит — ждёт авторитетный склад от пишущего устройства.
         if(obj.returned==='no' && obj.drone && !obj._lossWritten && !syncReadOnly()){
-          writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id);
+          // минус у пилота (борт без передачи) — сигнал тостом/консолью, не блок (ADR-001 §4)
+          lossDeficitWarn(writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id));
           obj._lossWritten=true;
           lossFlagSet = true;                       // Risk 4: вернём флаг в облако ниже
           setTimeout(()=>syncPushStockSquads(), 500); // списание + версия склада
@@ -901,14 +1107,14 @@ async function pollCloud(){
         if(!d2.error){
           const remoteStock  = await syncDecryptRows(d2.stock||[], key, 'stock');
           const remoteSquads = (await syncDecryptRows(d2.squads||[], key, 'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
-          // Берём только если версия новее нашей
-          const remoteVersion = Math.max(0,...remoteStock.map(s=>s._sv||0));
-          if(remoteVersion > _stockVersion){
-            state.stock   = remoteStock;
-            state.squads  = remoteSquads;
-            _stockVersion = remoteVersion;
+          const remote = {stock:remoteStock, squads:remoteSquads, version:syncStockMaxSv(remoteStock,remoteSquads)};
+          // Гейт: версия новее ИЛИ равная с иным содержимым, чем база. Локальная
+          // несинхронизированная дельта накладывается (merge) и допушивается.
+          if(syncStockRemoteIsNewer(remote)){
+            const hadDelta = syncAcceptRemoteStock(remote);
             changed = true;
-            console.log('[POLL] Склад обновлён, версия:', _stockVersion);
+            console.log('[POLL] Склад обновлён, версия:', _stockVersion, hadDelta?'(+локальная дельта → пуш)':'');
+            if(hadDelta) setTimeout(()=>syncPushStockSquads(), 500);
           }
         }
       }catch(e){ console.warn('[POLL] stock sync error:', e.message); }
