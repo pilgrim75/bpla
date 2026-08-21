@@ -140,3 +140,60 @@ function getAllBalances(){
   });
   return out;
 }
+
+// ===== ЭТАП 2 — marshrutCompare(): консольная самосверка qty (старая) vs getBalance (новая) =====
+// ADR-001 §5. ТОЛЬКО ЧТЕНИЕ (как syncAuditStock): не мутирует state, не пишет, не синкает.
+// Вызов из консоли: marshrutCompare(). Показывает ТОЛЬКО проблемы; совпавшие пары не выводятся.
+//
+// Соответствие локаций старой модели (qty) и новой (движения):
+//   stock status 'bg'   ↔ 'склад'   (arrival/exchange/transfer from|to='склад')
+//   stock status 'nbg'  ↔ 'не бг'   (transfer to|from='не бг' — псевдо-локация, см. _marshrutWalk)
+//   stock status 'lost' ↔ —         (старых «lost»-строк writeDroneLoss не создаёт; если такие есть —
+//                                    ledger для них 0, строка попадёт в расхождения как сигнал)
+//   squads[pilot]       ↔ squadKeyOf(pilot) (сейчас тождество)
+//   'списан' в ledger — чистый сток выбытия (transfer to='списан'), в старой модели остатка нет →
+//                        из сверки исключён (ожидаемо накапливает +N, это не остаток).
+//
+// ЛЕГАСИ НЕ ФИЛЬТРУЕТСЯ И НЕ ПРЯЧЕТСЯ: до черты (Этап 3) расхождения от старой истории ОЖИДАЕМЫ
+// (ПВХ1 Поп +25 и т.п.) — это базовая линия наблюдения. Критерий Этапа 4 (§6) — ноль НОВЫХ
+// расхождений после черты; минус (§4) — сигнал недостающего прихода, переключение не блокирует.
+function marshrutCompare(){
+  const N=_mNorm;
+  const bal=getAllBalances();
+  const stock=(typeof state!=='undefined'&&state&&state.stock)||[];
+  const squads=(typeof state!=='undefined'&&state&&state.squads)||[];
+  // qty старой модели по парам (нормализованные ключи → {model,location,qty})
+  const qty={};
+  const addQ=(model,loc,q)=>{
+    const mk=N(model), lk=N(loc); if(!mk||!lk) return;
+    const k=mk+'|'+lk;
+    if(!qty[k]) qty[k]={model:String(model).trim(),location:String(loc).trim(),qty:0};
+    qty[k].qty+=(+q||0);
+  };
+  const statusLoc={bg:'склад',nbg:'не бг',lost:'lost',['списан']:'lost'};
+  stock.forEach(s=>addQ(s.name, statusLoc[N(s.status)]||N(s.status)||'склад', s.qty));
+  squads.forEach(sq=>(sq.drones||[]).forEach(d=>addQ(d.name, squadKeyOf(sq.pilot), d.qty)));
+  // ledger новой модели по парам
+  const led={};
+  Object.keys(bal).forEach(model=>Object.keys(bal[model]).forEach(loc=>{
+    const lk=N(loc); if(lk==='списан') return; // сток выбытия — не остаток
+    led[N(model)+'|'+lk]={model,location:loc,balance:bal[model][loc]};
+  }));
+  const keys=new Set([...Object.keys(qty),...Object.keys(led)]);
+  const diffs=[], negatives=[];
+  keys.forEach(k=>{
+    const q=qty[k]?qty[k].qty:0, b=led[k]?led[k].balance:0;
+    const model=(qty[k]||led[k]).model, location=(qty[k]||led[k]).location;
+    if(q!==b) diffs.push({model,location,qty:q,balance:b,delta:b-q});
+    if(b<0) negatives.push({model,location,balance:b});
+  });
+  const byName=(a,b)=>a.model.localeCompare(b.model,'ru')||a.location.localeCompare(b.location,'ru');
+  diffs.sort(byName); negatives.sort(byName);
+  console.log('[МАРШРУТ] Этап 2 — самосверка qty (старая) vs getBalance (новая), пар: '+keys.size+
+    '. До Этапа 3 (черта) легаси-расхождения НОРМАЛЬНЫ — это базовая линия наблюдения.');
+  if(diffs.length){ console.log('[МАРШРУТ] РАСХОЖДЕНИЯ (qty ≠ getBalance): '+diffs.length); console.table(diffs); }
+  if(negatives.length){ console.log('[МАРШРУТ] МИНУСЫ (getBalance < 0) — сигнал недостающего прихода, НЕ ошибка (ADR §4): '+negatives.length); console.table(negatives); }
+  if(!diffs.length && !negatives.length) console.log('[МАРШРУТ] Сверка чиста: qty == getBalance по всем парам');
+  console.log('[МАРШРУТ] Сводка: пар всего '+keys.size+' / расхождений '+diffs.length+' / минусов '+negatives.length);
+  return {diffs, negatives, total:keys.size};
+}
