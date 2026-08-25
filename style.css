@@ -387,6 +387,10 @@ label{
 #flightList tr.fl-row-sent td{opacity:.5}
 /* То же для записей склада в «Изменениях» */
 #transfersLog .change-row.tr-row-sent{opacity:.5}
+/* Свёрнутая полоса правки (вылеты/склад): кнопка «✏ N мин» в строке разворачивает полосу */
+.edit-pen-btn{font-size:10px;line-height:1.4;padding:2px 7px;border:1px solid var(--green3);color:var(--green3);background:rgba(57,255,20,0.06);border-radius:6px;cursor:pointer;white-space:nowrap;font-family:inherit;letter-spacing:0}
+.edit-pen-btn:hover{background:rgba(57,255,20,0.14)}
+#transfersLog .change-row .edit-pen-btn{margin-left:4px}
 
 /* ============ REPORTS ============ */
 .report-block{

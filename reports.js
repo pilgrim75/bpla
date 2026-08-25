@@ -442,9 +442,11 @@ function reportIssued(out,from,to,filterPilot,filterDrones){
       if(!agg.has(key)) agg.set(key,{pilot:t.to,drone:t.drone,date:t.date||'',qty:0});
       agg.get(key).qty+=(t.qty||1);
     });
-    // строка на каждую дату выдачи (пилот+борт+date); внутри дня qty суммируется
+    // строка на каждую дату выдачи (пилот+борт+date); внутри дня qty суммируется.
+    // Порядок — хронология по дате глобально (легаси 2000-01-01 лексикографически первыми),
+    // при равной дате — пилот, затем борт. _reportText использует тот же массив rows.
     const rows=[...agg.values()].sort((a,b)=>
-      a.pilot.localeCompare(b.pilot)||a.drone.localeCompare(b.drone)||(a.date||'').localeCompare(b.date||''));
+      (a.date||'').localeCompare(b.date||'')||a.pilot.localeCompare(b.pilot)||a.drone.localeCompare(b.drone));
     const hasFilter=from||to||filterPilot||(filterDrones&&filterDrones.length);
     if(!rows.length){
       const msg=hasFilter?'Нет данных за выбранный период':'Нет данных';

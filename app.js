@@ -1876,13 +1876,15 @@ function renderInventory(){
     `<div class="offstock-row"><div class="offstock-name">${esc(d.name)}</div><div style="display:flex;align-items:center;gap:8px"><div class="${d.status==='loss'?'badge-danger':'badge-warn'}">${d.status==='loss'?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
   ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет</div>';
 
-  document.getElementById('squadTable').innerHTML=state.squads.length
-    ? `<div class="crew-grid">`+state.squads.map(sq=>{
+  // Расчёты с пустым складом (drones[] пуст или все qty===0) скрываем — как на Обзоре.
+  // Селекты передачи (#transFrom/#transTo) строятся в fillDataLists из state.squads
+  // независимо от этих карточек — скрытый пилот остаётся получателем.
+  const squadsShown=state.squads.filter(sq=>(sq.drones||[]).some(d=>(d.qty||0)!==0)); // критерий как в renderDashboard
+  document.getElementById('squadTable').innerHTML=squadsShown.length
+    ? `<div class="crew-grid">`+squadsShown.map(sq=>{
         const drones=sq.drones.filter(d=>d.qty!==0);
         const abbr=sq.pilot.slice(0,2).toUpperCase();
-        const chips=drones.length
-          ? drones.map(d=>`<span class="drone-chip"${d.qty<0?' style="color:var(--color-text-danger);border-color:var(--color-border-danger)"':''}>${esc(d.name)}${d.qty<0?' ⚠':''} <span class="num">×${d.qty}</span></span>`).join('')
-          : `<span style="font-size:11px;color:var(--color-text-secondary)">нет дронов</span>`;
+        const chips=drones.map(d=>`<span class="drone-chip"${d.qty<0?' style="color:var(--color-text-danger);border-color:var(--color-border-danger)"':''}>${esc(d.name)}${d.qty<0?' ⚠':''} <span class="num">×${d.qty}</span></span>`).join('');
         return `<div class="crew-block">
           <div class="crew-head">
             <div class="crew-abbr">${esc(abbr)}</div>
@@ -2159,6 +2161,7 @@ function saveExchange(){
 }
 
 function renderTransfersLog(){
+  _stripCapture(_trEditState,_trEditDraft,'tredit',TR_STRIP_FIELDS); // открытые полосы: снять ввод до перерисовки
   if(!state.transfers||!state.transfers.length){
     document.getElementById('transfersLog').innerHTML='<div style="color:var(--color-text-secondary);font-size:12px;padding:12px 16px">Нет операций</div>';
     return;
@@ -2167,18 +2170,22 @@ function renderTransfersLog(){
     // Серая фиксация правок (паттерн вылетов): 'sent'/'locked' приглушают строку
     const _tst=op.id!=null?_trEditState.get(String(op.id)):undefined;
     const grey=(_tst==='sent'||_tst==='locked')?' tr-row-sent':'';
+    // Свёрнутая полоса (состояние пусто, окно открыто) — кнопка «✏ N мин» справа от времени
+    const kjs=op.id!=null?String(op.id).replace(/\\/g,'\\\\').replace(/'/g,"\\'"):'';
+    const pen=(_tst==null&&canEditTransfer(op))
+      ?`<button class="edit-pen-btn" onclick="trEditOpen('${kjs}')" title="Править (окно ${_trMinsLeft(op)} мин)">✏ ${_trMinsLeft(op)} мин</button>`:'';
     let row;
     if(op.type==='loss'){
       row=`<div class="change-row${grey}">
         <div class="badge-danger">Потеря</div>
         <div class="change-detail"><span>${esc(op.drone)}</span> · пилот: ${esc(op.pilot)}</div>
-        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     } else if(op.type==='arrival'){
       row=`<div class="change-row${grey}">
         <div class="change-badge-in">Поступление</div>
         <div class="change-detail"><span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
-        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     } else if(op.type==='exchange'){
       let exDetail;
@@ -2192,23 +2199,24 @@ function renderTransfersLog(){
       row=`<div class="change-row${grey}">
         <div class="badge-warn">${op.give&&op.get?'Обмен':'Передача'}</div>
         <div class="change-detail"><span>${esc(op.unit)}</span> · ${exDetail}${op.note?` · ${esc(op.note)}`:''}</div>
-        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     } else if(op.type==='adjust'){
       row=`<div class="change-row${grey}">
         <div class="badge-warn">Коррекция</div>
         <div class="change-detail">${esc(op.location||'')} · <span>${esc(op.drone)} ${op.qty>0?'+':''}${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
-        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     } else {
       row=`<div class="change-row${grey}">
         <div class="change-badge-in">Передача</div>
         <div class="change-detail">${esc(op.from)} → ${esc(op.to)} · <span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
-        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     }
     return row+renderTransferEditRow(op);
   }).join('');
+  _stripRestore(_trEditState,_trEditDraft,'tredit',TR_STRIP_FIELDS); // вернуть ввод в открытые полосы
 }
 
 // ============ РЕДАКТИРОВАНИЕ ЗАПИСЕЙ СКЛАДА В «ИЗМЕНЕНИЯХ» (окно 10 минут) ============
@@ -2249,6 +2257,7 @@ function canEditTransfer(t){
   const ts=_transferTs(t);
   return !!ts&&(Date.now()-ts<TRANSFER_EDIT_WINDOW_MS);
 }
+function _trMinsLeft(t){return Math.max(1,Math.round((TRANSFER_EDIT_WINDOW_MS-(Date.now()-_transferTs(t)))/60000));}
 
 // Применение (sign=+1) / откат (−1) эффекта записи на остатки. Балансовая семантика —
 // как _stockAuditCompute/getBalance. БЕЗ клампов и confirm: сторно обязано быть
@@ -2314,7 +2323,8 @@ function renderTransferEditRow(t){
       :'';
   }
   if(!canEditTransfer(t))return '';
-  const minsLeft=Math.max(1,Math.round((TRANSFER_EDIT_WINDOW_MS-(Date.now()-_transferTs(t)))/60000));
+  if(st==null)return ''; // свёрнуто — кнопка «✏ N мин» в строке (renderTransfersLog), полоса по клику
+  const minsLeft=_trMinsLeft(t);
   const fid=esc(key);
   const kjs=key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
   if(st==='sent'){
@@ -2357,18 +2367,20 @@ function trSaveEdit(key){
     renderTransfersLog();
     return;
   }
-  const g=f=>document.getElementById('tredit-'+f+'-'+String(key));
-  const val=f=>{const el=g(f);return el?el.value:undefined;};
-  const date=val('date')||t.date;
-  const time=val('time')||t.time;
-  const noteEl=g('note');
-  const note=noteEl?noteEl.value.trim():(t.note||'');
+  // Dirty-only (см. блок «ПОЛОСЫ РЕДАКТИРОВАНИЯ»): берём из полосы ТОЛЬКО поля, изменённые
+  // оператором относительно снапшота открытия; нетронутые — текущее значение записи (оно
+  // могло измениться извне, пока полоса была открыта — не откатываем).
+  const rd=f=>_stripDirty(_trEditDraft,'tredit',f,key);
+  const dt=rd('date'), tm=rd('time'), nt=rd('note');
+  const date=(dt.dirty&&dt.value)?dt.value:t.date;
+  const time=(tm.dirty&&tm.value)?tm.value:t.time;
+  const note=nt.dirty?String(nt.value).trim():(t.note||'');
   // Типизированные (сторно) поля: любое отличие → полное пересоздание записи
   let changed=false;
   const take=(f,old,isNum)=>{
-    const v=val(f);
-    if(v===undefined)return old;
-    const nv=isNum?(parseInt(v)||1):String(v).trim();
+    const r=rd(f);
+    if(!r.dirty)return old;
+    const nv=isNum?(parseInt(r.value)||1):String(r.value).trim();
     if(String(nv)!==String(old==null?'':old))changed=true;
     return nv;
   };
@@ -2410,6 +2422,7 @@ function trSaveEdit(key){
   // После сторно состояние переезжает на НОВЫЙ id (старая запись удалена).
   const prev=_trEditState.get(String(t.id));
   _trEditState.delete(String(t.id));
+  _trEditDraft.delete(String(t.id)); // черновик закрыт — полоса сворачивается в плашку
   _trEditState.set(finalId,prev==='editing'?'locked':'sent');
   saveLocal();
   renderTransfersLog();
@@ -2417,10 +2430,17 @@ function trSaveEdit(key){
   renderDashboard();
 }
 
+// ✏ в строке (свёрнутая полоса) → развернуть; ✏ в серой плашке → повторное открытие
+function trEditOpen(key){
+  const t=_transferByKey(key);
+  if(!t||!canEditTransfer(t)){renderTransfersLog();return;}
+  _stripOpen(_trEditState,_trEditDraft,t.id,'open');
+  renderTransfersLog();
+}
 function trEditReopen(key){
   const t=_transferByKey(key);
   if(!t||!canEditTransfer(t)){renderTransfersLog();return;}
-  _trEditState.set(String(t.id),'editing');
+  _stripOpen(_trEditState,_trEditDraft,t.id,'editing');
   renderTransfersLog();
 }
 function trEditFinalize(key){
@@ -2428,6 +2448,60 @@ function trEditFinalize(key){
   if(t&&t.id!=null)_trEditState.set(String(t.id),'locked');
   renderTransfersLog();
 }
+
+// ============ ПОЛОСЫ РЕДАКТИРОВАНИЯ (вылеты + склад): свёртка, черновик, dirty-поля ============
+// Общий механизм обеих полос: журнал вылетов (поля `edit-<f>-<id>`) и «Изменения» склада
+// (`tredit-<f>-<id>`). Состояния (рантайм-Map по id записи, см. _flEditState/_trEditState):
+//   undefined — СВЁРНУТО: обычная строка + кнопка «✏ N мин» справа (окно 10 мин открыто);
+//   'open'    — развёрнуто кликом ✏ (первый раз);        'sent' — после ✓ серая плашка;
+//   'editing' — развёрнуто повторно из плашки (серость снята);  'locked' — финализировано.
+// Черновик (draft, Map id → {snap,dirty}): snap — значения, которыми поля полосы заполнены
+// ИЗ ЗАПИСИ (снимаются с DOM сразу после рендера — та же нормализация, что в контролах);
+// dirty — что оператор изменил относительно snap.
+//  • Перерисовка списка (поллинг 30с при изменениях / полная 5 мин / фильтры / чужие
+//    операции) раньше пересобирала innerHTML и ТЕРЯЛА ввод. Теперь: перед innerHTML —
+//    _stripCapture (dirty = DOM ≠ snap), после — _stripRestore (dirty возвращается в поля;
+//    для нетронутых полей snap обновляется свежим значением записи). Полоса остаётся
+//    открытой; теряются только фокус/каретка — приемлемо.
+//  • ✓ заливает ТОЛЬКО dirty-поля. Поле, изменённое ИЗВНЕ (админ-раздел не перерисовывает
+//    журнал; чужое устройство через поллинг), которое оператор в полосе не трогал, больше
+//    не перезаписывается устаревшим значением полосы (гонка «админ-правка vs полоса»,
+//    25.08.2026: время из админки откатывалось ✓-ом полосы).
+const FL_STRIP_FIELDS=['date','time','flightnum','target','ammo','drone','result','returned','note'];
+const TR_STRIP_FIELDS=['date','time','note','drone','qty','from','to','unit','give','giveQty','get','getQty'];
+const _flEditDraft=new Map(), _trEditDraft=new Map();
+function _stripIsOpen(st){return st==='open'||st==='editing';}
+function _stripEl(prefix,field,key){return document.getElementById(prefix+'-'+field+'-'+String(key));}
+// Перед перерисовкой: снять текущий ввод открытых полос (dirty = отличается от snap)
+function _stripCapture(stateMap,draftMap,prefix,fields){
+  stateMap.forEach((st,key)=>{
+    if(!_stripIsOpen(st))return;
+    const d=draftMap.get(key); if(!d)return;
+    fields.forEach(f=>{
+      const el=_stripEl(prefix,f,key); if(!el||d.snap[f]===undefined)return;
+      if(el.value!==d.snap[f]) d.dirty[f]=el.value; else delete d.dirty[f];
+    });
+  });
+}
+// После перерисовки: вернуть dirty-ввод в поля; для нетронутых — snap = свежее значение записи
+function _stripRestore(stateMap,draftMap,prefix,fields){
+  stateMap.forEach((st,key)=>{
+    if(!_stripIsOpen(st))return;
+    let d=draftMap.get(key); if(!d){d={snap:{},dirty:{}};draftMap.set(key,d);}
+    fields.forEach(f=>{
+      const el=_stripEl(prefix,f,key); if(!el)return;
+      if(f in d.dirty) el.value=d.dirty[f]; else d.snap[f]=el.value;
+    });
+  });
+}
+// При ✓: поле dirty, если DOM ≠ snap (нет snap — считаем изменённым: прежнее поведение)
+function _stripDirty(draftMap,prefix,field,key){
+  const el=_stripEl(prefix,field,key);
+  if(!el)return {dirty:false,value:undefined,el:null};
+  const d=draftMap.get(String(key)); const s=d?d.snap[field]:undefined;
+  return {dirty:s===undefined||el.value!==s, value:el.value, el};
+}
+function _stripOpen(stateMap,draftMap,key,st){ stateMap.set(String(key),st); draftMap.set(String(key),{snap:{},dirty:{}}); }
 
 // ============ FLIGHTS ============
 // Селектор периода журнала: Неделя (−7) / Месяц (−30) / Весь период.
@@ -2537,6 +2611,7 @@ function flGotoReport(){
 }
 
 function renderFlights(){
+  _stripCapture(_flEditState,_flEditDraft,'edit',FL_STRIP_FIELDS); // открытые полосы: снять ввод до перерисовки
   const fp=document.getElementById('filterPilot').value;
   const from=document.getElementById('filterFrom').value;
   const to=document.getElementById('filterTo').value;
@@ -2612,7 +2687,7 @@ function renderFlights(){
         <th style="width:75px">Борт</th>
         <th style="width:60px">Дальн</th>
         <th>Примечание</th>
-        <th style="width:28px"></th>
+        <th></th>
       </tr></thead>
       <tbody>
         ${f.map((x,i)=>{
@@ -2635,9 +2710,13 @@ function renderFlights(){
             +', '+(x.result==='yes'?'выполнена':'не выполнена')
             +', '+(x.returned==='yes'?'вернул':'потерян')
             +(x.note?', '+x.note:'');
-          // Серая фиксация: после ✓ строка приглушена ('sent' и 'locked')
-          const _st=x.id!=null?_flEditState.get(String(x.id)):undefined;
+          // Серая фиксация: после ✓ строка приглушена ('sent' и 'locked'). Свёрнутая полоса
+          // (состояние пусто, окно открыто) — кнопка «✏ N мин» в последней ячейке рядом с ⎘
+          const _key=_flEditKey(x,idx);
+          const _st=_flEditState.get(_key);
           const sentCls=(_st==='sent'||_st==='locked')?' class="fl-row-sent"':'';
+          const penBtn=(_st==null&&canEditFlight(x))
+            ?'<button class="edit-pen-btn" onclick="flEditOpen(\''+_flKeyJs(_key)+'\')" title="Править (окно '+_flMinsLeft(x)+' мин)">✏ '+_flMinsLeft(x)+' мин</button>':'';
           return `${dayHead}<tr${sentCls} style="${x.returned==='no'?'background:rgba(220,38,38,0.04)':''}">
             <td style="white-space:nowrap;color:var(--muted)">${esc(x.time||'—')}</td>
             <td style="text-align:center;color:var(--muted);font-size:10px;white-space:nowrap">${num?'#'+num:''}</td>
@@ -2649,11 +2728,12 @@ function renderFlights(){
             <td><span class="tag ${x.returned==='yes'?'tag-info':'tag-danger'}" style="font-size:10px">${x.returned==='yes'?'вернул':'потерян'}</span></td>
             <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?x.range_km+' км':''}</td>
             <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px">${esc(x.note||'')}</td>
-            <td style="padding:2px 4px;width:36px"><button class="copy-flight-btn" data-copy="${esc(copyStr).replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></td>
+            <td style="padding:2px 4px;white-space:nowrap"><div style="display:flex;gap:4px;align-items:center;justify-content:flex-end">${penBtn}<button class="copy-flight-btn" data-copy="${esc(copyStr).replace(/\n/g,' ')}" style="background:rgba(57,255,20,0.06);border:1px solid #22c55e;color:var(--green);cursor:pointer;font-size:16px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;padding:0;font-family:inherit" title="Копировать">⎘</button></div></td>
           </tr>${editRow?`<tr><td colspan="11" style="padding:0;border:none">${editRow}</td></tr>`:''}`
         }).join('')}
       </tbody>
     </table>`;
+  _stripRestore(_flEditState,_flEditDraft,'edit',FL_STRIP_FIELDS); // вернуть ввод в открытые полосы
 }
 
 function fillDataLists(){
@@ -3641,11 +3721,18 @@ function _flightByKey(key){
   return m?(state.flights[+m[1]]||null):null;
 }
 
+// Ключ полосы/состояния: стабильный id, фолбэк 'i'+индекс для исторических записей без id
+function _flEditKey(x,realIdx){return x.id?String(x.id):('i'+realIdx);}
+function _flKeyJs(key){return String(key).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+function _flMinsLeft(x){return Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));}
+
 function renderFlightEditRow(x, realIdx){
-  const st=x.id!=null?_flEditState.get(String(x.id)):undefined;
+  const key=_flEditKey(x,realIdx);
+  const st=_flEditState.get(key);
   if(st==='locked')return ''; // финализировано — полоса больше не открывается
   if(!canEditFlight(x))return '';
-  const minsLeft=Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));
+  if(st==null)return ''; // свёрнуто — кнопка «✏ N мин» в строке (renderFlights), полоса по клику
+  const minsLeft=_flMinsLeft(x);
   // Нормализация времени для type="time": «9:53» (легаси AI-импорта) — невалидный
   // атрибут, Chromium рендерит контрол пустым; паддинг как в toMs (renderFlights)
   const _hm=(x.time||'').trim();
@@ -3655,9 +3742,8 @@ function renderFlightEditRow(x, realIdx){
   // (sync.js), поэтому зашитый в DOM индекс устаревал — правка уходила в чужой вылет
   // либо тихо не проходила (canEditFlight у соседа false → молчаливый return).
   // Фолбэк 'i'+realIdx — только для исторических записей без id.
-  const key=x.id?String(x.id):('i'+realIdx);
   const fid=esc(key);                                          // в id атрибутов
-  const kjs=key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");     // в inline-JS (одинарные кавычки)
+  const kjs=_flKeyJs(key);                                     // в inline-JS (одинарные кавычки)
   // Серая фиксация: после ✓ полоса свёрнута — «Править» снимает серость (правка
   // продолжается), «Зафиксировать» финализирует досрочно (как второй ✓)
   if(st==='sent'){
@@ -3703,26 +3789,30 @@ function saveFlightEdit(key){
   }
   const sfx=String(key); // суффикс id полей полосы = ключ кнопки (esc в разметке декодируется браузером)
   const oldReturned=f.returned;
+  // DIRTY-ONLY (блок «ПОЛОСЫ РЕДАКТИРОВАНИЯ»): заливаем ТОЛЬКО поля, изменённые оператором
+  // относительно снапшота открытия полосы. Нетронутое поле не пишется вовсе — если его тем
+  // временем поменяли извне (Администратор → Вылеты не перерисовывает журнал; чужое
+  // устройство через поллинг), значение остаётся. Раньше полоса заливала ВСЕ поля своими
+  // значениями на момент рендера → время из админки откатывалось.
+  const rd=fld=>_stripDirty(_flEditDraft,'edit',fld,sfx);
+  let touched=0;
   // Дата/время: связка с loss-записью не рвётся — поиск идёт по flightId первым
   // уровнем (writeDroneLoss пишет f.id), дата+время — только фолбэк для исторических
-  f.date=document.getElementById('edit-date-'+sfx)?.value||f.date;
+  const dt=rd('date'); if(dt.dirty&&dt.value){f.date=dt.value;touched++;}
   // Время: у частично заполненного time-контрола value==='' (спецификация), молчаливый
   // фолбэк выглядел как «откат при сохранении». badInput отличает недобитый ввод
   // (например «15:--») от нетронутого пустого поля — предупреждаем, не глотаем.
-  const tEl=document.getElementById('edit-time-'+sfx);
-  if(tEl){
-    if(tEl.value) f.time=tEl.value;
-    else if(tEl.validity&&tEl.validity.badInput) alert('Время введено не полностью (часы И минуты) — оставлено прежнее: '+(f.time||'—'));
+  const tm=rd('time');
+  if(tm.dirty){
+    if(tm.value){f.time=tm.value;touched++;}
+    else if(tm.el&&tm.el.validity&&tm.el.validity.badInput) alert('Время введено не полностью (часы И минуты) — оставлено прежнее: '+(f.time||'—'));
   }
-  f.target=document.getElementById('edit-target-'+sfx)?.value||f.target;
-  f.ammo=document.getElementById('edit-ammo-'+sfx)?.value||f.ammo;
-  f.drone=document.getElementById('edit-drone-'+sfx)?.value||f.drone;
-  f.result=document.getElementById('edit-result-'+sfx)?.value||f.result;
-  f.returned=document.getElementById('edit-returned-'+sfx)?.value||f.returned;
-  f.note=document.getElementById('edit-note-'+sfx)?.value??f.note;
-  const fn=document.getElementById('edit-flightnum-'+sfx)?.value;
-  if(fn)f.flightnum=parseInt(fn);
-  f._edited=true;
+  ['target','ammo','drone','result','returned'].forEach(fld=>{
+    const r=rd(fld); if(r.dirty&&r.value){f[fld]=r.value;touched++;}
+  });
+  const nt=rd('note'); if(nt.dirty){f.note=nt.value;touched++;}
+  const fn=rd('flightnum'); if(fn.dirty&&fn.value){f.flightnum=parseInt(fn.value);touched++;}
+  if(touched)f._edited=true;
   // Смена статуса борта в окне редактирования — пересчёт склада, как в админском пути
   // (раньше «вернул↔потерян» здесь менял только текст и склад расходился с журналом)
   if(oldReturned!==f.returned&&(f.drone||'').trim()){
@@ -3744,7 +3834,8 @@ function saveFlightEdit(key){
   if(f.id!=null){
     const k=String(f.id);
     _flEditState.set(k,_flEditState.get(k)==='editing'?'locked':'sent');
-  }
+  } else _flEditState.delete(sfx); // без id состояние не ведём — полоса просто сворачивается
+  _flEditDraft.delete(sfx);        // черновик закрыт
   saveLocal();
   renderFlights();
   renderDashboard();
@@ -3754,10 +3845,17 @@ function saveFlightEdit(key){
 
 // Кнопки серой плашки: повторное открытие полосы (серость снимается, правка продолжается)
 // и досрочная финализация (замок; окно 10 мин в остальном добивает само).
-function flEditReopen(key){
+// ✏ в строке (свёрнутая полоса) → развернуть ('open'); ✏ в серой плашке → 'editing'
+function flEditOpen(key){
   const f=_flightByKey(key);
   if(!f||!canEditFlight(f)){renderFlights();return;} // окно истекло/замок — просто перерисовать
-  if(f.id!=null)_flEditState.set(String(f.id),'editing');
+  _stripOpen(_flEditState,_flEditDraft,key,'open');
+  renderFlights();
+}
+function flEditReopen(key){
+  const f=_flightByKey(key);
+  if(!f||!canEditFlight(f)){renderFlights();return;}
+  _stripOpen(_flEditState,_flEditDraft,key,'editing');
   renderFlights();
 }
 function flEditFinalize(key){
