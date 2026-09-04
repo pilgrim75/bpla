@@ -1,7 +1,9 @@
 // ===== МАРШРУТ — Event Sourcing учёта (ADR-001) =====
-// ЭТАП 1: getBalance(model, location) РЯДОМ со старой системой.
+// ЭТАПЫ 1–3: getBalance(model, location) РЯДОМ со старой системой + самосверка + ЧЕРТА.
 // ТОЛЬКО ЧТЕНИЕ. Ничего не мутирует, не пишет, не синкает. qty/stock/squads
 // живут как прежде; это параллельный вычислитель остатка из журнала движений.
+// (Пишущая часть черты — marshrutCut/marshrutCutPlan — намеренно в app.js, рядом с
+//  syncStockLegacyPlan/syncStockFixLegacy: этот файл остаётся read-only вычислителем.)
 //
 // Остаток = Σ qty всех движений по паре модель×локация (ADR §2/§3).
 // Отрицательный баланс — ВАЛИДЕН (ADR §4): сигнал недостающего прихода, не баг.
@@ -50,12 +52,46 @@ function _mAdd(map, model, loc, delta){
   map[mk].locs[lk].balance += delta;
 }
 
+// ===== ЧЕРТА (Этап 3, ADR-001 §6): отсечка старой истории =====
+// Момент ЗАПИСИ движения: явный штамп `_cut` (ставит makeTransfer), фолбэк — timestamp
+// из id (genId), затем дата+время. Именно момент ЗАПИСИ, а не дата события: старая
+// модель (qty) применяет эффект при создании записи, поэтому и черта режет по нему —
+// иначе после черты обе модели получали бы разный вход и §6 читал бы это как баг.
+function _mRecTs(t){
+  const c=+(t&&t._cut);
+  if(Number.isFinite(c)&&c>0)return c;
+  if(typeof _transferTs==='function')return _transferTs(t); // app.js, рантайм (грузится позже)
+  const n=parseInt(t&&t.id,10);
+  if(Number.isFinite(n)&&n>1e12)return n;
+  const d=Date.parse((t&&t.date||'')+'T'+((t&&t.time)||'00:00'));
+  return Number.isFinite(d)?d:0;
+}
+// Момент черты = самая ранняя startbalance-запись. 0 — черты в данных НЕТ (поведение
+// прежнее, считаем всю историю). Выводится ИЗ ДАННЫХ, а не из константы/localStorage:
+// устройство без флага черту не «потеряет», а повторный прогон невозможен (урок `_mig_`,
+// форензика 21.08 — per-device флаг дал 6 прогонов миграции).
+function marshrutCutTs(){
+  const tr=(typeof state!=='undefined' && state && state.transfers) ? state.transfers : [];
+  let min=0;
+  for(let i=0;i<tr.length;i++){
+    const t=tr[i];
+    if(t&&t.type==='startbalance'){ const ts=_mRecTs(t); if(ts>0&&(!min||ts<min))min=ts; }
+  }
+  return min;
+}
+// Запись сделана ДО черты? (черты нет → false). Для движений и вылетов — по моменту записи.
+function isBeforeCut(ts){ const cut=marshrutCutTs(); return !!cut && (+ts||0) < cut; }
+
 // Полный прогон журнала движений → накопитель балансов (внутренний, pure read).
 function _marshrutWalk(){
   const map={};
   const transfers=(typeof state!=='undefined' && state && state.transfers) ? state.transfers : [];
+  const cut=marshrutCutTs(); // 0 — черты нет
   transfers.forEach(t=>{
     if(!t || !t.type) return;
+    // ЧЕРТА: до неё история ЗАМОРОЖЕНА — в баланс входят только движения, ЗАПИСАННЫЕ
+    // после черты, плюс сами startbalance (они и есть черта).
+    if(cut && t.type!=='startbalance' && _mRecTs(t) < cut) return;
     switch(t.type){
       case 'arrival': {
         // Приход извне. Локации в записи нет → склад (поддержим t.to/t.location на будущее).
@@ -157,13 +193,15 @@ function getAllBalances(){
 // ЛЕГАСИ НЕ ФИЛЬТРУЕТСЯ И НЕ ПРЯЧЕТСЯ: до черты (Этап 3) расхождения от старой истории ОЖИДАЕМЫ
 // (ПВХ1 Поп +25 и т.п.) — это базовая линия наблюдения. Критерий Этапа 4 (§6) — ноль НОВЫХ
 // расхождений после черты; минус (§4) — сигнал недостающего прихода, переключение не блокирует.
-function marshrutCompare(){
-  const N=_mNorm;
-  const bal=getAllBalances();
+// Карта НАЛИЧИЯ старой модели по парам модель×локация — ЕДИНАЯ точка соответствия
+// «статус строки склада ↔ локация журнала». Ею пользуются и самосверка marshrutCompare,
+// и планировщик черты marshrutCutPlan: копировать это соответствие в два места нельзя —
+// разъедется вместе с асимметрией 'lost'/'списан' (см. комментарий выше).
+const MARSHRUT_SINK_LOCS=['lost','списан']; // выбытие: остатка нет, startbalance не заводится
+function _marshrutQtyMap(){
+  const N=_mNorm, qty={};
   const stock=(typeof state!=='undefined'&&state&&state.stock)||[];
   const squads=(typeof state!=='undefined'&&state&&state.squads)||[];
-  // qty старой модели по парам (нормализованные ключи → {model,location,qty})
-  const qty={};
   const addQ=(model,loc,q)=>{
     const mk=N(model), lk=N(loc); if(!mk||!lk) return;
     const k=mk+'|'+lk;
@@ -173,6 +211,13 @@ function marshrutCompare(){
   const statusLoc={bg:'склад',nbg:'не бг',lost:'lost',['списан']:'lost'};
   stock.forEach(s=>addQ(s.name, statusLoc[N(s.status)]||N(s.status)||'склад', s.qty));
   squads.forEach(sq=>(sq.drones||[]).forEach(d=>addQ(d.name, squadKeyOf(sq.pilot), d.qty)));
+  return qty;
+}
+
+function marshrutCompare(){
+  const N=_mNorm;
+  const bal=getAllBalances();
+  const qty=_marshrutQtyMap(); // единая карта наличия (см. выше)
   // ledger новой модели по парам
   const led={};
   Object.keys(bal).forEach(model=>Object.keys(bal[model]).forEach(loc=>{
@@ -189,8 +234,11 @@ function marshrutCompare(){
   });
   const byName=(a,b)=>a.model.localeCompare(b.model,'ru')||a.location.localeCompare(b.location,'ru');
   diffs.sort(byName); negatives.sort(byName);
-  console.log('[МАРШРУТ] Этап 2 — самосверка qty (старая) vs getBalance (новая), пар: '+keys.size+
-    '. До Этапа 3 (черта) легаси-расхождения НОРМАЛЬНЫ — это базовая линия наблюдения.');
+  const _cut=marshrutCutTs();
+  console.log('[МАРШРУТ] Самосверка qty (старая) vs getBalance (новая), пар: '+keys.size+'. '+
+    (_cut?('ЧЕРТА ПРОВЕДЕНА ('+new Date(_cut).toLocaleString('ru')+') — до-чертовая история заморожена, '+
+           'критерий Этапа 4 действует: расхождений должно быть 0.')
+        :'Черты в данных НЕТ — легаси-расхождения ОЖИДАЕМЫ (базовая линия наблюдения, Этап 2).'));
   if(diffs.length){ console.log('[МАРШРУТ] РАСХОЖДЕНИЯ (qty ≠ getBalance): '+diffs.length); console.table(diffs); }
   if(negatives.length){ console.log('[МАРШРУТ] МИНУСЫ (getBalance < 0) — сигнал недостающего прихода, НЕ ошибка (ADR §4): '+negatives.length); console.table(negatives); }
   if(!diffs.length && !negatives.length) console.log('[МАРШРУТ] Сверка чиста: qty == getBalance по всем парам');

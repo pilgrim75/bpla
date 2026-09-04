@@ -237,7 +237,10 @@ function reportStock(out){
         return pfx+exTxt+(op.note?' ('+op.note+')':'');
       }
       if(op.type==='arrival') return pfx+'📦 Поступление: '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
-      return pfx+'→ '+op.from+' → '+op.to+': '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      if(op.type==='startbalance') return pfx+'⚑ Стартовый остаток ('+(op.location||op.to||'')+'): '+(op.drone||'')+' — '+(op.qty||0)+' шт.'+(op.note?' ('+op.note+')':'');
+      // Хвостовая ветка ловит и типы без своей строки (adjust, будущие move/writeoff/handover):
+      // подставляем пустые строки, иначе незаполненное направление печаталось как «undefined»
+      return pfx+'→ '+(op.from||'')+' → '+(op.to||'')+': '+(op.drone||'')+' — '+(op.qty||0)+' шт.'+(op.note?' ('+op.note+')':'');
     };
     // Дедупликация только для не-потерь (передачи могут задваиваться технически)
     const seenNonLoss=new Set();

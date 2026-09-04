@@ -4,7 +4,7 @@
 // для словарей/автодополнения/AI-парсера используется getDroneVocab() (каталог ∪ склад ∪ расчёты).
 // 'Рейд'→'Рейс15' (02.07.2026): adminRenameModel правил массив только в рантайме —
 // после перезагрузки 'Рейд' воскресал в getDroneVocab() и подсказках AI-парсера.
-const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','ПВХ2д','ПВХ2н','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16','Рейс15'];
+const DRONE_CATALOG=['Гамаюн13','Гамаюн13д','Гамаюн13т','Гамаюн12','КИРМ','ПВХ1','ПВХ2д','ПВХ2т','Упырь11','Упырь18','Курьер21','Изделие580','Изделие548','Гамаюн13з','Упырь16','Рейс15'];
 
 // Полный словарь моделей в обороте: каталог + всё, что реально есть на складе и в расчётах.
 // Так словарь не отстаёт от парка (новые борта появляются в stock/squads сразу). Дедуп,
@@ -39,8 +39,37 @@ function setStatus(elId,text,kind){
   el.style.color=STATUS_COLORS[kind]||STATUS_COLORS.muted;
 }
 
-// Единая проверка роли пилота (формы: 'pilot', 'pilot_0', 'pilot1' и т.п.)
+// Единая проверка роли пилота (формы: 'pilot', 'pilot:Поп', 'pilot_0', 'pilot1' и т.п.)
 function isPilotRole(role){return !!role&&role.startsWith('pilot');}
+
+// ===== «ВЗГЛЯД ПИЛОТА»: значение роли несёт КЛЮЧ РАСЧЁТА, а не его номер (04.09.2026) =====
+// Было 'pilot_<N>' — порядковый индекс в state.squads. Индекс переживает не всё: облачный
+// merge пересобирает расчёты, удаление сдвигает список — и сохранённый «взгляд» показывал
+// ЧУЖОГО пилота (медали, форма вылета, щиты в topbar). Теперь 'pilot:<squadKey>'.
+// Легаси-форма 'pilot_<N>' по-прежнему читается (сохранённая роль со старой версии) и
+// нормализуется при входе — см. normalizePilotRole.
+function isPilotViewRole(r){ return /^pilot[:_]/.test(String(r==null?'':r)); }
+function pilotRoleValue(sq){ return 'pilot:'+squadKeyOf((sq&&sq.pilot)||''); }
+// Имя расчёта из значения роли ('' если такого расчёта больше нет — «взгляд» не восстанавливаем)
+function pilotRoleName(r){
+  const s=String(r==null?'':r), sq=state.squads||[];
+  if(s.slice(0,6)==='pilot:'){
+    const key=_rowN(s.slice(6));
+    const found=sq.find(q=>_rowN(squadKeyOf(q.pilot))===key);
+    return found?found.pilot:'';
+  }
+  const m=/^pilot_(\d+)$/.exec(s);          // легаси: индекс
+  return m&&sq[+m[1]]?sq[+m[1]].pilot:'';
+}
+// Разовая нормализация сохранённой роли старого формата. Пустые squads (первый вход на
+// чистом устройстве, данные ещё не подтянулись) НЕ трогаем — applyRoleFromAuth зовётся
+// повторно после syncPullOnLogin и нормализует тогда.
+function normalizePilotRole(r){
+  const m=/^pilot_(\d+)$/.exec(String(r==null?'':r));
+  if(!m||!(state.squads||[]).length)return r;
+  const sq=state.squads[+m[1]];
+  return sq?pilotRoleValue(sq):'admin';
+}
 
 // Роль только-чтение: наблюдатель (viewer) — видит Обзор/Вылеты/Отчёты, ничего не меняет
 function isViewerRole(role){return role==='viewer';}
@@ -97,9 +126,104 @@ function modalOverlay(innerHTML){
 // type: 'transfer'|'arrival'|'loss'|'exchange'
 // _submittedBy — автор записи (как у вылетов): для окна правки в «Изменениях»
 // (у записей до 14.08.2026 поля нет — их правят только tech/cmd/admin).
+// `_cut` — момент СОЗДАНИЯ записи (мс). По нему черта (Этап 3 МАРШРУТа) решает «до/после».
+// Почему отдельный штамп, а не t.date и не timestamp из id:
+//   • t.date — дата СОБЫТИЯ, её вводит оператор задним числом (импорт сводок, exDate),
+//     а старая модель (qty) применяет эффект в момент ЗАПИСИ → критерии разъехались бы;
+//   • id — безыдной записи id выдаётся при пуше, это момент выгрузки, а не записи.
+// `...fields` идёт последним намеренно: marshrutCut ставит своим записям _cut черты.
 function makeTransfer(type,fields){
   const by=(typeof authUser!=='undefined'&&authUser&&authUser.login)||'';
-  return {id:genId('t'),type,date:todayISO(),time:nowHM(),...(by?{_submittedBy:by}:{}),...fields};
+  // Штамп не может оказаться РАНЬШЕ черты: у устройства с отстающими часами запись,
+  // созданную после черты, иначе заморозило бы (движение выпало бы из баланса, а наличие
+  // сдвинулось). Черта уже в данных → эта запись заведомо после неё.
+  const cut=(typeof marshrutCutTs==='function'&&marshrutCutTs())||0;
+  const now=Date.now();
+  return {id:genId('t'),type,date:todayISO(),time:nowHM(),_cut:(cut&&now<=cut)?cut+1:now,...(by?{_submittedBy:by}:{}),...fields};
+}
+
+// ===== ЛОКАЦИЯ СТРОКИ СКЛАДА (единая точка, 04.09.2026 — подготовка к черте) =====
+// Статус строки склада ↔ локация журнала движений. Соответствие обязано совпадать
+// с qty-стороной marshrutCompare (marshrut.js: bg→'склад', nbg→'не бг', lost→'lost'),
+// иначе наличие и журнал считают одну и ту же строку в разных локациях.
+// Раньше эта формула была продублирована инлайном в adminEditStock/adminDeleteStock.
+// ===== АДРЕСАЦИЯ СТРОК СКЛАДА И РАСЧЁТОВ ПО КЛЮЧУ, А НЕ ПО ИНДЕКСУ (04.09.2026) =====
+// Индекс, зашитый в onchange при рендере, устаревает: облачный приём склада ПЕРЕСОБИРАЕТ
+// state.stock/state.squads целиком (sync.js syncStockMerge3 — меняются и длина, и порядок),
+// а таблицы админки/редактора расчётов после этого не перерисовываются. Правка уходила
+// в чужую строку — тот же класс, что чинили для вылетов в v0.27 (адресация полосы по id).
+//
+// ПОЧЕМУ НЕ СИНТЕТИЧЕСКИЙ id: merge берёт строку-источник из ОБЛАКА
+// (`const src=rRow.get(k)||lRow.get(k)`), поэтому заведённый локально id при первом же
+// merge заменяется облачным; у squads[].drones id нет вовсе — их не выдаёт даже
+// _syncPushStockSquadsNow (он штампует id только строкам stock и самим расчётам).
+// Стабилен НАТУРАЛЬНЫЙ ключ — ровно тот, по которому merge и отождествляет строки:
+// склад «модель|статус» (sync.js _stKey), борт расчёта «расчёт|модель», расчёт «пилот».
+// Безымянная строка идентичности не имеет — для неё фолбэк на индекс (как 'i'+idx
+// у _flightByKey); после merge она не адресуется, но merge её и так схлопывает.
+// Дубль-ключи (две строки одной пары модель|статус) разрешаются в первую — как в merge.
+function _rowN(s){ return String(s==null?'':s).trim().toLowerCase(); }
+// Строка-ключ в inline-обработчик: экранируем для JS-литерала И для HTML-атрибута.
+// Перевод строки внутри имени тоже экранируем — иначе он рвёт JS-литерал в атрибуте
+// и обработчик молча не компилируется (строка становится нередактируемой).
+function _attrJs(s){ return esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r/g,'\\r').replace(/\n/g,'\\n')); }
+
+// Дубль-строки (две с одним натуральным ключом) видны в таблице по отдельности, поэтому
+// второй и последующим носителям ключа рендер добавляет суффикс '~n' — иначе правка
+// второй строки уходила бы в первую. Один счётчик на весь проход рендера.
+function _keySeq(){ const seen=Object.create(null); return k=>{ const n=(seen[k]=(seen[k]||0)+1)-1; return n?k+'~'+n:k; }; }
+function _occ(k){ const m=/^([\s\S]*)~(\d+)$/.exec(k); return m?{base:m[1],n:+m[2]}:{base:k,n:0}; }
+
+function _stockRowKey(d,i){ return _rowN(d&&d.name) ? 's|'+_rowN(d.name)+'|'+((d&&d.status)||'bg') : 's#'+i; }
+function _stockRowByKey(key){
+  // Резолв ТОЛЬКО сравнением вычисленного ключа — позиционный фолбэк ('s#i') тоже
+  // проверяется: на позиции i должна стоять по-прежнему БЕЗЫМЯННАЯ строка, иначе промах.
+  const k=String(key==null?'':key), arr=state.stock||[];
+  const pick=(base,n)=>{ let c=0;
+    for(let i=0;i<arr.length;i++) if(_stockRowKey(arr[i],i)===base && c++===n) return {row:arr[i],idx:i};
+    return null; };
+  const o=_occ(k);
+  return pick(k,0) || (o.n?pick(o.base,o.n):null) || {row:null,idx:-1};
+}
+function _squadRowKey(sq,si){ return _rowN(sq&&sq.pilot) ? 'q|'+_rowN(sq.pilot) : 'q#'+si; }
+function _squadRowByKey(key){
+  const k=String(key==null?'':key), arr=state.squads||[];
+  const pick=(base,n)=>{ let c=0;
+    for(let i=0;i<arr.length;i++) if(_squadRowKey(arr[i],i)===base && c++===n) return {sq:arr[i],si:i};
+    return null; };
+  const o=_occ(k);
+  return pick(k,0) || (o.n?pick(o.base,o.n):null) || {sq:null,si:-1};
+}
+// Борт безымянного расчёта натурального ключа не имеет (иначе борта разных безымянных
+// расчётов схлопнулись бы в один ключ 'd||модель') — для него тоже позиционный фолбэк.
+function _droneRowKey(sq,d,si,di){
+  return (_rowN(d&&d.name)&&_rowN(sq&&sq.pilot)) ? 'd|'+_rowN(sq.pilot)+'|'+_rowN(d.name) : 'd#'+si+'#'+di;
+}
+function _droneRowByKey(key){
+  const k=String(key==null?'':key), arr=state.squads||[], miss={sq:null,si:-1,drone:null,di:-1};
+  const pick=(base,n)=>{ let c=0;
+    for(let si=0;si<arr.length;si++){
+      const ds=arr[si].drones||[];
+      for(let di=0;di<ds.length;di++) if(_droneRowKey(arr[si],ds[di],si,di)===base && c++===n) return {sq:arr[si],si,drone:ds[di],di};
+    }
+    return null; };
+  const o=_occ(k);
+  return pick(k,0) || (o.n?pick(o.base,o.n):null) || miss;
+}
+// Единая реакция «строка не найдена». Причина чаще не в чужой синхронизации, а в СВОЕЙ же
+// правке в соседнем представлении (переименование меняет ключ), поэтому текст нейтральный.
+function _rowGone(what,rerender){
+  alert('Не найдено: '+what+'.\n\nСписок изменился после того, как таблица была отрисована\n(своя правка в другом разделе либо синхронизация с другого устройства).\nТаблица обновлена — повторите правку.');
+  if(typeof rerender==='function'){ try{ rerender(); }catch(e){} }
+}
+
+function _isLostStatus(status){ const s=String(status||'').toLowerCase(); return s==='lost'||s==='списан'; }
+function _stockLoc(status){
+  // Легаси-написание 'списан' сводим к 'lost' — ровно как qty-сторона marshrutCompare
+  // (marshrut.js:173). Прежний инлайн отдавал 'списан' как есть, и коррекция такой строки
+  // уходила в ledger-локацию 'списан', которую сверка ИСКЛЮЧАЕТ (marshrut.js:179) → расхождение.
+  if(_isLostStatus(status))return 'lost';
+  return status==='bg'?'склад':(status==='nbg'?'не бг':(status||'склад'));
 }
 
 function rebuildRoleSelector(){
@@ -109,7 +233,8 @@ function rebuildRoleSelector(){
     '<option value="admin">Администратор</option>'+
     '<option value="cmd">Командир</option>'+
     '<option value="tech">Техник</option>'+
-    state.squads.map((sq,i)=>`<option value="pilot_${i}">Пилот ${esc(sq.pilot)}</option>`).join('');
+    // Значение опции — КЛЮЧ расчёта (не индекс): esc обязателен, в значении теперь имя
+    state.squads.map(sq=>`<option value="${esc(pilotRoleValue(sq))}">Пилот ${esc(sq.pilot)}</option>`).join('');
   // восстановить выбор если возможно
   if([...sel.options].some(o=>o.value===cur))sel.value=cur;
 }
@@ -208,10 +333,13 @@ function loadLocal(){
       // give/get/unit. Раньше фильтр их отбрасывал при загрузке из localStorage,
       // и передачи наружу «пропадали» из state (diff склада не сходился: +N по отданным
       // бортам), хотя в облаке записи были. Держим запись, если у неё есть тип и любое
-      // содержательное поле любого типа (drone/from/to ИЛИ give/get/unit).
+      // содержательное поле любого типа (drone/from/to ИЛИ give/get/unit ИЛИ location).
+      // location добавлена 04.09.2026 (подготовка к черте, Этап 3.1): у adjust и у
+      // будущего startbalance локация лежит ТОЛЬКО в t.location — без неё запись,
+      // заполненная одной локацией, молча стиралась бы при каждой загрузке (класс БАГа 3).
       if(state.transfers){
         state.transfers=state.transfers.filter(t=>
-          t&&t.type&&(t.drone||t.from||t.to||t.give||t.get||t.unit)
+          t&&t.type&&(t.drone||t.from||t.to||t.give||t.get||t.unit||t.location)
         );
       }
     }
@@ -232,6 +360,10 @@ if(typeof syncStockReconcileOnLoad==='function') try{ syncStockReconcileOnLoad()
 // БЕЗ флага (после загрузки облака '_mig_' будут видны). Флаг оставлен как вторичный.
 function migrateSquadsToTransfers(){
   if(localStorage.getItem('_transfers_migrated_v1'))return;
+  // ЧЕРТА: после неё легаси-выдачи создались бы как ПОСТ-чертовые движения и задвоили бы
+  // стартовый остаток (их эффект уже внутри него). Тихо выходим — функция зовётся при
+  // каждой загрузке; страховка на случай, если маркер `_mig_` исчезнет из данных.
+  if(typeof marshrutCutTs==='function'&&marshrutCutTs()){ localStorage.setItem('_transfers_migrated_v1','1'); return; }
   const tr=state.transfers||[];
   if(tr.some(t=>t&&typeof t.id==='string'&&t.id.includes('_mig_'))){ localStorage.setItem('_transfers_migrated_v1','1'); return; }
   if(!tr.length) return; // нечего сверять — не плодим легаси из одних squads
@@ -336,13 +468,12 @@ function switchRole(r){
   else if(r==='cmd')label='Командир';
   else if(r==='tech')label='Техник';
   else if(r==='viewer')label='Наблюдатель';
-  else if(r.startsWith('pilot_')){
-    const idx=parseInt(r.split('_')[1]);
-    pilotName=state.squads[idx]?state.squads[idx].pilot:'?';
+  else if(isPilotViewRole(r)){
+    pilotName=pilotRoleName(r)||'?';   // ключ расчёта, не индекс (легаси 'pilot_N' тоже читается)
     label='Пилот '+pilotName;
   }
   // Для роли пилота — золотые щиты рядом с именем в topbar (под высоту заглавных букв)
-  const tbShields=r.startsWith('pilot_')&&pilotName&&pilotName!=='?'?goldShieldsHtml(pilotName,{inline:true}):'';
+  const tbShields=isPilotViewRole(r)&&pilotName&&pilotName!=='?'?goldShieldsHtml(pilotName,{inline:true}):'';
   document.getElementById('roleBadge').innerHTML='<b>'+esc(label)+'</b>'+tbShields;
   const canEdit=hasAnyRole(['cmd','tech','admin']); // state.role=r уже установлена выше
   document.getElementById('addDroneBtn').style.display=canEdit?'':'none';
@@ -360,7 +491,7 @@ function switchRole(r){
   try{localStorage.setItem('role',r);}catch(e){}
   // Обновляем форму вылета — скрываем/показываем поле пилота
   setTimeout(()=>{
-    const isPilot=r.startsWith('pilot_');
+    const isPilot=isPilotViewRole(r);
     const qpWrap=document.getElementById('qf-pilot-wrap');
     const qp=document.getElementById('qf-pilot');
     if(qpWrap)qpWrap.style.display=isPilot?'none':'';
@@ -457,48 +588,73 @@ function renderAdminFlights(){
         <th style="width:100%">Примечание</th>
         <th style="min-width:24px"></th>
       </tr></thead>
-      <tbody>${indexed.map(({x,i})=>`<tr>
-        <td><input style="width:100px" type="date" value="${x.date}" onchange="adminEditFlight(${i},'date',this.value)"></td>
-        <td><input style="width:76px;min-width:76px" type="time" value="${x.time}" onchange="adminEditFlight(${i},'time',this.value)"></td>
-        <td><input style="width:36px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight(${i},'flightnum',this.value?parseInt(this.value):null)"></td>
-        <td><input style="width:72px" value="${esc(x.pilot||'')}" onchange="adminEditFlight(${i},'pilot',this.value)"></td>
-        <td><input style="width:100px" value="${esc(x.target||'')}" onchange="adminEditFlight(${i},'target',this.value)"></td>
-        <td><input style="width:80px" value="${esc(x.ammo||'')}" onchange="adminEditFlight(${i},'ammo',this.value)" onclick="event.stopPropagation();const ammoList=ammoCatalog.length?ammoCatalog.map(a=>a.name):[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();showQuickPicker(this,ammoList,v=>{adminEditFlight(${i},'ammo',v)})" autocomplete="off"></td>
-        <td><input style="width:85px" value="${esc(x.drone||'')}" onchange="adminEditFlight(${i},'drone',this.value)" onclick="event.stopPropagation();showQuickPicker(this,[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort(),v=>{adminEditFlight(${i},'drone',v)})" autocomplete="off"></td>
-        <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight(${i},'result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
-        <td><select style="width:80px" onchange="adminEditFlight(${i},'returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
-        <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?'<span title="Пересчитать дистанцию по текущей точке" style="cursor:pointer" onclick="adminRecalcFlightDist('+i+')">🔒</span>&nbsp;&nbsp;'+x.range_km+' км':''}</td>
-        <td><input style="width:100%;min-width:120px" value="${esc(x.note||'')}" onchange="adminEditFlight(${i},'note',this.value)"></td>
-        <td style="white-space:nowrap"><button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight(${i})">✕</button></td>
-      </tr>`).join('')}
+      <tbody>${indexed.map(({x,i})=>{
+        // Ключ записи, а не индекс: syncPushAll доливает облачные вылеты и ПЕРЕСОРТИРОВЫВАЕТ
+        // state.flights (sync.js), эту таблицу при этом никто не перерисовывает — зашитый
+        // индекс начинал указывать на чужой вылет. Те же _flEditKey/_flKeyJs, что у полосы
+        // правки в журнале (id записи, фолбэк 'i'+индекс для исторических без id).
+        const k=_flKeyJs(_flEditKey(x,i));
+        return `<tr>
+        <td><input style="width:100px" type="date" value="${esc(x.date||'')}" onchange="adminEditFlight('${k}','date',this.value)"></td>
+        <td><input style="width:76px;min-width:76px" type="time" value="${esc(x.time||'')}" onchange="adminEditFlight('${k}','time',this.value)"></td>
+        <td><input style="width:36px" type="number" min="1" value="${x.flightnum||''}" onchange="adminEditFlight('${k}','flightnum',this.value?parseInt(this.value):null)"></td>
+        <td><input style="width:72px" value="${esc(x.pilot||'')}" onchange="adminEditFlight('${k}','pilot',this.value)"></td>
+        <td><input style="width:100px" value="${esc(x.target||'')}" onchange="adminEditFlight('${k}','target',this.value)"></td>
+        <td><input style="width:80px" value="${esc(x.ammo||'')}" onchange="adminEditFlight('${k}','ammo',this.value)" onclick="event.stopPropagation();const ammoList=ammoCatalog.length?ammoCatalog.map(a=>a.name):[...new Set(state.flights.map(f=>f.ammo).filter(Boolean))].sort();showQuickPicker(this,ammoList,v=>{adminEditFlight('${k}','ammo',v)})" autocomplete="off"></td>
+        <td><input style="width:85px" value="${esc(x.drone||'')}" onchange="adminEditFlight('${k}','drone',this.value)" onclick="event.stopPropagation();showQuickPicker(this,[...new Set([...state.stock.map(d=>d.name),...state.squads.flatMap(sq=>sq.drones.map(d=>d.name))])].sort(),v=>{adminEditFlight('${k}','drone',v)})" autocomplete="off"></td>
+        <td><select style="width:46px;padding:1px 2px;font-size:13px" onchange="adminEditFlight('${k}','result',this.value)"><option value="yes" ${x.result==='yes'?'selected':''}>✅</option><option value="no" ${x.result==='no'?'selected':''}>❌</option></select></td>
+        <td><select style="width:80px" onchange="adminEditFlight('${k}','returned',this.value)"><option value="yes" ${x.returned==='yes'?'selected':''}>вернул</option><option value="no" ${x.returned==='no'?'selected':''}>потерян</option></select></td>
+        <td style="white-space:nowrap;color:var(--muted)">${x.range_km!=null?'<span title="Пересчитать дистанцию по текущей точке" style="cursor:pointer" onclick="adminRecalcFlightDist(\''+k+'\')">🔒</span>&nbsp;&nbsp;'+x.range_km+' км':''}</td>
+        <td><input style="width:100%;min-width:120px" value="${esc(x.note||'')}" onchange="adminEditFlight('${k}','note',this.value)"></td>
+        <td style="white-space:nowrap"><button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:9px" onclick="adminDeleteFlight('${k}')">✕</button></td>
+      </tr>`;}).join('')}
       </tbody>
     </table>`:'<div style="color:var(--muted);padding:12px">Нет вылетов</div>';
 }
 
-function adminEditFlight(idx,field,val){
+function adminEditFlight(key,field,val){
   if(!guardWrite())return;
+  // Ключ → запись → СВЕЖИЙ индекс (нижележащие syncEditFlight/adminEditReturned/
+  // adminEditLossDrone работают по индексу и вызываются не только отсюда).
+  const rec=_flightByKey(key);
+  if(!rec){ _rowGone('вылет',renderAdminFlights); return; }
+  const idx=state.flights.indexOf(rec);
   // Смена статуса «вернул ↔ потерян» → списать/вернуть борт у пилота
   if(field==='returned'){
-    const f=state.flights[idx];
+    const f=rec;
     if(f && f.returned!==val && (val==='no'||val==='yes')){
-      adminEditReturned(idx,val);
-      return;
+      // ЧЕРТА: у до-чертового вылета запись о потере заморожена — пересчёт склада вокруг
+      // неё сдвинул бы наличие, не тронув журнал. Меняем только статус вылета.
+      if(_isPreCutFlight(f)){
+        const m='Вылет записан до черты: статус изменён, склад НЕ пересчитан (история заморожена).';
+        if(typeof showSyncToast==='function')showSyncToast('⚠ '+m,8000); else alert(m);
+      } else {
+        adminEditReturned(idx,val);
+        return;
+      }
     }
   }
   // Смена борта в вылете-потере → пересчитать списание у пилота
   if(field==='drone'){
-    const f=state.flights[idx];
+    const f=rec;
     const oldDrone=(f?f.drone||'':'').trim();
     const newDrone=(val||'').trim();
     // Вылет помечен как потеря и борт реально изменился — пересчитать списание.
     // Флаг _lossWritten не проверяем: у исторических вылетов он не выставлен.
     if(f && f.returned==='no' && oldDrone && newDrone && oldDrone.toLowerCase()!==newDrone.toLowerCase()){
-      adminEditLossDrone(idx,oldDrone,newDrone);
-      return;
+      // ЧЕРТА: у до-чертового вылета запись о потере заморожена — пересчёт склада сдвинул
+      // бы наличие, не тронув журнал. Правим только ТЕКСТ вылета (опечатку исправить можно).
+      if(_isPreCutFlight(f)){
+        if(typeof showSyncToast==='function')showSyncToast('Вылет до черты: борт исправлен только в записи вылета, склад не пересчитан (история заморожена)',8000);
+        else alert('Вылет записан до черты — борт исправлен в вылете, склад не пересчитан (история заморожена).');
+      } else {
+        adminEditLossDrone(idx,oldDrone,newDrone);
+        return;
+      }
     }
   }
   syncEditFlight(idx,field,val);
-  const fl=state.flights[idx];
+  const fl=rec;
   logAction('flight','edit','Адм: '+(fl?(fl.pilot||'')+' '+(fl.date||'')+' '+(fl.time||''):'#'+idx)+' — '+field+' = '+String(val??'').slice(0,40));
 }
 
@@ -506,9 +662,10 @@ function adminEditFlight(idx,field,val){
 // Разблокировать → пересчитать из координат (geoComputeFlight сам берёт точку старта/цели)
 // → снова зафиксировать (geo_locked=true). Не трогает остальные вылеты. Уходит в облако
 // штатно (saveLocal → неразрушающий syncPushAll merge flights), как любая правка вылета.
-function adminRecalcFlightDist(idx){
+function adminRecalcFlightDist(key){
   if(!guardWrite())return;
-  const f=state.flights[idx]; if(!f)return;
+  const f=_flightByKey(key);                         // ключ, а не индекс
+  if(!f){ _rowGone('вылет',renderAdminFlights); return; }
   if(typeof geoComputeFlight!=='function'){alert('Геомодуль недоступен');return;}
   const r=geoComputeFlight(f);
   if(!r){alert('Не удалось рассчитать дистанцию: точка не найдена в геоданных.');return;}
@@ -526,10 +683,16 @@ function adminRecalcFlightDist(idx){
 // Спрашивает подтверждение: применять ли изменения к складу/расчёту.
 // «Нет» — меняем только текст вылета, склад не трогаем.
 async function adminEditLossDrone(idx, oldDrone, newDrone){
-  const f=state.flights[idx];
+  let f=state.flights[idx];
   if(!f) return;
   const pilot=f.pilot;
   const apply=await confirmLossDroneChange(oldDrone,newDrone,pilot);
+
+  // Перерезолв после модалки — см. подробный комментарий в adminEditReturned:
+  // Promise-оверлей не блокирует цикл, полная синхронизация могла заменить объекты.
+  const live=(f.id!=null&&_flightByKey(String(f.id)))||(state.flights.includes(f)?f:null);
+  if(!live){ _rowGone('вылет',renderAdminFlights); return; }
+  f=live;
 
   // Текст вылета меняем в любом случае
   f.drone=newDrone;
@@ -593,7 +756,7 @@ function confirmLossDroneChange(oldDrone,newDrone,pilot){
 // Смена статуса вылета «вернул ↔ потерян» с пересчётом склада.
 // «Нет» — меняем только статус вылета, склад/расчёт не трогаем.
 async function adminEditReturned(idx, newReturned){
-  const f=state.flights[idx];
+  let f=state.flights[idx];
   if(!f) return;
   const drone=(f.drone||'').trim();
   const pilot=f.pilot;
@@ -606,6 +769,17 @@ async function adminEditReturned(idx, newReturned){
     ? `Борт <b>${esc(drone)}</b> будет списан как потеря у пилота${pilot?' '+esc(pilot):''}. Применить?`
     : `Борт <b>${esc(drone)}</b> будет возвращён пилоту${pilot?' '+esc(pilot):''}. Применить?`;
   const apply = await confirmReturnedChange(msg);
+
+  // ПЕРЕРЕЗОЛВ ПОСЛЕ МОДАЛКИ (04.09.2026). Это НЕ window.confirm: confirmReturnedChange —
+  // Promise-оверлей, цикл событий он не блокирует, и плановая полная синхронизация
+  // (раз в 5 мин) заменяет state.flights ЦЕЛИКОМ новыми объектами (sync.js: `state.flights
+  // = loaded.flights`). Захваченная до модалки запись тогда отвязана: списание со склада
+  // и loss-запись применились бы к живому состоянию, а f.returned/_lossWritten ушли бы
+  // в мусор — вылет остался бы «вернул» при списанном борте (осиротевшая потеря).
+  // Делаем ДО любых мутаций: ранний выход ничего не меняет.
+  const live=(f.id!=null&&_flightByKey(String(f.id)))||(state.flights.includes(f)?f:null);
+  if(!live){ _rowGone('вылет',renderAdminFlights); return; }
+  f=live;
 
   // Статус вылета меняем в любом случае
   f.returned=newReturned;
@@ -634,15 +808,50 @@ async function adminEditReturned(idx, newReturned){
 
 // Возврат борта пилоту (+1) и удаление записи о потере.
 // Поиск записи — тем же трёхуровневым проходом, что и в syncDeleteFlight.
+// ===== ВОЗВРАТ НАЛИЧИЯ ПРИ СНЯТИИ LOSS-ЗАПИСИ (04.09.2026, блокер §2а) =====
+// Симметрия ledger↔qty: снятая loss-запись — это снятое движение −qty, значит наличие
+// обязано вырасти ровно на qty снятых записей. Раньше чистки журнала
+// (adminCleanOrphanLosses / adminDedupeLossTransfers) удаляли движения, не трогая
+// наличие, а syncDeleteFlight компенсировал по флагу f.returned, а не по фактически
+// снятым записям. Минус закрывается точным нулём — строка снимается (как в returnLossDrone).
+function _restoreSquadQty(pilot,drone,qty){
+  if(!pilot||!drone||!qty)return;
+  const dl=String(drone).toLowerCase();
+  let sq=(state.squads||[]).find(s=>s.pilot===pilot);
+  if(!sq){sq={pilot,drones:[]};(state.squads=state.squads||[]).push(sq);}
+  sq.drones=sq.drones||[];
+  const d=sq.drones.find(x=>String(x.name||'').toLowerCase()===dl);
+  if(d){ d.qty=(d.qty||0)+qty; if(d.qty===0)sq.drones=sq.drones.filter(x=>x!==d); }
+  else sq.drones.push({name:drone,qty});
+}
+// Компенсировать наличие по списку снятых loss-записей. Возвращает сколько бортов вернулось.
+function _compensateRemovedLosses(list){
+  let n=0, frozen=0;
+  (list||[]).forEach(t=>{
+    if(!t||t.type!=='loss')return;
+    // ЧЕРТА: до-чертовая запись в баланс НЕ входит (заморожена), значит её снятие меняет
+    // ledger на 0 — и наличие обязано остаться на месте. Иначе qty поедет без журнала.
+    if(_isPreCutTransfer(t)){ frozen++; return; }
+    const q=parseInt(t.qty,10)||1;              // qty по умолчанию 1 — как в writeDroneLoss
+    _restoreSquadQty(t.pilot,t.drone,q); n+=q;
+  });
+  if(frozen)console.warn('[учёт] Снято '+frozen+' до-чертовых записей о потере — наличие не менялось (история заморожена чертой).');
+  return n;
+}
+// Человекочитаемая сводка возврата для confirm/статуса: «Поп: ПВХ1 ×2; Толстый: КИРМ ×1»
+function _describeRestored(list){
+  const acc={};
+  (list||[]).forEach(t=>{
+    if(!t||t.type!=='loss')return;
+    const k=(t.pilot||'?')+'|'+(t.drone||'?');
+    acc[k]=(acc[k]||0)+(parseInt(t.qty,10)||1);
+  });
+  return Object.keys(acc).map(k=>{const p=k.split('|');return p[0]+': '+p[1]+' ×'+acc[k];}).join('; ');
+}
+
 function returnLossDrone(f){
   const pLow=(f.pilot||'').toLowerCase();
   const dLow=(f.drone||'').toLowerCase();
-  const sq=state.squads.find(s=>s.pilot===f.pilot);
-  if(sq){
-    const d=sq.drones.find(d=>d.name.toLowerCase()===dLow);
-    if(d){ d.qty++; if(d.qty===0) sq.drones=sq.drones.filter(x=>x!==d); } // −1→0: минус закрыт, строку снимаем
-    else sq.drones.push({name:f.drone,qty:1});
-  }
   const before=(state.transfers||[]).length;
   let removedTransfers=[];
   const removeLoss=(pred)=>{
@@ -669,6 +878,29 @@ function returnLossDrone(f){
       t.date===f.date
     );
   }
+  // Возврат борта — ПОСЛЕ снятия записей (04.09.2026): при действующей черте снятие
+  // ЗАМОРОЖЕННОЙ (до-чертовой) записи не меняет ledger, значит и наличие двигать нельзя.
+  // Без черты и для пост-чертовых записей поведение прежнее: +1 борт пилоту, в т.ч. когда
+  // записи о потере не нашлось (исторические вылеты долга «42 потери без loss»).
+  // При действующей черте наличие двигаем ТОЛЬКО если сняли хотя бы одну пост-чертовую
+  // запись. Ноль снятых записей — это легаси-вылет из долга «42 потери без loss»: его
+  // списания в журнале нет, возвращать нечего (симметрично syncDeleteFlight).
+  const cutOn=typeof marshrutCutTs==='function'&&marshrutCutTs()>0;
+  const frozenOnly=cutOn&&!removedTransfers.some(t=>!_isPreCutTransfer(t));
+  if(!frozenOnly){
+    const sq=state.squads.find(s=>s.pilot===f.pilot);
+    if(sq){
+      const d=sq.drones.find(d=>d.name.toLowerCase()===dLow);
+      if(d){ d.qty++; if(d.qty===0) sq.drones=sq.drones.filter(x=>x!==d); } // −1→0: минус закрыт, строку снимаем
+      else sq.drones.push({name:f.drone,qty:1});
+    }
+  } else {
+    const msg=removedTransfers.length
+      ?'Потеря записана до черты — наличие не изменено (история заморожена).'
+      :'У вылета не было записи о потере в журнале — наличие не изменено (возвращать нечего).';
+    console.warn('[учёт] '+msg);
+    if(typeof showSyncToast==='function')showSyncToast('⚠ '+msg,8000);
+  }
   // tombstone удалённых loss-передач — чтобы неразрушающий merge не вернул их из облака
   // Путь Б: публикуем удаление в облачный лист tombstones (распространение на устройства)
   syncPublishTombstones(removedTransfers.map(t=>t.id));
@@ -692,44 +924,57 @@ function confirmReturnedChange(msgHtml){
   });
 }
 
-function adminDeleteFlight(idx){
+function adminDeleteFlight(key){
   if(!guardWrite())return;
-  if(!confirm('Удалить этот вылет?'))return;
-  syncDeleteFlight(idx);
+  const rec=_flightByKey(key);                       // ключ, а не индекс
+  if(!rec){ _rowGone('вылет',renderAdminFlights); return; }
+  if(!confirm('Удалить этот вылет?\n\n'+(rec.date||'')+' '+(rec.time||'')+' · '+(rec.pilot||'')+' · '+(rec.drone||'')))return;
+  syncDeleteFlight(state.flights.indexOf(rec));      // свежий индекс на момент подтверждения
 }
 
 function renderAdminStock(){
   document.getElementById('adminStockList').innerHTML=state.stock.length?`
     <table>
       <thead><tr><th>Название</th><th>Кол-во</th><th>Статус</th><th>Действие</th></tr></thead>
-      <tbody>${state.stock.map((d,i)=>`<tr>
-        <td><input style="width:120px" value="${esc(d.name)}" onchange="adminEditStock(${i},'name',this.value)"></td>
-        <td><input style="width:60px" type="number" min="0" value="${d.qty}" onchange="adminEditStock(${i},'qty',parseInt(this.value)||0)"></td>
-        <td><select onchange="adminEditStock(${i},'status',this.value)">
+      <tbody>${(sk=>state.stock.map((d,i)=>{
+        const k=_attrJs(sk(_stockRowKey(d,i))); // ключ строки, а не индекс (см. _stockRowKey)
+        return `<tr>
+        <td><input style="width:120px" value="${esc(d.name)}" onchange="adminEditStock('${k}','name',this.value)"></td>
+        <td><input style="width:60px${d.qty<0?';color:var(--red);border-color:var(--red)':''}" type="number" value="${d.qty}"${d.qty<0?' title="Остаток в минусе — выбытие оформлено без прихода (ADR-001 §4: сигнал, не ошибка)"':''} onchange="adminEditStock('${k}','qty',parseInt(this.value)||0)">${d.qty<0?' <span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}</td>
+        <td><select onchange="adminEditStock('${k}','status',this.value)">
           <option value="bg" ${d.status==='bg'?'selected':''}>БГ</option>
           <option value="nbg" ${d.status==='nbg'?'selected':''}>Не БГ</option>
-          <option value="lost" ${d.status==='lost'?'selected':''}>Списан</option>
+          <option value="lost" ${_isLostStatus(d.status)?'selected':''}>Списан</option>
         </select></td>
-        <td><button class="btn btn-danger btn-sm" onclick="adminDeleteStock(${i})">Удалить</button></td>
-      </tr>`).join('')}
+        <td><button class="btn btn-danger btn-sm" onclick="adminDeleteStock('${k}')">Удалить</button></td>
+      </tr>`;}).join(''))(_keySeq())}
       </tbody>
     </table>`:'<div style="color:var(--muted);padding:8px">Нет позиций</div>';
 }
 
-function adminEditStock(idx,field,val){
+function adminEditStock(key,field,val){
   if(!guardWrite())return;
-  const it=state.stock[idx]; if(!it)return;
+  const {row:it,idx}=_stockRowByKey(key);           // ключ, а не индекс — см. _stockRowKey
+  if(!it){ _rowGone('строка склада',renderAdminStock); return; }
   if(field==='qty'){
     const newQ=parseInt(val,10)||0;
     const delta=newQ-(it.qty||0);
     if(delta){
-      const loc=it.status==='bg'?'склад':(it.status==='nbg'?'не бг':(it.status||'склад'));
+      const loc=_stockLoc(it.status);
       const reason=adjustReason(it.name+' ('+loc+'): '+(it.qty||0)+'→'+newQ);
       if(!reason){renderAdminStock();return;} // отмена — восстановить поле из state
       it.qty=newQ;
       recordAdjust(it.name,delta,loc,reason);
       logAction('stock','edit','Адм: коррекция '+it.name+' ('+loc+') '+(newQ-delta)+'→'+newQ+' — '+reason);
     } else { it.qty=newQ; }
+  } else if(field==='status'){
+    // Смена статуса = ПЕРЕМЕЩЕНИЕ между локациями, а не переклейка ярлыка (04.09.2026).
+    // Обе ветки сами сохраняют/рендерят; отказ или отмена — перерисовка вернёт поле из state.
+    if(!adminMoveStockStatus(idx,val))renderAdminStock();
+    return;
+  } else if(field==='name'){
+    if(!adminRenameStockRow(idx,val))renderAdminStock();
+    return;
   } else {
     it[field]=val;
   }
@@ -739,11 +984,96 @@ function adminEditStock(idx,field,val){
   renderDashboard();
 }
 
-function adminDeleteStock(idx){
+// ===== СМЕНА СТАТУСА СТРОКИ СКЛАДА = ДВИЖЕНИЕ (04.09.2026, блокер §2а диагностики) =====
+// Раньше ветка else в adminEditStock делала `it[field]=val`: qty переезжал между
+// локациями 'склад' / 'не бг' / 'lost' БЕЗ единого движения — наличие меняло локацию,
+// журнал движений оставался на прежней, и сверка получала расхождение сразу по двум
+// парам (подпись этого механизма видна в базовой линии ADR §8: зеркальные ±1
+// «Гамаюн12 не бг / склад», «Курьер21 не бг / склад»).
+// Теперь количество физически переезжает в строку целевого статуса и порождает
+// запись type='transfer' — ровно ту же, что создаёт штатная передача «склад → не бг».
+// Возвращает true, если правка применена (или применять нечего).
+function adminMoveStockStatus(idx,newStatus){
+  const it=state.stock[idx]; if(!it)return false;
+  const oldStatus=it.status||'bg';
+  if(newStatus===oldStatus)return true;
+  // 'Списан' — ВЫБЫТИЕ, а не локация остатка: в журнале движений локации 'lost' нет,
+  // и остаток, уехавший туда сменой статуса, из учёта пропадает. Оформляется
+  // передачей «→ списан» либо потерей через вылет.
+  if(_isLostStatus(newStatus)){
+    alert('Статус «Списан» здесь не выставляется.\n\nСписание оформляется передачей «→ списан» (Склад → Передача),\nбоевая потеря — через вылет.\n\nИначе остаток уходит в локацию, которой нет в журнале движений.');
+    return false;
+  }
+  if(_isLostStatus(oldStatus)){
+    alert('Строка со статусом «Списан» не возвращается в оборот сменой статуса.\n\nОформите поступление (Склад → Добавить БПЛА) или коррекцию количества.');
+    return false;
+  }
+  const q=it.qty||0;
+  const from=_stockLoc(oldStatus), to=_stockLoc(newStatus);
+  const nl=String(it.name||'').toLowerCase();
+  const tgt=state.stock.find(d=>d!==it&&String(d.name||'').toLowerCase()===nl&&d.status===newStatus);
+  if(q===0){ // двигать нечего — ярлык пустой строки, движение не нужно
+    if(tgt)state.stock.splice(idx,1); else it.status=newStatus; // не плодим вторую строку той же пары
+    saveLocal(); syncBumpStockVersion(); syncPushStockSquads();
+    renderAdminStock(); renderInventory(); renderDashboard();
+    return true;
+  }
+  if(!confirm('Перевести '+it.name+' ×'+q+': '+from+' → '+to+'?\n\nБудет создана запись движения в журнале изменений (как у обычной передачи).'))return false;
+  // Количество переезжает в строку целевого статуса (схлоп с существующей, если есть)
+  if(tgt){ tgt.qty=(tgt.qty||0)+q; state.stock.splice(idx,1); }
+  else { it.status=newStatus; }
+  const op=makeTransfer('transfer',{from,to,drone:it.name,qty:q,note:'смена статуса строки склада'});
+  if(!state.transfers)state.transfers=[];
+  state.transfers.unshift(op);
+  syncAddTransfer(op);
+  logAction('stock','edit','Смена статуса: '+it.name+' ×'+q+' — '+from+' → '+to);
+  saveLocal(); syncBumpStockVersion(); syncPushStockSquads();
+  renderAdminStock(); renderInventory(); renderDashboard(); renderTransfersLog();
+  return true;
+}
+
+// ===== ПРАВКА ИМЕНИ МОДЕЛИ В СТРОКЕ СКЛАДА = ПЕРЕНОС ОСТАТКА (04.09.2026) =====
+// Раньше `it.name=val` переносил остаток с модели на модель без движения. Теперь —
+// ПАРА adjust (−qty у старой модели, +qty у новой, та же локация) с обязательной
+// причиной: обе модели (наличие и журнал) двигаются на одну и ту же дельту.
+// Массовое переименование модели во ВСЕХ данных — отдельная операция adminRenameModel.
+function adminRenameStockRow(idx,newName){
+  const it=state.stock[idx]; if(!it)return false;
+  const oldName=String(it.name||'').trim();
+  newName=String(newName||'').trim();
+  if(!newName){alert('Название модели не может быть пустым');return false;}
+  if(newName===oldName)return true;
+  const q=it.qty||0, loc=_stockLoc(it.status);
+  const nl=newName.toLowerCase();
+  const merge=()=>{ // схлоп с существующей строкой той же модели и статуса
+    const tgt=state.stock.find(d=>d!==it&&String(d.name||'').toLowerCase()===nl&&d.status===it.status);
+    if(tgt){ tgt.qty=(tgt.qty||0)+q; state.stock.splice(idx,1); } else { it.name=newName; }
+  };
+  if(q===0){ // пустая строка — просто ярлык, движения не требуется
+    merge();
+    saveLocal(); syncBumpStockVersion(); syncPushStockSquads();
+    renderAdminStock(); renderInventory(); renderDashboard();
+    return true;
+  }
+  const reason=adjustReason('строка склада ('+loc+'): '+oldName+' ×'+q+' → '+newName
+    +'\nОстаток переносится с модели на модель — будет создана пара коррекций.'
+    +'\nМассовое переименование модели во всех данных: Администратор → Данные.');
+  if(!reason)return false;
+  recordAdjust(oldName,-q,loc,'перенос остатка в «'+newName+'»: '+reason);
+  recordAdjust(newName, q,loc,'перенос остатка из «'+oldName+'»: '+reason);
+  merge();
+  logAction('stock','edit','Строка склада ('+loc+'): '+oldName+' ×'+q+' → '+newName+' — '+reason);
+  saveLocal(); syncBumpStockVersion(); syncPushStockSquads();
+  renderAdminStock(); renderInventory(); renderDashboard(); renderTransfersLog();
+  return true;
+}
+
+function adminDeleteStock(key){
   if(!guardWrite())return;
-  const it=state.stock[idx]; if(!it)return;
+  const {row:it,idx}=_stockRowByKey(key);           // ключ, а не индекс
+  if(!it){ _rowGone('строка склада',renderAdminStock); return; }
   // Причина-запрос служит подтверждением; при наличии qty — adjust(−qty) для прослеживаемости
-  const loc=it.status==='bg'?'склад':(it.status==='nbg'?'не бг':(it.status||'склад'));
+  const loc=_stockLoc(it.status);
   const reason=adjustReason('удаление позиции '+it.name+' ×'+it.qty+' ('+loc+')');
   if(!reason)return;
   if(it.qty) recordAdjust(it.name,-it.qty,loc,'удаление позиции: '+reason);
@@ -765,7 +1095,11 @@ function adminAddStock(){
   const ex=state.stock.find(d=>d.name.toLowerCase()===n.toLowerCase()&&d.status===s);
   if(ex){ex.qty+=q;}
   else{state.stock.push({name:n,qty:q,status:s});}
-  const op=makeTransfer('arrival',{drone:n,qty:q,note:'статус: '+s});
+  // Локация в записи ОБЯЗАТЕЛЬНА (04.09.2026, блокер §2а): без неё _marshrutWalk кладёт
+  // любой приход на 'склад' (marshrut.js:62), а наличие при статусе «Не БГ» оседает
+  // в локации 'не бг' → расхождение по двум парам на каждый такой приход. Старый аудит
+  // этого не видит (intake и onhand гасятся), поэтому дефект всплыл бы только после черты.
+  const op=makeTransfer('arrival',{drone:n,qty:q,to:_stockLoc(s),location:_stockLoc(s),note:'статус: '+s});
   if(!state.transfers)state.transfers=[];
   state.transfers.unshift(op);
   saveLocal();
@@ -781,12 +1115,13 @@ function renderAdminSquads(){
   document.getElementById('adminSquadList').innerHTML=state.squads.length?`
     <table>
       <thead><tr><th>Пилот</th><th>Точка старта</th><th>БПЛА</th><th>Кол-во</th><th>Действие</th></tr></thead>
-      <tbody>${state.squads.flatMap((sq,si)=>{
+      <tbody>${((qs,ds)=>state.squads.flatMap((sq,si)=>{
         // Ячейки шапки расчёта (имя/точка старта/удаление) — общие для строки с бортами и
         // для расчёта с ПУСТЫМ складом, чтобы пилот не исчезал из списка (см. ниже).
-        const pilotCell=`<input style="width:90px" value="${esc(sq.pilot)}" onchange="adminEditSquadPilot(${si},this.value)">`;
-        const startCell=`<input style="width:110px" value="${esc(sq.start_point||'')}" placeholder="45 вишня" onchange="squadEditStartPoint(${si},this.value)" autocomplete="off"><br><button id="geo-rc-btn-adm-${si}" class="btn btn-sm" style="margin-top:4px;font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing(${si},'geo-rc-prog-adm-${si}','geo-rc-btn-adm-${si}')">Пересчитать вылеты без дистанций</button><span id="geo-rc-prog-adm-${si}" style="font-size:10px;color:var(--muted)"></span>`;
-        const delCell=`<button class="btn btn-danger btn-sm" onclick="adminDeleteSquad(${si})">Удалить расчёт</button>`;
+        const qk=_attrJs(qs(_squadRowKey(sq,si))); // ключ расчёта, а не индекс (см. _squadRowKey)
+        const pilotCell=`<input style="width:90px" value="${esc(sq.pilot)}" onchange="adminEditSquadPilot('${qk}',this.value)">`;
+        const startCell=`<input style="width:110px" value="${esc(sq.start_point||'')}" placeholder="45 вишня" onchange="squadEditStartPoint('${qk}',this.value)" autocomplete="off"><br><button id="geo-rc-btn-adm-${si}" class="btn btn-sm" style="margin-top:4px;font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing('${qk}','geo-rc-prog-adm-${si}','geo-rc-btn-adm-${si}')">Пересчитать вылеты без дистанций</button><span id="geo-rc-prog-adm-${si}" style="font-size:10px;color:var(--muted)"></span>`;
+        const delCell=`<button class="btn btn-danger btn-sm" onclick="adminDeleteSquad('${qk}')">Удалить расчёт</button>`;
         // Пустой склад → одна строка-заглушка, но расчётом всё равно можно управлять
         // (точка старта, удаление; виден как получатель при выдаче борта).
         if(!sq.drones.length) return [`<tr>
@@ -795,14 +1130,16 @@ function renderAdminSquads(){
           <td colspan="2" style="color:var(--muted)">нет бортов</td>
           <td>${delCell}</td>
         </tr>`];
-        return sq.drones.map((d,di)=>`<tr>
+        return sq.drones.map((d,di)=>{
+          const dk=_attrJs(ds(_droneRowKey(sq,d,si,di))); // ключ борта «расчёт|модель»
+          return `<tr>
           <td>${di===0?pilotCell:'&nbsp;'}</td>
           <td>${di===0?startCell:'&nbsp;'}</td>
-          <td><input style="width:90px" value="${esc(d.name)}" onchange="adminEditSquadDrone(${si},${di},'name',this.value)"></td>
-          <td><input style="width:55px${d.qty<0?';color:var(--red);border-color:var(--red)':''}" type="number" value="${d.qty}"${d.qty<0?' title="Баланс в минусе — борт списан без передачи со склада"':''} onchange="adminEditSquadDrone(${si},${di},'qty',parseInt(this.value)||0)">${d.qty<0?' <span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}</td>
+          <td><input style="width:90px" value="${esc(d.name)}" onchange="adminEditSquadDrone('${dk}','name',this.value)"></td>
+          <td><input style="width:55px${d.qty<0?';color:var(--red);border-color:var(--red)':''}" type="number" value="${d.qty}"${d.qty<0?' title="Баланс в минусе — борт списан без передачи со склада"':''} onchange="adminEditSquadDrone('${dk}','qty',parseInt(this.value)||0)">${d.qty<0?' <span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}</td>
           <td>${di===0?delCell:'&nbsp;'}</td>
-        </tr>`);
-      }).join('')}
+        </tr>`;});
+      }).join(''))(_keySeq(),_keySeq())}
       </tbody>
     </table>`:'<div style="color:var(--muted);padding:8px">Нет расчётов</div>';
 }
@@ -840,19 +1177,122 @@ function _logAdminTransfer(pilot,drone,delta,note){
   recordAdjust(drone,delta,pilot,note||'адм');
 }
 
-function adminEditSquadPilot(si,val){
-  if(!guardWrite())return;
-  const old=state.squads[si]?state.squads[si].pilot:'';
-  if(state.squads[si])state.squads[si].pilot=val;
-  if(old!==val)logAction('squad','edit','Переименован пилот '+old+' → '+val);
-  saveLocal();
-  syncBumpStockVersion();
-  syncPushStockSquads();
+// ===== ПЕРЕИМЕНОВАНИЕ РАСЧЁТА/ПИЛОТА — КАНОНИЧЕСКОЕ (04.09.2026, блокер §2а) =====
+// Аналог adminRenameModel, но для ЛОКАЦИЙ. Имя пилота — это одновременно ключ локации
+// склада (squadKeyOf) и субъект статистики. Раньше переименование правило ТОЛЬКО
+// squads[].pilot: наличие переезжало на новое имя, а журнал движений
+// (t.pilot у loss, t.from/t.to у передач, t.location у adjust) оставался на старом —
+// ledger и qty расходились сразу по двум парам на каждую модель расчёта.
+// Правим атомарно ВСЕ вхождения + явная выгрузка (ambient-debounce тут недостаточен).
+//
+// _submittedBy НЕ трогаем намеренно: это логин автора записи, а не имя расчёта.
+function _renamePilotApply(oldName,newName){
+  const eqOld=v=>String(v||'').trim()===oldName;
+  let n=0;
+  (state.squads||[]).forEach(sq=>{ if(eqOld(sq.pilot)){sq.pilot=newName;n++;} });
+  (state.flights||[]).forEach(f=>{ if(eqOld(f.pilot)){f.pilot=newName;n++;} }); // субъект статистики
+  (state.transfers||[]).forEach(t=>{
+    if(eqOld(t.pilot)){t.pilot=newName;n++;}       // loss — локация расчёта
+    if(eqOld(t.from)){t.from=newName;n++;}         // передача — источник
+    if(eqOld(t.to)){t.to=newName;n++;}             // передача — приёмник
+    if(eqOld(t.location)){t.location=newName;n++;} // adjust (и будущий startbalance) — локация
+  });
+  // Коллизия имён = СЛИЯНИЕ расчётов: борта схлопываются по модели в первый расчёт.
+  // Сравнение регистронезависимое — ledger нормализует локации (marshrut.js:37), и два
+  // расчёта «Поп»/«поп» для него одна локация; оставить их раздельными = вечное расхождение.
+  const nrm=v=>String(v||'').trim().toLowerCase();
+  const same=(state.squads||[]).filter(sq=>nrm(sq.pilot)===nrm(newName));
+  if(same.length>1){
+    const first=same[0];
+    first.drones=first.drones||[];
+    same.slice(1).forEach(sq=>{
+      if(!first.start_point&&sq.start_point)first.start_point=sq.start_point; // точка старта (гео) не теряется
+      (sq.drones||[]).forEach(d=>{
+        const nl=nrm(d.name);
+        const ex=first.drones.find(x=>nrm(x.name)===nl);
+        if(ex)ex.qty=(ex.qty||0)+(d.qty||0); else first.drones.push(d);
+      });
+      n++; // слияние — тоже правка (иначе вызывающий решит, что менять нечего, и не сохранит)
+    });
+    const drop=new Set(same.slice(1));
+    state.squads=state.squads.filter(sq=>!drop.has(sq));
+  }
+  return n;
 }
-function adminEditSquadDrone(si,di,field,val){
+function adminRenamePilot(oldName,newName){
+  if(!guardAdmin())return false;
+  oldName=String(oldName||'').trim();
+  newName=String(newName||'').trim();
+  if(!oldName){alert('Не указан расчёт для переименования');return false;}
+  if(!newName){alert('Имя расчёта не может быть пустым');return false;}
+  if(oldName===newName)return true;
+  const eqOld=v=>String(v||'').trim()===oldName;
+  const cntSquad=(state.squads||[]).filter(sq=>eqOld(sq.pilot)).length;
+  const cntFlight=(state.flights||[]).filter(f=>eqOld(f.pilot)).length;
+  const cntTransfer=(state.transfers||[]).filter(t=>eqOld(t.pilot)||eqOld(t.from)||eqOld(t.to)||eqOld(t.location)).length;
+  // Коллизию ищем регистронезависимо — как её увидит ledger (marshrut.js нормализует локации)
+  const _n=v=>String(v||'').trim().toLowerCase();
+  const mergeInto=(state.squads||[]).some(sq=>_n(sq.pilot)===_n(newName)&&_n(sq.pilot)!==_n(oldName));
+  let msg='Переименовать расчёт «'+oldName+'» → «'+newName+'»?\n\n'
+    +'Затронуто записей: расчёты '+cntSquad+', вылеты '+cntFlight+', журнал движений '+cntTransfer+'.\n'
+    +'Имя расчёта — это ключ локации склада, поэтому журнал движений правится вместе с наличием.';
+  if(mergeInto){
+    msg='⚠ ВНИМАНИЕ: расчёт «'+newName+'» УЖЕ существует.\n'
+      +'Это СЛИЯНИЕ двух расчётов в один (борта сложатся), а НЕ простое переименование.\n\n'+msg;
+  }
+  if(!confirm(msg))return false;
+  if(mergeInto&&!confirm('Подтвердите СЛИЯНИЕ «'+oldName+'» в существующий «'+newName+'». Откат — только из .bak/экспорта.'))return false;
+
+  // Включён ли сейчас «взгляд» именно этого расчёта — фиксируем ДО правки данных
+  // (после неё старого имени в squads уже нет и определить по нему нельзя)
+  const roleKey=String(state.role||'').slice(0,6)==='pilot:'?String(state.role).slice(6):'';
+  const roleFollows=!!roleKey&&_rowN(roleKey)===_rowN(oldName);
+
+  const n=_renamePilotApply(oldName,newName);
+
+  // Явная синхронизация — как в adminRenameModel (операция атомарна у инициатора)
+  saveLocalQuiet();          // localStorage без отложенного полного write
+  syncBumpStockVersion();    // §11 — иначе поллинг затрёт правку
+  syncPushStockSquads();     // stock/squads
+  syncToCloud(true);         // flights+transfers полным неразрушающим write (id стабилен)
+
+  logAction('admin','rename_pilot','Переименован расчёт «'+oldName+'» → «'+newName+'»'+(mergeInto?' (СЛИЯНИЕ)':'')+'; правок: '+n);
+  // fillDataLists ОБЯЗАТЕЛЕН: селекты передачи (#transFrom/#transTo) и фильтр пилотов
+  // строятся из state.squads один раз; со старым именем передача «от» расчёта ничего не
+  // списала бы (ветка `if(sq)` в saveTransfer), но запись движения создала — разрыв инварианта.
+  if(typeof fillDataLists==='function')fillDataLists(); // внутри и rebuildRoleSelector()
+  // «Взгляд пилота» держит КЛЮЧ расчёта — после переименования ключ сменился, переносим
+  // роль следом (иначе вид показывал бы «Пилот ?», а селектор перескочил бы на первую опцию).
+  // Строго ПОСЛЕ fillDataLists: опции селектора уже с новым именем.
+  if(roleFollows){
+    const nr='pilot:'+squadKeyOf(newName);
+    switchRole(nr);
+    const _sel=document.getElementById('roleSwitch');
+    if(_sel&&[..._sel.options].some(o=>o.value===nr))_sel.value=nr;
+  }
+  renderInventory(); renderDashboard(); renderTransfersLog();
+  if(typeof renderFlights==='function')renderFlights();
+  // Обе таблицы расчётов: имя расчёта входит в ключ строки борта (_droneRowKey) — после
+  // переименования ключи в НЕперерисованной таблице устаревают (правка тогда не пройдёт
+  // вовсе — резолвер вернёт null и покажет _rowGone; но лучше перерисовать сразу).
+  if(typeof renderAdminSquads==='function')renderAdminSquads();
+  if(typeof renderSquadEditor==='function')renderSquadEditor();
+  if(typeof showSyncToast==='function')showSyncToast('✓ Расчёт «'+oldName+'» → «'+newName+'» (правок: '+n+')');
+  return true;
+}
+
+function adminEditSquadPilot(key,val){
   if(!guardWrite())return;
-  const sq=state.squads[si];const d=sq&&sq.drones[di];
-  if(d){
+  const {sq}=_squadRowByKey(key);   // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderAdminSquads); return; }
+  adminRenamePilot(sq.pilot,val);  // отказ/отмена — поле восстановит перерисовка из state
+  renderAdminSquads();
+}
+function adminEditSquadDrone(key,field,val){
+  if(!guardWrite())return;
+  const {sq,drone:d}=_droneRowByKey(key);           // ключ «расчёт|модель», а не пара индексов
+  if(!d){ _rowGone('борт расчёта',renderAdminSquads); return; }
+  {
     const old=d[field];
     if(field==='qty'){
       const delta=(parseInt(val)||0)-d.qty;
@@ -862,17 +1302,65 @@ function adminEditSquadDrone(si,di,field,val){
         recordAdjust(d.name,delta,sq.pilot,reason);
       }
     }
-    else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'адм');
-    d[field]=val;
+    else if(field==='name'){
+      if(!_squadRenameDrone(sq,d,val,'адм')){renderAdminSquads();return;} // отказ/отмена — вернуть поле из state
+      setTimeout(renderAdminSquads,0); // борт мог схлопнуться с одноимённым — перерисовать индексы
+    }
+    if(field!=='name')d[field]=val; // имя проставляет _squadRenameDrone (со схлопом дублей)
     if(old!==val)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': '+(field==='name'?('борт '+(old||'(новый)')+' → '+val):('борт '+(d.name||'?')+' — кол-во '+old+' → '+val)));
   }
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
 }
-function adminDeleteSquad(si){
+
+// ===== ПЕРЕИМЕНОВАНИЕ БОРТА В РАСЧЁТЕ = ПЕРЕНОС ОСТАТКА (04.09.2026, блокер §2а) =====
+// Раньше движение писалось ТОЛЬКО когда старое имя было пустым (_logAdminTransfer при
+// !d.name) — переименование заполненного борта уводило qty на другую модель молча:
+// наличие переезжало, журнал движений оставался на старой модели.
+// Теперь непустое → непустое даёт ПАРУ adjust (−qty старой, +qty новой у того же
+// расчёта) с обязательной причиной. Возвращает false, если правку применять нельзя.
+function _squadRenameDrone(sq,d,newName,tag){
+  if(!sq||!d)return false;
+  const oldName=String(d.name||'').trim();
+  newName=String(newName||'').trim();
+  if(newName===oldName)return true;
+  const q=d.qty||0;
+  // Схлоп с уже существующим бортом той же модели в этом расчёте. Нужен ВО ВСЕХ ветках:
+  // две строки одной модели в одном расчёте — одна и та же пара модель×локация, и в
+  // таблице они получают один ключ (правка второй ушла бы в первую). Merge их всё равно
+  // схлопывает, поэтому делаем это сразу и предсказуемо.
+  const dedupe=()=>{
+    const nl=_rowN(newName);
+    let first=null;
+    sq.drones=(sq.drones||[]).filter(x=>{
+      if(_rowN(x.name)!==nl)return true;
+      if(first){first.qty=(first.qty||0)+(x.qty||0);return false;}
+      first=x;return true;
+    });
+  };
+  if(!oldName){ // именование НОВОГО борта — установление наличия, причину не спрашиваем
+    d.name=newName;
+    if(newName&&q>0)_logAdminTransfer(sq.pilot,newName,q,tag||'адм');
+    dedupe();
+    return true;
+  }
+  if(!newName){alert('Название борта не может быть пустым');return false;}
+  if(q===0){ d.name=newName; dedupe(); return true; } // переносить нечего
+  const reason=adjustReason('борт у '+sq.pilot+': '+oldName+' ×'+q+' → '+newName
+    +'\nОстаток переносится с модели на модель — будет создана пара коррекций.'
+    +'\nМассовое переименование модели во всех данных: Администратор → Данные.');
+  if(!reason)return false;
+  recordAdjust(oldName,-q,sq.pilot,'перенос остатка в «'+newName+'»: '+reason); // локация — squadKeyOf внутри recordAdjust
+  recordAdjust(newName, q,sq.pilot,'перенос остатка из «'+oldName+'»: '+reason);
+  d.name=newName;
+  dedupe();
+  return true;
+}
+function adminDeleteSquad(key){
   if(!guardWrite())return;
-  const sq=state.squads[si]; if(!sq)return;
+  const {sq,si}=_squadRowByKey(key);                // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderAdminSquads); return; }
   const pName=sq.pilot;
   const held=(sq.drones||[]).filter(d=>d.name&&d.qty);
   let reason='';
@@ -896,6 +1384,13 @@ function adminAddSquad(){
   const p=document.getElementById('adm-newPilot').value.trim();
   const ds=document.getElementById('adm-newPilotDrones').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!p)return;
+  // Два расчёта с одним именем — для журнала движений и для облачного merge это ОДНА
+  // локация (они схлопнутся при ближайшей синхронизации), а в таблице до этого видны
+  // порознь. Не создаём: иначе операции над «вторым» уходят в первый.
+  if((state.squads||[]).some(sq=>_rowN(sq.pilot)===_rowN(p))){
+    alert('Расчёт «'+p+'» уже есть — имя расчёта это ключ его склада, двух одноимённых не бывает.\nДобавьте борта в существующий расчёт или назовите новый иначе.');
+    return;
+  }
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
   ds.forEach(n=>_logAdminTransfer(p,n,1,'адм: новый расчёт'));
   logAction('squad','add','Создан расчёт '+p+(ds.length?' ('+ds.join(', ')+')':''));
@@ -997,28 +1492,43 @@ function adminCleanOrphanLosses(){
       .filter(f=>f.returned==='no')
       .map(f=>(f.pilot||'').toLowerCase()+'|'+(f.drone||'').toLowerCase()+'|'+(f.date||''))
   );
-  const before=(state.transfers||[]).length;
-  const removedIds=[];
-  state.transfers=(state.transfers||[]).filter(t=>{
-    if(t.type!=='loss')return true;
+  // Сначала считаем без мутации — снятие записи возвращает наличие, это надо подтвердить
+  const keep=[], drop=[];
+  (state.transfers||[]).forEach(t=>{
+    if(t.type!=='loss'){keep.push(t);return;}
     const key=(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase()+'|'+(t.date||'');
-    if(lostFlightKeys.has(key))return true;
-    if(t.id)removedIds.push(t.id);
-    return false;
+    (lostFlightKeys.has(key)?keep:drop).push(t);
   });
-  const removed=before-(state.transfers||[]).length;
-  // tombstone удалённых loss-записей — иначе неразрушающий merge/поллинг вернёт их из облака
-  syncPublishTombstones(removedIds); // Путь Б: публикуем удаление осиротевших потерь в облако
-  saveLocal();
-  if(removed>0){
-    syncPushStockSquads();
-    renderInventory();
+  const removed=drop.length;
+  if(!removed){
+    setStatus('saveStatus','✓ Осиротевших записей не найдено — журнал чистый','muted');
+    return;
   }
+  // Замороженные (до-чертовые) записи наличие не вернут — в диалоге обещать их нельзя
+  const dropLive=drop.filter(t=>!_isPreCutTransfer(t));
+  const frozenN=drop.length-dropLive.length;
+  const back=(dropLive.length?_describeRestored(dropLive):'— (нечего возвращать)')
+    +(frozenN?'\n(ещё '+frozenN+' записей — до черты: снимутся, но наличие не изменят)':'');
+  // «Сирота» определяется по state.flights — если журнал вылетов загружен НЕ полностью
+  // (не доехала синхронизация, часть записей не расшифровалась), живые потери выглядят
+  // осиротевшими, и чистка не только сотрёт движения, но и вернёт борта в наличие.
+  if(!confirm('Найдено '+removed+' осиротевших записей о потерях (вылета с такой потерей нет).\n\n'
+    +'Записи будут удалены, а списанные ими борта ВЕРНУТСЯ в наличие:\n'+back
+    +'\n\nСнятое движение обязано вернуть остаток — иначе журнал и наличие разойдутся.'
+    +'\n\n⚠ Запускать только на ПОЛНОСТЬЮ синхронизированном устройстве: «сирота» ищется по\n'
+    +'загруженному журналу вылетов ('+(state.flights||[]).length+' записей). Если вылеты доехали не все —\n'
+    +'живые потери будут приняты за осиротевшие.'))return;
+  state.transfers=keep;
+  const restored=_compensateRemovedLosses(drop); // симметрия ledger↔qty
+  // tombstone удалённых loss-записей — иначе неразрушающий merge/поллинг вернёт их из облака
+  syncPublishTombstones(drop.map(t=>t.id)); // Путь Б: публикуем удаление осиротевших потерь в облако
+  saveLocal();
+  syncBumpStockVersion();
+  syncPushStockSquads();
+  renderInventory(); renderDashboard(); renderTransfersLog();
+  logAction('transfer','clean_orphans','Удалено '+removed+' осиротевших записей о потерях; возвращено в наличие: '+restored+' ('+back+')');
   setStatus('saveStatus',
-    removed>0
-      ?`✓ Удалено ${removed} осирот. ${removed===1?'запись':'записей'} о потерях — ${new Date().toLocaleString('ru')}`
-      :'✓ Осиротевших записей не найдено — журнал чистый',
-    removed>0?'ok':'muted');
+    `✓ Удалено ${removed} осирот. ${removed===1?'запись':'записей'}, возвращено бортов: ${restored} — ${new Date().toLocaleString('ru')}`,'ok');
 }
 
 // Удаляет ДУБЛИ записей о потерях: type='loss' с одинаковыми date+time+pilot+drone
@@ -1036,29 +1546,45 @@ function adminDedupeLossTransfers(){
   }
   // Сначала считаем (без мутации) — чтобы показать число в подтверждении
   const seen=new Set();
-  const removedIds=[];
+  const drop=[];
   const kept=[];
-  let removed=0;
   (state.transfers||[]).forEach(t=>{
     if(t.type!=='loss'){kept.push(t);return;}
     const key=(t.date||'')+'|'+(t.time||'')+'|'+(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase();
-    if(seen.has(key)){removed++;if(t.id)removedIds.push(t.id);return;}
+    if(seen.has(key)){drop.push(t);return;}
     seen.add(key);kept.push(t);
   });
+  const removed=drop.length;
   if(!removed){
     setStatus('saveStatus','✓ Дублей потерь не найдено — журнал чистый','muted');
     return;
   }
-  if(!confirm('Найдено '+removed+' дублей записей о потерях (одинаковые дата+время+пилот+борт).\nОставить по одной записи в каждой группе, остальные удалить?'))return;
-  syncPublishTombstones(removedIds); // Путь Б: публикуем удаление дублей потерь в облако
+  // Замороженные (до-чертовые) записи наличие не вернут — в диалоге обещать их нельзя
+  const dropLive=drop.filter(t=>!_isPreCutTransfer(t));
+  const frozenN=drop.length-dropLive.length;
+  const back=(dropLive.length?_describeRestored(dropLive):'— (нечего возвращать)')
+    +(frozenN?'\n(ещё '+frozenN+' записей — до черты: снимутся, но наличие не изменят)':'');
+  if(!confirm('Найдено '+removed+' дублей записей о потерях (одинаковые дата+время+пилот+борт).\n\n'
+    +'Оставить по одной записи в каждой группе, остальные удалить?'))return;
+  // Компенсация — ОТДЕЛЬНЫЙ вопрос, и ответ на него знает только оператор.
+  // Снятое движение −qty обязано вернуть остаток (симметрия ledger↔qty, §2а 04.09.2026),
+  // НО в эпоху двойной записи (до Risk 4) на N одинаковых loss-записей приходилось одно
+  // списание qty — там возврат раздует наличие. Провенанс по записи неразличим.
+  const restore=confirm('Вернуть списанные дублями борта в наличие?\n\n'+back+'\n\n'
+    +'ДА — если каждый дубль реально списывал борт (нормальный случай: снятое движение возвращает остаток).\n'
+    +'НЕТ — если дубли пришли из эпохи двойной записи (до 04.06.2026), когда списание было однократным:\n'
+    +'тогда возврат раздует наличие.');
+  syncPublishTombstones(drop.map(t=>t.id)); // Путь Б: публикуем удаление дублей потерь в облако
   state.transfers=kept;
+  const restored=restore?_compensateRemovedLosses(drop):0;
   // Немедленная выгрузка полным write (merge исключит tombstoned-записи);
   // saveLocalQuiet — чтобы не плодить второй отложенный push через debounce
   saveLocalQuiet();
+  if(restored){ syncBumpStockVersion(); syncPushStockSquads(); } // наличие изменилось — выгружаем явно
   syncToCloud(true);
-  renderInventory();
-  logAction('transfer','dedupe','Удалено '+removed+' дублей записей о потерях');
-  setStatus('saveStatus','✓ Удалено '+removed+' дублей потерь — '+new Date().toLocaleString('ru'),'ok');
+  renderInventory(); renderDashboard(); renderTransfersLog();
+  logAction('transfer','dedupe','Удалено '+removed+' дублей записей о потерях; возвращено в наличие: '+restored+(restored?' ('+back+')':' (оператор отказался от возврата)'));
+  setStatus('saveStatus','✓ Удалено '+removed+' дублей потерь, возвращено бортов: '+restored+' — '+new Date().toLocaleString('ru'),'ok');
 }
 
 // ===== ПЕРЕИМЕНОВАНИЕ МОДЕЛИ БПЛА (вариант А — каноническое, ВСЕ вхождения вкл. transfers) =====
@@ -1306,7 +1832,18 @@ function syncAuditStock(){
 // (никаких makeTransfer/arrival/saveLocal/sync). Записи пользователь вносит вручную
 // через Администратор → Склад (adminAddStock сам создаст arrival-передачу, после
 // чего diff_adj модели уйдёт в 0 при следующем syncAuditStock).
+// ЧЕРТА: легаси-приходы после неё ВРЕДНЫ — они добавляют движение, не трогая наличие,
+// и ledger уезжает вверх ровно на внесённое количество (расхождение, неотличимое от бага
+// семантики). Дыры в приходе до черты закрыты стартовым остатком, после — коррекцией.
+function _cutBlocksLegacyFix(tag){
+  if(typeof marshrutCutTs!=='function'||!marshrutCutTs())return false;
+  console.error('['+tag+'] ОТКАЗ: черта проведена — легаси-приходы больше не оформляются.\n'+
+    'Они попали бы в баланс, не изменив наличие. Недостающий приход после черты оформляется '+
+    'обычным поступлением (Склад → Добавить БПЛА) или коррекцией количества.');
+  return true;
+}
 function syncStockLegacyPlan(){
+  if(_cutBlocksLegacyFix('PLAN'))return null;
   const {summary}=_stockAuditCompute();
   const plan=[], skipped=[];
   summary.forEach(s=>{
@@ -1347,6 +1884,7 @@ function syncStockFixLegacy(confirm){
   // По УЧЁТКЕ admin (isAdminAccount), не по роли представления: создание легаси-приходов
   // в журнале движений не должно зависеть от «взгляда» переключателя (12.08.2026)
   if(!isAdminAccount()){alert('Доступно только администратору');return;}
+  if(_cutBlocksLegacyFix('FIX'))return null;
   const LEGACY_NOTE='стартовый учёт (легаси), принято до ведения журнала';
   const LEGACY_DATE='2000-01-01';
   const norm=s=>(s||'').toLowerCase().trim();
@@ -1387,6 +1925,145 @@ function syncStockFixLegacy(confirm){
   created.forEach(op=>syncAddTransfer(op));
   logAction('stock','legacy_fix','Оформлен стартовый приход (легаси), наличие не менялось: '+created.map(o=>o.drone+' ×'+o.qty).join(', '));
   console.log('[FIX] Создано arrival-записей: '+created.length+' (бортов: '+created.reduce((a,o)=>a+(o.qty||0),0)+'). Наличие (qty) не изменено. Проверка: syncAuditStock() — diff_adj по этим моделям должен стать 0');
+  return created;
+}
+
+// ===================== ЧЕРТА (МАРШРУТ, Этап 3) =====================
+// Стартовый остаток `startbalance` из текущего наличия; вся история ДО черты
+// замораживается и в getBalance больше не входит (отсечка — в _marshrutWalk по
+// моменту записи, marshrut.js). Пишущая часть намеренно здесь, а не в marshrut.js:
+// тот остаётся read-only вычислителем; образец пары «план / применение» —
+// syncStockLegacyPlan + syncStockFixLegacy выше.
+//
+// ПОРЯДОК (подробно — ДИАГНОСТИКА_ЭТАП3_2026-09-04.md §7):
+//   1) все устройства синхронизированы, очередь пуста, работа остановлена;
+//   2) бэкап state в IndexedDB;
+//   3) syncAuditStock() 15/15 и marshrutCompare() = базовая линия;
+//   4) marshrutCutPlan() — сверить пары и цифры ГЛАЗАМИ (и с натурой);
+//   5) marshrutCut(true);
+//   6) приёмка: marshrutCompare() → 0 расхождений / 0 минусов / total = N из плана.
+
+// Сухой план черты. ТОЛЬКО ЧТЕНИЕ. Печатает по локациям, что станет startbalance.
+// N — ожидаемое `total` в marshrutCompare после черты (число пар qty-карты: ledger
+// после черты ⊆ пары плана ⊆ пары qty-карты).
+function marshrutCutPlan(quiet){
+  if(typeof _marshrutQtyMap!=='function'){ console.error('[ЧЕРТА] marshrut.js не загружен'); return null; }
+  const N=_mNorm, qtyMap=_marshrutQtyMap();
+  const rows=Object.keys(qtyMap).map(k=>qtyMap[k]);
+  const plan=[], zero=[], sink=[], neg=[], bad=[];
+  rows.forEach(r=>{
+    // assert: пустая модель/локация в ledger не существует (_mAdd её отбрасывает молча) —
+    // такую пару нельзя завести стартовым остатком, она сразу даст расхождение
+    if(!N(r.model)||!N(r.location)){ bad.push(r); return; }
+    if(MARSHRUT_SINK_LOCS.indexOf(N(r.location))>=0){ if(r.qty)sink.push(r); return; } // выбытие — не остаток
+    if(r.qty<0){ neg.push(r); return; }
+    if(r.qty===0){ zero.push(r); return; }   // нулевой startbalance не существует (_mAdd)
+    plan.push(r);
+  });
+  const byLoc=(a,b)=>a.location.localeCompare(b.location,'ru')||a.model.localeCompare(b.model,'ru');
+  plan.sort(byLoc); neg.sort(byLoc); sink.sort(byLoc); zero.sort(byLoc);
+  const already=(state.transfers||[]).filter(t=>t&&t.type==='startbalance').length;
+  // Записи БЕЗ id и БЕЗ штампа: сейчас они до-чертовые (фолбэк по дате), но при первой же
+  // полной выгрузке syncPushAll выдаст им id с ТЕКУЩИМ timestamp — и после черты они
+  // «омолодятся» до пост-чертовых, а их эффект уже внутри стартового остатка (двойной счёт).
+  // `!t.id` (а не `t.id==null`): syncPushAll выдаёт id по тому же условию — '' и 0 тоже
+  const noId=(state.transfers||[]).filter(t=>t&&!t.id&&t._cut==null);
+  // Штампы «из будущего» — часы устройства спешат. Такая запись создана ДО черты (её
+  // эффект уже в наличии), но окажется ПОСЛЕ неё по времени → двойной счёт.
+  const future=(state.transfers||[]).filter(t=>t&&_mRecTs(t)>Date.now()+60000);
+  // Пустое имя модели/расчёта: пара молча выпадает из ОБЕИХ моделей (qty-карта её
+  // отбрасывает, ledger тоже) — инвариант цел, но оператор борта не увидит.
+  const empty=[];
+  (state.stock||[]).forEach(s=>{ if(!N(s.name)&&(s.qty||0)!==0)empty.push({где:'склад ('+(s.status||'')+')',qty:s.qty}); });
+  (state.squads||[]).forEach(sq=>(sq.drones||[]).forEach(d=>{
+    if((!N(d.name)||!N(sq.pilot))&&(d.qty||0)!==0)empty.push({где:'расчёт «'+(sq.pilot||'')+'»',модель:d.name||'(пусто)',qty:d.qty});
+  }));
+  const out={plan,neg,zero,sink,bad,noId,future,empty,total:rows.length,already};
+  if(quiet)return out;
+
+  console.log('[ЧЕРТА] План: пар со стартовым остатком '+plan.length+
+    ', бортов '+plan.reduce((a,r)=>a+r.qty,0)+'. Ожидаемое total в marshrutCompare после черты: N = '+rows.length);
+  [...new Set(plan.map(r=>r.location))].forEach(l=>{
+    console.log('— локация: '+l);
+    console.table(plan.filter(r=>r.location===l).map(r=>({модель:r.model,qty:r.qty,'по факту (заполнить)':''})));
+  });
+  if(zero.length)console.log('[ЧЕРТА] Нулевые (в черту НЕ идут, пара останется с 0=0): '+zero.map(r=>r.model+'@'+r.location).join(', '));
+  if(neg.length){ console.warn('[ЧЕРТА] ⚠ ОТРИЦАТЕЛЬНЫЕ остатки — черта их не заводит. Закройте приходом/коррекцией ДО черты (ADR §4) либо проводите с {carryNegative:true}:'); console.table(neg); }
+  if(sink.length){ console.warn('[ЧЕРТА] ⚠ Строки выбытия (статус «Списан») с ненулевым qty — стартового остатка у них нет, после черты дадут расхождение. Разберите ДО черты:'); console.table(sink); }
+  if(bad.length){ console.error('[ЧЕРТА] ⚠ Пары с пустой моделью/локацией — их ledger не примет:'); console.table(bad); }
+  if(noId.length)console.warn('[ЧЕРТА] ⚠ Движений без id: '+noId.length+' — при первой полной выгрузке им выдадут id с текущим временем, и после черты они станут «пост-чертовыми» (двойной счёт). Сделайте syncToCloud(true), дождитесь выгрузки и повторите план.');
+  if(future.length){ console.error('[ЧЕРТА] ⚠ Движения со штампом ИЗ БУДУЩЕГО ('+future.length+') — часы устройства-автора спешат. Их эффект уже в наличии, но по времени они окажутся ПОСЛЕ черты → двойной счёт. Разберитесь с часами и записями:'); console.table(future.map(t=>({id:t.id,тип:t.type,модель:t.drone,штамп:new Date(_mRecTs(t)).toLocaleString('ru')}))); }
+  if(empty.length){ console.warn('[ЧЕРТА] ⚠ Строки с пустым именем модели/расчёта и ненулевым количеством — в учёте их не видит НИ ОДНА модель (стартового остатка не получат):'); console.table(empty); }
+  if(typeof pendingQueue!=='undefined'&&pendingQueue&&typeof pendingQueue.count==='function'&&pendingQueue.count())
+    console.error('[ЧЕРТА] ⚠ Очередь отправки НЕ пуста ('+pendingQueue.count()+') — часть движений ещё не в облаке. Дождитесь доставки.');
+  if(already)console.warn('[ЧЕРТА] ⚠ startbalance уже есть ('+already+' шт.) — черта проводилась, повтор задвоит остаток.');
+  console.log('[ЧЕРТА] СУХОЙ ПРОГОН — ничего не создано. Выполнение: marshrutCut(true)');
+  return out;
+}
+
+// Провести черту. Без аргумента — сухой прогон. marshrutCut(true) — выполнить.
+// opts.carryNegative — перенести отрицательные остатки как есть (по умолчанию отказ).
+function marshrutCut(confirm,opts){
+  if(!isAdminAccount()){alert('Черта проводится только с админской учётки');return;}
+  opts=opts||{};
+  // ГЕЙТ ПО ДАННЫМ, не по устройству (урок `_mig_`: per-device флаг дал 6 прогонов миграции)
+  const already=(state.transfers||[]).filter(t=>t&&t.type==='startbalance');
+  if(already.length){
+    console.error('[ЧЕРТА] ОТКАЗ: черта уже проведена — в журнале '+already.length+' записей startbalance от '+
+      new Date(marshrutCutTs()).toLocaleString('ru')+'. Повтор задвоил бы стартовый остаток.');
+    return null;
+  }
+  const p=marshrutCutPlan(true);
+  if(!p)return null;
+  if(p.bad.length){ console.error('[ЧЕРТА] ОТКАЗ: есть пары с пустой моделью/локацией — сначала почините их.'); console.table(p.bad); return null; }
+  if(typeof pendingQueue!=='undefined'&&pendingQueue&&typeof pendingQueue.count==='function'&&pendingQueue.count()){
+    console.error('[ЧЕРТА] ОТКАЗ: очередь отправки не пуста ('+pendingQueue.count()+'). Часть движений ещё не доехала до облака — черта, построенная из такого наличия, заморозит их навсегда. Дождитесь доставки (индикатор «в очереди») и повторите.');
+    return null;
+  }
+  if(p.future.length){ console.error('[ЧЕРТА] ОТКАЗ: '+p.future.length+' движений со штампом из будущего (часы устройства-автора спешат) — после черты они дали бы двойной счёт. Разберитесь с ними и повторите.'); console.table(p.future.map(t=>({id:t.id,тип:t.type,модель:t.drone}))); return null; }
+  if(p.noId.length){ console.error('[ЧЕРТА] ОТКАЗ: '+p.noId.length+' движений без id. При первой полной выгрузке им выдадут id с текущим временем — после черты они станут «пост-чертовыми», хотя их эффект уже внутри стартового остатка (двойной счёт). Выполните syncToCloud(true), дождитесь выгрузки, повторите.'); return null; }
+  if(p.sink.length){ console.error('[ЧЕРТА] ОТКАЗ: строки со статусом «Списан» имеют ненулевой остаток — у выбытия стартового остатка нет, после черты они дадут вечное расхождение. Разберите их (списать по-настоящему либо обнулить), затем повторите.'); console.table(p.sink); return null; }
+  if(p.neg.length&&!opts.carryNegative){
+    console.error('[ЧЕРТА] ОТКАЗ: есть отрицательные остатки. Черта заводит ВЕРНЫЙ остаток из инвентаризации — '+
+      'закройте дыру приходом (недостающая выдача) или коррекцией (ошибочная запись) ДО черты. '+
+      'Осознанно перенести минус через черту: marshrutCut(true,{carryNegative:true})');
+    console.table(p.neg); return null;
+  }
+  const rows=opts.carryNegative?p.plan.concat(p.neg):p.plan;
+  if(!rows.length){ console.error('[ЧЕРТА] ОТКАЗ: заводить нечего — наличие пусто.'); return null; }
+
+  if(!confirm){
+    marshrutCutPlan(); // печать полного плана
+    console.log('[ЧЕРТА] СУХОЙ ПРОГОН. Будет создано записей startbalance: '+rows.length+
+      '. Наличие (qty) НЕ изменится. Выполнение: marshrutCut(true)');
+    return rows;
+  }
+
+  const ts=Date.now(), date=todayISO(), time=nowHM();
+  const note='стартовый остаток (черта '+date+')';
+  // Детерминированные id <CUT_TS>_sb_<n>: предсказуемы и парсятся _transferTs.
+  // Идемпотентность — гейт по данным выше плюс регламент (работа остановлена):
+  // на разных устройствах CUT_TS различался бы, серверный дедуп по id не спас бы.
+  const created=rows.map((r,i)=>makeTransfer('startbalance',{
+    id: ts+'_sb_'+i,
+    _cut: ts,                       // сама черта: момент записи = момент черты
+    drone:r.model, qty:r.qty, location:r.location,
+    to:r.location, from:'',         // to — для _marshrutWalk и предиката loadLocal; from — чтобы не печатать undefined
+    date, time, note
+  }));
+  if(!state.transfers)state.transfers=[];
+  created.forEach(op=>state.transfers.unshift(op));
+  // saveLocalQuiet, НЕ saveLocal: отложенный полный write (writeAll) обнулил бы append_ts
+  // всему листу transfers, и свежие записи выпали бы из дельта-поллинга других устройств.
+  saveLocalQuiet();
+  created.forEach(op=>syncAddTransfer(op)); // append-путь: append_ts>0, доставка очередью
+  logAction('admin','marshrut_cut','ЧЕРТА (Этап 3): создано '+created.length+' записей стартового остатка, бортов '+
+    created.reduce((a,o)=>a+(o.qty||0),0)+'; момент черты '+new Date(ts).toISOString());
+  renderTransfersLog(); renderInventory(); renderDashboard();
+  console.log('[ЧЕРТА] ✅ Проведена. Записей: '+created.length+', бортов: '+created.reduce((a,o)=>a+(o.qty||0),0)+
+    '. Момент черты: '+new Date(ts).toLocaleString('ru'));
+  console.log('[ЧЕРТА] ПРИЁМКА: marshrutCompare() → 0 расхождений / '+(opts.carryNegative?p.neg.length+' минусов (перенесены осознанно)':'0 минусов')+
+    ' / total = '+p.total+'.  syncAuditStock() → без изменений (startbalance старому аудиту неизвестен, qty не менялся).');
   return created;
 }
 
@@ -1873,7 +2550,9 @@ function renderInventory(){
     `<div class="stock-row"><div class="stock-name">${esc(d.name)}</div><div class="stock-count">${d.qty}</div></div>`
   ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Пусто</div>';
   document.getElementById('stockListNBG').innerHTML=nbg.length?nbg.map(d=>
-    `<div class="offstock-row"><div class="offstock-name">${esc(d.name)}</div><div style="display:flex;align-items:center;gap:8px"><div class="${d.status==='loss'?'badge-danger':'badge-warn'}">${d.status==='loss'?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
+    // Статус списания в данных — 'lost' (легаси-написание 'списан' тоже встречается).
+    // Было сравнение с 'loss' — опечатка: списанные строки показывались как «не БГ» (04.09.2026)
+    `<div class="offstock-row"><div class="offstock-name">${esc(d.name)}</div><div style="display:flex;align-items:center;gap:8px"><div class="${_isLostStatus(d.status)?'badge-danger':'badge-warn'}">${_isLostStatus(d.status)?'списан':'не БГ'}</div><div class="offstock-count">${d.qty}</div></div></div>`
   ).join(''):'<div style="color:var(--color-text-secondary);padding:12px 16px">Нет</div>';
 
   // Расчёты с пустым складом (drones[] пуст или все qty===0) скрываем — как на Обзоре.
@@ -1976,9 +2655,12 @@ function saveTransfer(){
       if(to==='не бг'){
         if(bg){bg.qty-=qty;if(bg.qty===0)state.stock=state.stock.filter(d=>d!==bg);}
         else{state.stock.push({name:drone,qty:-qty,status:'bg'});}
-      } else { // списан со склада: уменьшить qty, при 0 запись оставить (как было)
-        if(bg){bg.qty=Math.max(0,bg.qty-qty);}
-        else{state.stock.push({name:drone,qty:0,status:'bg'});}
+      } else { // списан со склада — выбытие
+        // Клэмп Math.max(0,…) убран 04.09.2026 (блокер §2а): запись движения писалась на
+        // ПОЛНОЕ qty, а наличие останавливалось на нуле — журнал уезжал дальше склада.
+        // Минус не маскируем (ADR-001 §4 — сигнал недостающего прихода), как в ветке «не бг».
+        if(bg){bg.qty-=qty;if(bg.qty===0)state.stock=state.stock.filter(d=>d!==bg);}
+        else{state.stock.push({name:drone,qty:-qty,status:'bg'});}
       }
     } else if(from==='не бг'){ // не бг → списан: списываем из не боеготовых
       const nbgSrc=state.stock.find(d=>d.name.toLowerCase()===dl&&d.status==='nbg');
@@ -2207,6 +2889,14 @@ function renderTransfersLog(){
         <div class="change-detail">${esc(op.location||'')} · <span>${esc(op.drone)} ${op.qty>0?'+':''}${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
+    } else if(op.type==='startbalance'){
+      // Черта (Этап 3): стартовый остаток локации. Своя ветка — иначе запись падала бы
+      // в общий else и рисовалась как «Передача → →» с пустыми направлениями.
+      row=`<div class="change-row${grey}">
+        <div class="change-badge-in">Стартовый остаток</div>
+        <div class="change-detail">${esc(op.location||op.to||'')} · <span>${esc(op.drone)} ${op.qty>0?'+':''}${esc(op.qty)}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
+      </div>`;
     } else {
       row=`<div class="change-row${grey}">
         <div class="change-badge-in">Передача</div>
@@ -2249,9 +2939,21 @@ function _trRolesOk(t){
   if(hasAnyRole(['tech','cmd','admin'])||authUser.role==='admin')return true;
   return !!(t&&t._submittedBy&&t._submittedBy===authUser.login);
 }
+// Запись сделана ДО черты? Резолвер живёт в marshrut.js (грузится раньше app.js).
+// Черты нет — всегда false, поведение прежнее.
+function _isPreCutTransfer(t){
+  return typeof isBeforeCut==='function' && typeof _mRecTs==='function' && isBeforeCut(_mRecTs(t));
+}
+function _isPreCutFlight(f){
+  return typeof isBeforeCut==='function' && isBeforeCut((f&&f._savedTs)||0);
+}
 function canEditTransfer(t){
   if(!t||t.id==null)return false;                 // без id не адресуемся и не tombstone-им
   if(t.type==='loss')return false;                // правится только через вылет
+  if(t.type==='startbalance')return false;        // черта (Этап 3): стартовый остаток не правится — только коррекцией
+  // ЧЕРТА: до-чертовые записи заморожены. Правка/сторно сдвинули бы наличие, не тронув
+  // замороженный журнал → вечное расхождение, неотличимое от бага семантики (ADR §6).
+  if(_isPreCutTransfer(t))return false;
   if(_trEditState.get(String(t.id))==='locked')return false; // финализировано
   if(!_trRolesOk(t))return false;
   const ts=_transferTs(t);
@@ -2265,6 +2967,11 @@ function _trMinsLeft(t){return Math.max(1,Math.round((TRANSFER_EDIT_WINDOW_MS-(D
 // adjust/loss сюда НЕ попадают (adjust остатков сам не менял, loss не правится).
 function _trEffect(t,sign){
   const q=n=>sign*(parseInt(n)||1);
+  // Типы БЕЗ эффекта на остатки — явный выход (04.09.2026). loss/adjust сюда и раньше
+  // не доходили (полоса их не открывает), startbalance добавлен под черту Этапа 3:
+  // молчаливое «нет ветки» неотличимо от забытого типа, а цена ошибки — сторно,
+  // сдвигающее журнал без наличия. Новый тип движения обязан появиться ЗДЕСЬ.
+  if(t.type==='loss'||t.type==='adjust'||t.type==='startbalance')return;
   if(t.type==='arrival'){
     _trStockAdd(t.drone,'bg',q(t.qty));
   } else if(t.type==='exchange'){
@@ -2314,12 +3021,17 @@ function renderTransferEditRow(t){
   const key=String(t.id);
   const st=_trEditState.get(key);
   if(st==='locked')return '';
-  // LOSS: в окне и при правах — подсказка вместо полосы (владелец записи — вылет)
-  if(t.type==='loss'){
+  // LOSS / STARTBALANCE: в окне и при правах — подсказка вместо полосы.
+  // loss — владелец записи вылет (биекция ADR-001 §4); startbalance — стартовый остаток
+  // черты (Этап 3): правка сдвинула бы ledger, не тронув наличие (_trEffect эффекта не имеет).
+  if(t.type==='loss'||t.type==='startbalance'){
     const ts=_transferTs(t);
     const inWin=!!ts&&(Date.now()-ts<TRANSFER_EDIT_WINDOW_MS);
+    const hint=t.type==='loss'
+      ? '✎ Запись потери правится через вылет (журнал / Администратор → Вылеты)'
+      : '✎ Стартовый остаток черты не правится — расхождение закрывается коррекцией количества';
     return (inWin&&_trRolesOk(t))
-      ?'<div class="tr-edit-row" style="padding:2px 10px 4px 12px;font-size:10px;color:var(--muted);border-left:2px solid var(--muted)">✎ Запись потери правится через вылет (журнал / Администратор → Вылеты)</div>'
+      ?'<div class="tr-edit-row" style="padding:2px 10px 4px 12px;font-size:10px;color:var(--muted);border-left:2px solid var(--muted)">'+hint+'</div>'
       :'';
   }
   if(!canEditTransfer(t))return '';
@@ -2363,7 +3075,9 @@ function trSaveEdit(key){
   if(!t){alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.');return;}
   if(!canEditTransfer(t)){
     const locked=_trEditState.get(String(t.id))==='locked';
-    alert(locked?'Запись зафиксирована — правка закрыта.':'Окно правки (10 мин) истекло или нет прав.');
+    alert(_isPreCutTransfer(t)
+      ?'Запись сделана ДО черты — правка запрещена.\n\nСтарая история заморожена: правка сдвинула бы наличие,\nне тронув журнал движений. Оформите коррекцию количества (Администратор → Склад).'
+      :(locked?'Запись зафиксирована — правка закрыта.':'Окно правки (10 мин) истекло или нет прав.'));
     renderTransfersLog();
     return;
   }
@@ -2403,7 +3117,7 @@ function trSaveEdit(key){
     _trEffect(t,-1);
     state.transfers=state.transfers.filter(x=>x!==t);
     if(typeof syncPublishTombstones==='function')syncPublishTombstones([String(t.id)]);
-    const newOp={...t,...typed,id:genId('t'),date,time,note};
+    const newOp={...t,...typed,id:genId('t'),_cut:Date.now(),date,time,note}; // _cut — момент ЭТОЙ записи, не исходной
     if(authUser&&authUser.login)newOp._submittedBy=authUser.login;
     state.transfers.unshift(newOp);
     _trEffect(newOp,1);
@@ -2802,44 +3516,52 @@ function toggleSquadEditor(){
 
 function renderSquadEditor(){
   const el=document.getElementById('squadEditorList');
-  el.innerHTML=state.squads.map((sq,si)=>`
+  const qs=_keySeq(), ds=_keySeq(); // счётчики дублей на весь проход рендера
+  el.innerHTML=state.squads.map((sq,si)=>{
+    const qk=_attrJs(qs(_squadRowKey(sq,si))); // ключ расчёта, а не индекс (см. _squadRowKey)
+    return `
     <div style="border:0.5px solid var(--border2);padding:10px;margin-bottom:8px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <input style="flex:1;font-weight:600" value="${esc(sq.pilot)}" onchange="squadEditPilot(${si},this.value)" placeholder="Имя пилота">
-        <button class="btn btn-sm btn-primary" onclick="squadCleanZeros(${si})">Удалить нули</button>
-        <button class="btn btn-danger btn-sm" onclick="squadDeletePilot(${si})">Удалить расчёт</button>
+        <input style="flex:1;font-weight:600" value="${esc(sq.pilot)}" onchange="squadEditPilot('${qk}',this.value)" placeholder="Имя пилота">
+        <button class="btn btn-sm btn-primary" onclick="squadCleanZeros('${qk}')">Удалить нули</button>
+        <button class="btn btn-danger btn-sm" onclick="squadDeletePilot('${qk}')">Удалить расчёт</button>
       </div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
         <label style="margin:0;white-space:nowrap;text-transform:none;letter-spacing:normal;font-size:11px;color:var(--muted)">Точка старта:</label>
-        <input style="flex:1;min-width:120px" value="${esc(sq.start_point||'')}" placeholder="напр. 45 вишня" onchange="squadEditStartPoint(${si},this.value)" autocomplete="off">
-        <button id="geo-rc-btn-inv-${si}" class="btn btn-sm" style="font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing(${si},'geo-rc-prog-inv-${si}','geo-rc-btn-inv-${si}')">Пересчитать вылеты без дистанций</button>
+        <input style="flex:1;min-width:120px" value="${esc(sq.start_point||'')}" placeholder="напр. 45 вишня" onchange="squadEditStartPoint('${qk}',this.value)" autocomplete="off">
+        <button id="geo-rc-btn-inv-${si}" class="btn btn-sm" style="font-size:10px;display:${geoStartBtnShow(sq)?'':'none'}" onclick="geoRecalcPilotMissing('${qk}','geo-rc-prog-inv-${si}','geo-rc-btn-inv-${si}')">Пересчитать вылеты без дистанций</button>
         <span id="geo-rc-prog-inv-${si}" style="font-size:10px;color:var(--muted)"></span>
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">БПЛА расчёта:</div>
-      ${sq.drones.map((d,di)=>`
+      ${sq.drones.map((d,di)=>{
+        const dk=_attrJs(ds(_droneRowKey(sq,d,si,di))); // ключ борта «расчёт|модель»
+        return `
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px${d.qty===0?';opacity:0.5':''}">
-          <input style="flex:1" list="dl-drones-smart" value="${esc(d.name)}" onchange="squadEditDrone(${si},${di},'name',this.value)" autocomplete="off">
-          <input type="number" style="width:60px${d.qty<=0?';color:var(--red)':''}${d.qty<0?';border-color:var(--red)':''}" value="${d.qty}"${d.qty<0?' title="Баланс в минусе — борт списан без передачи со склада. Оформите передачу склад → пилот"':''} onchange="squadEditDrone(${si},${di},'qty',parseInt(this.value)||0)">${d.qty<0?'<span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}
-          <button class="btn btn-sm" style="color:var(--red)" onclick="squadDeleteDrone(${si},${di})">✕</button>
-        </div>`).join('')}
-      <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 10px" onclick="squadAddDrone(${si})">+ БПЛА</button>
-    </div>`).join('');
+          <input style="flex:1" list="dl-drones-smart" value="${esc(d.name)}" onchange="squadEditDrone('${dk}','name',this.value)" autocomplete="off">
+          <input type="number" style="width:60px${d.qty<=0?';color:var(--red)':''}${d.qty<0?';border-color:var(--red)':''}" value="${d.qty}"${d.qty<0?' title="Баланс в минусе — борт списан без передачи со склада. Оформите передачу склад → пилот"':''} onchange="squadEditDrone('${dk}','qty',parseInt(this.value)||0)">${d.qty<0?'<span style="color:var(--red)" title="минус = сигнал недостающего прихода">⚠</span>':''}
+          <button class="btn btn-sm" style="color:var(--red)" onclick="squadDeleteDrone('${dk}')">✕</button>
+        </div>`;}).join('')}
+      <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 10px" onclick="squadAddDrone('${qk}')">+ БПЛА</button>
+    </div>`;}).join('');
 }
 
-function squadCleanZeros(si){
+function squadCleanZeros(key){
   if(!guardWrite())return;
-  state.squads[si].drones=state.squads[si].drones.filter(d=>d.qty!==0);
+  const {sq}=_squadRowByKey(key);                   // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderSquadEditor); return; }
+  sq.drones=(sq.drones||[]).filter(d=>d.qty!==0);
   saveLocal();
   syncPushStockSquads();
   renderSquadEditor();
   renderInventory();
 }
-function squadEditPilot(si,val){
+function squadEditPilot(key,val){
   if(!guardWrite())return;
-  const old=state.squads[si].pilot;
-  state.squads[si].pilot=val;
-  if(old!==val)logAction('squad','edit','Переименован пилот '+old+' → '+val);
-  saveLocal();syncBumpStockVersion();syncPushStockSquads();renderInventory();
+  const {sq}=_squadRowByKey(key);                   // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderSquadEditor); return; }
+  adminRenamePilot(sq.pilot,val); // каноническое переименование (правит и журнал движений)
+  renderInventory();              // отказ/отмена — поле восстановит перерисовка из state
+  if(typeof renderSquadEditor==='function')renderSquadEditor();
 }
 // Сколько вылетов пилота без посчитанной дистанции
 function geoPilotMissingCount(pilot){
@@ -2848,34 +3570,31 @@ function geoPilotMissingCount(pilot){
 }
 // Показывать ли кнопку пересчёта: есть точка старта И есть вылеты без дистанций
 function geoStartBtnShow(sq){ return !!(sq && sq.start_point && geoPilotMissingCount(sq.pilot)>0); }
-// Обновить видимость кнопок пересчёта расчёта (обе карточки)
-function geoUpdateRecalcBtn(si){
-  const sq=state.squads[si];
-  const show=geoStartBtnShow(sq);
-  ['geo-rc-btn-adm-'+si,'geo-rc-btn-inv-'+si].forEach(id=>{
-    const b=document.getElementById(id);
-    if(b) b.style.display=show?'':'none';
-  });
-}
+// (geoUpdateRecalcBtn удалена 04.09.2026 — точечно дёргала кнопку по индексу расчёта,
+//  а id кнопок в DOM несут индекс момента рендера; видимость пересчитывает сам рендер.)
 
-function squadEditStartPoint(si,val){
+function squadEditStartPoint(key,val){
   if(!guardWrite())return;
-  const sq=state.squads[si];
-  if(!sq)return;
+  const {sq}=_squadRowByKey(key);                   // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderSquadEditor); return; }
   sq.start_point=(val||'').trim();
   saveLocal();
   syncPushStockSquads();        // start_point синхронизируется как обычные данные squads
   // Старые вылеты НЕ пересчитываются — новая точка применяется только к новым вылетам.
-  // Для существующих есть кнопка «Пересчитать вылеты без дистанций».
-  geoUpdateRecalcBtn(si);
+  // Для существующих есть кнопка «Пересчитать вылеты без дистанций»: её видимость
+  // пересчитывает сам рендер. Раньше здесь дёргалась кнопка по индексу (geoUpdateRecalcBtn),
+  // но id кнопок в DOM несут индекс МОМЕНТА РЕНДЕРА — после пересборки squads это чужая кнопка.
+  if(typeof renderSquadEditor==='function')renderSquadEditor();
+  if(typeof renderAdminSquads==='function')renderAdminSquads();
 }
 
 // Пересчёт вылетов конкретного пилота без дистанций (force=false), прогресс inline
-function geoRecalcPilotMissing(si, progId, btnId){
-  const sq=state.squads[si];
-  if(!sq) return;
+function geoRecalcPilotMissing(key, progId, btnId){
+  const {sq}=_squadRowByKey(key);                   // ключ расчёта, а не индекс
   const prog=progId?document.getElementById(progId):null;
   const btn=btnId?document.getElementById(btnId):null;
+  // Промах ключа не должен выглядеть сломанной кнопкой (раньше был молчаливый return)
+  if(!sq){ if(prog) prog.textContent=' — расчёт не найден, список устарел: обновите раздел'; return; }
   if(!sq.start_point){ if(prog) prog.textContent=' — нет точки старта'; return; }
   // Уже всё посчитано — нечего делать
   if(geoPilotMissingCount(sq.pilot)===0){
@@ -2941,10 +3660,11 @@ function geoRecalcAllResetLocks(){
     }
   });
 }
-function squadEditDrone(si,di,field,val){
+function squadEditDrone(key,field,val){
   if(!guardWrite())return;
-  const sq=state.squads[si];const d=sq&&sq.drones[di];
-  if(d){
+  const {sq,drone:d}=_droneRowByKey(key);           // ключ «расчёт|модель», а не пара индексов
+  if(!d){ _rowGone('борт расчёта',renderSquadEditor); return; }
+  {
     const old=d[field];
     if(field==='qty'){
       const delta=(parseInt(val,10)||0)-d.qty;
@@ -2954,16 +3674,19 @@ function squadEditDrone(si,di,field,val){
         recordAdjust(d.name,delta,sq.pilot,reason);
       }
     }
-    else if(field==='name'&&val&&!d.name&&d.qty>0)_logAdminTransfer(sq.pilot,val,d.qty,'инв');
-    d[field]=val;
+    else if(field==='name'){
+      if(!_squadRenameDrone(sq,d,val,'инв')){renderSquadEditor();return;} // отказ/отмена — вернуть поле из state
+      setTimeout(renderSquadEditor,0); // борт мог схлопнуться с одноимённым — перерисовать индексы
+    }
+    if(field!=='name')d[field]=val; // имя проставляет _squadRenameDrone (со схлопом дублей)
     if(old!==val)logAction('squad','edit','Расчёт '+(sq.pilot||'')+': '+(field==='name'?('борт '+(old||'(новый)')+' → '+val):('борт '+(d.name||'?')+' — кол-во '+old+' → '+val)));
   }
   saveLocal();syncPushStockSquads();renderInventory(); // версионируем — иначе поллинг затрёт правку (last-write-wins по _sv)
 }
-function squadDeleteDrone(si,di){
+function squadDeleteDrone(key){
   if(!guardWrite())return;
-  const sq=state.squads[si];const d=sq&&sq.drones[di];
-  if(!d)return;
+  const {sq,drone:d,di}=_droneRowByKey(key);        // ключ «расчёт|модель», а не пара индексов
+  if(!d){ _rowGone('борт расчёта',renderSquadEditor); return; }
   let reason='';
   if(d.name&&d.qty){ // непустой борт с количеством — причина + adjust(−qty)
     reason=adjustReason('удаление борта '+d.name+' ×'+d.qty+' у '+sq.pilot);
@@ -2974,14 +3697,17 @@ function squadDeleteDrone(si,di){
   sq.drones.splice(di,1);
   saveLocal();syncPushStockSquads();renderSquadEditor();renderInventory();
 }
-function squadAddDrone(si){
+function squadAddDrone(key){
   if(!guardWrite())return;
-  state.squads[si].drones.push({name:'',qty:1});
+  const {sq}=_squadRowByKey(key);                   // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderSquadEditor); return; }
+  (sq.drones=sq.drones||[]).push({name:'',qty:1});
   saveLocal();syncPushStockSquads();renderSquadEditor();
 }
-function squadDeletePilot(si){
+function squadDeletePilot(key){
   if(!guardWrite())return;
-  const sq=state.squads[si]; if(!sq)return;
+  const {sq,si}=_squadRowByKey(key);                // ключ, а не индекс
+  if(!sq){ _rowGone('расчёт',renderSquadEditor); return; }
   const pName=sq.pilot;
   const held=(sq.drones||[]).filter(d=>d.name&&d.qty);
   let reason='';
@@ -3001,6 +3727,11 @@ function squadAddPilot(){
   const p=document.getElementById('sq-newPilot').value.trim();
   const ds=document.getElementById('sq-newDrones').value.split(',').map(s=>s.trim()).filter(Boolean);
   if(!p){alert('Укажите имя пилота');return;}
+  // Одноимённых расчётов не бывает — имя это ключ склада расчёта (см. adminAddSquad)
+  if((state.squads||[]).some(sq=>_rowN(sq.pilot)===_rowN(p))){
+    alert('Расчёт «'+p+'» уже есть — имя расчёта это ключ его склада, двух одноимённых не бывает.\nДобавьте борта в существующий расчёт или назовите новый иначе.');
+    return;
+  }
   state.squads.push({pilot:p,drones:ds.map(n=>({name:n,qty:1}))});
   ds.forEach(n=>_logAdminTransfer(p,n,1,'инв: новый расчёт'));
   logAction('squad','add','Создан расчёт '+p+(ds.length?' ('+ds.join(', ')+')':''));
@@ -3405,8 +4136,8 @@ function accountRole(){
   const ar=authUser.role;
   if(ar==='admin'||ar==='cmd'||ar==='tech'||ar==='viewer')return ar;
   if(ar==='pilot'){
-    const idx=state.squads.findIndex(sq=>sq.pilot===authUser.login);
-    return idx>=0?'pilot_'+idx:'cmd';
+    const sq=(state.squads||[]).find(q=>q.pilot===authUser.login);
+    return sq?pilotRoleValue(sq):'cmd';   // ключ расчёта, не индекс
   }
   return '';
 }
@@ -3421,10 +4152,11 @@ function applyRoleFromAuth(){
   if(isAdminUser){
     // Администратор — показываем переключатель, применяем текущую выбранную роль
     if(roleSwitch)roleSwitch.style.display='';
-    const savedRole=localStorage.getItem('role')||'admin';
-    // Роли пилотов имеют вид pilot_N (раньше список содержал несуществующие pilot1..3 —
-    // сохранённый «взгляд пилота» никогда не восстанавливался)
-    const r=(savedRole==='admin'||savedRole==='cmd'||savedRole==='tech'||/^pilot_\d+$/.test(savedRole))?savedRole:'admin';
+    // Роль пилота — 'pilot:<ключ расчёта>'; сохранённая роль старого формата 'pilot_N'
+    // нормализуется здесь (иначе значение не совпало бы с опцией селектора и «взгляд»
+    // мог указать на чужой расчёт после пересборки списка)
+    const savedRole=normalizePilotRole(localStorage.getItem('role')||'admin');
+    const r=(savedRole==='admin'||savedRole==='cmd'||savedRole==='tech'||isPilotViewRole(savedRole))?savedRole:'admin';
     if(roleSwitch){
       const optExists=[...roleSwitch.options].some(o=>o.value===r);
       roleSwitch.value=optExists?r:'admin';
@@ -3445,7 +4177,7 @@ function applyRoleFromAuth(){
       // Золотые щиты и у самой учётки пилота: switchRole ставит их в label, но бейдж
       // здесь перезаписывается логином — без добавки щиты видел только админ во
       // «взгляде пилота» (через переключатель, где бейдж не перезаписывается).
-      const tbShields=r.startsWith('pilot_')?goldShieldsHtml(authUser.login,{inline:true}):'';
+      const tbShields=isPilotViewRole(r)?goldShieldsHtml(authUser.login,{inline:true}):'';
       // «и.о.» — видимый признак действующего замещения (acting_role)
       const actingBadge=authUser.actingRole?' · <span style="color:var(--accent2)">и.о. '+esc(authUser.actingRole)+'</span>':'';
       badge.innerHTML='<b>'+esc(authUser.login)+'</b>'+tbShields+(authUser.role==='viewer'?' · Наблюдатель':'')+actingBadge;
@@ -3523,18 +4255,23 @@ async function createUser(){
 
     // Если пилот — переименовываем позывной в расчётах и вылетах на логин
     if(role==='pilot'&&callsign&&callsign!==login){
-      let changed=false;
-      // Обновляем расчёты
-      state.squads.forEach(sq=>{if(sq.pilot===callsign){sq.pilot=login;changed=true;}});
-      // Обновляем вылеты
-      state.flights.forEach(f=>{if(f.pilot===callsign){f.pilot=login;changed=true;}});
-      // Обновляем передачи
-      (state.transfers||[]).forEach(t=>{
-        if(t.pilot===callsign)t.pilot=login;
-        if(t.from===callsign)t.from=login;
-        if(t.to===callsign)t.to=login;
-      });
+      // Каноническое переименование локации (04.09.2026): раньше здесь правились
+      // squads/flights и t.pilot/t.from/t.to, но НЕ t.location — локация adjust-записей
+      // оставалась на позывном, и ledger расходился с наличием. Теперь общая точка
+      // с adminRenamePilot (без confirm — переименование уже подтверждено созданием
+      // пользователя; выгрузка своя, ниже).
+      // Коллизия «логин уже есть как расчёт» = СЛИЯНИЕ, и оно разрушительно — раньше этот
+      // путь только переименовывал. Спрашиваем явно (в adminRenamePilot то же слияние
+      // требует двойного подтверждения); отказ — учётка создана, переименование пропущено.
+      const _n=v=>String(v||'').trim().toLowerCase();
+      const collide=(state.squads||[]).some(sq=>_n(sq.pilot)===_n(login)&&_n(sq.pilot)!==_n(callsign));
+      const okRename=!collide||confirm('⚠ Расчёт «'+login+'» уже существует.\n\n'
+        +'Переименование позывного «'+callsign+'» в логин «'+login+'» СОЛЬЁТ два расчёта в один\n'
+        +'(борта сложатся, вылеты и журнал движений перейдут на «'+login+'»).\n\n'
+        +'Продолжить? Отмена — учётка будет создана, но позывной в данных останется прежним.');
+      const changed=okRename&&_renamePilotApply(callsign,login)>0;
       if(changed){
+        if(typeof fillDataLists==='function')fillDataLists(); // селекты передачи — на новое имя
         saveLocal();
         // squads-переименование выгружаем явно: syncToCloud/syncPushAll после
         // Дефекта B (09.06) склад/расчёты НЕ пишет — только flights/transfers.
@@ -3703,6 +4440,7 @@ function editWindowMs(f){
 
 function canEditFlight(f){
   if(f&&f.id!=null&&_flEditState.get(String(f.id))==='locked')return false; // финализировано досрочно
+  if(_isPreCutFlight(f))return false; // ЧЕРТА (Этап 3): вылет записан до черты — заморожен
   const win=editWindowMs(f);
   const savedTs=f._savedTs||0;
   if(!win||!savedTs)return false; // нет доступа или нет метки времени
@@ -3717,13 +4455,21 @@ function _flightByKey(key){
   const k=String(key);
   const byId=state.flights.find(f=>f&&f.id!=null&&String(f.id)===k);
   if(byId)return byId;
+  // Позиционный фолбэк — только для ИСТОРИЧЕСКИХ записей без id, и только если на этой
+  // позиции по-прежнему запись без id (04.09.2026). Раньше возвращалась любая запись:
+  // pollCloud делает unshift чужих вылетов, все позиции съезжают — и правка молча
+  // уходила в соседний вылет. Не нашли — честный промах (вызывающий покажет сообщение).
   const m=/^i?(\d+)$/.exec(k);
-  return m?(state.flights[+m[1]]||null):null;
+  const byIdx=m?state.flights[+m[1]]:null;
+  return (byIdx&&byIdx.id==null)?byIdx:null;
 }
 
 // Ключ полосы/состояния: стабильный id, фолбэк 'i'+индекс для исторических записей без id
 function _flEditKey(x,realIdx){return x.id?String(x.id):('i'+realIdx);}
-function _flKeyJs(key){return String(key).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+// Ключ в inline-обработчик: экранирование для JS-литерала И для HTML-атрибута.
+// esc добавлен 04.09.2026: id приходит из облака (чужое устройство / правка листа руками),
+// то есть внешние данные — по правилу CLAUDE §11 в разметку они идут только через esc.
+function _flKeyJs(key){return esc(String(key).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));}
 function _flMinsLeft(x){return Math.max(1,Math.round((editWindowMs(x)-(Date.now()-(x._savedTs||0)))/60000));}
 
 function renderFlightEditRow(x, realIdx){
@@ -3782,8 +4528,10 @@ function saveFlightEdit(key){
   if(!f){ alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.'); return; }
   if(!canEditFlight(f)){
     const locked=f.id!=null&&_flEditState.get(String(f.id))==='locked';
-    alert(locked?'Запись зафиксирована — правка в журнале закрыта. Полный доступ — Администратор → Вылеты.'
-                :'Окно правки (10 мин) истекло или нет прав. Полный доступ — Администратор → Вылеты.');
+    alert(_isPreCutFlight(f)
+      ?'Вылет записан ДО черты — правка запрещена (старая история заморожена).'
+      :(locked?'Запись зафиксирована — правка в журнале закрыта. Полный доступ — Администратор → Вылеты.'
+              :'Окно правки (10 мин) истекло или нет прав. Полный доступ — Администратор → Вылеты.'));
     renderFlights();   // убрать устаревшую полосу из DOM
     return;
   }
@@ -4161,10 +4909,13 @@ function initQuickForm(){
   if(!qp)return;
   if(isPilotRole(currentRole())){
     if(qpWrap)qpWrap.style.display='none';
-    // Для локальной учётки берём имя из переключателя расчётов
+    // Для локальной/админской учётки — имя из ВЫБРАННОГО в переключателе расчёта
+    // (04.09.2026: было state.squads[0] — во «взгляде пилота» форма подставляла первого
+    //  по списку, а не того, кого выбрали; теперь имя берётся из ключа в значении роли)
     const pilotName=authUser.login&&authUser.login!=='local'&&authUser.login!=='admin'
       ?authUser.login
-      :(state.squads[0]?.pilot||'');
+      :pilotRoleName(currentRole()); // не резолвится — оставляем пусто: подставить
+                                     // «первого по списку» хуже, чем пустое поле
     qp.value=pilotName;
   } else {
     if(qpWrap)qpWrap.style.display='';
@@ -4616,11 +5367,19 @@ try{
   document.getElementById('fontSizeSwitch').value=savedSize;
   applyTheme(savedTheme);
   applyFontSize(savedSize);
-  // Синхронизируем селектор роли и применяем
+  // Синхронизируем селектор роли и применяем.
+  // «Взгляд пилота» может отсутствовать в опциях: список расчётов в селекторе строит
+  // rebuildRoleSelector позже (fillDataLists/applyRoleFromAuth). Раньше в этом случае
+  // безусловно ставилась 'cmd', а switchRole тут же ПЕРЕЗАПИСЫВАЛ localStorage['role'] —
+  // сохранённый «взгляд» терялся навсегда, и нормализация легаси-формата ('pilot_N')
+  // до него не доживала. Теперь роль пилота применяем как есть, селектор досинхронизирует
+  // applyRoleFromAuth (он же пересоберёт опции и нормализует значение).
   const roleSel=document.getElementById('roleSwitch');
-  const optExists=[...roleSel.options].some(o=>o.value===savedRole);
-  roleSel.value=optExists?savedRole:'cmd';
-  switchRole(roleSel.value);
+  const savedRoleN=normalizePilotRole(savedRole);
+  const optExists=[...roleSel.options].some(o=>o.value===savedRoleN);
+  if(optExists)roleSel.value=savedRoleN;
+  else if(!isPilotViewRole(savedRoleN))roleSel.value='cmd';
+  switchRole((optExists||isPilotViewRole(savedRoleN))?savedRoleN:'cmd');
 }catch(e){applyTheme('terminal');applyFontSize('16');switchRole('cmd');}
 // ВАЖНО: cfgLoad до initAuth — нужен URL для синхронизации
 cfgLoad();

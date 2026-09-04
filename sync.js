@@ -575,16 +575,10 @@ async function syncDeleteFlight(idx){
   const pLow=(f.pilot||'').toLowerCase();
   const dLow=(f.drone||'').toLowerCase();
 
-  // Компенсируем квоту дрона только если вылет числится как потеря
-  if(f.returned==='no' && f.drone && f.pilot){
-    const sq = state.squads.find(s=>s.pilot===f.pilot);
-    if(sq){
-      const d = sq.drones.find(d=>d.name.toLowerCase()===dLow);
-      if(d) d.qty++; else sq.drones.push({name:f.drone, qty:1});
-    }
-    syncBumpStockVersion();
-    setTimeout(()=>syncPushStockSquads(), 300);
-  }
+  // Компенсация наличия перенесена НИЖЕ — она делается по фактически снятым
+  // loss-записям, а не по флагу f.returned (04.09.2026, блокер §2а диагностики):
+  // осиротевшая запись при returned='yes' снималась без компенсации, а легаси-вылет
+  // без записи компенсировался «в воздух» (движения не было — возвращать нечего).
 
   // Всегда чистим связанные записи о потере — они могут остаться
   // если вылет был отредактирован (returned: no→yes) перед удалением.
@@ -604,6 +598,10 @@ async function syncDeleteFlight(idx){
     removedTransfers = removeLoss(t=>t.type==='loss'&&t.flightId===f.id);
   }
 
+  // Нестрогие проходы не должны забирать запись, которая принадлежит ДРУГОМУ живому вылету
+  // (04.09.2026): раньше это стирало чужое движение, а теперь ещё и вернуло бы борт в наличие.
+  const notOthers = t => !(t.flightId && t.flightId!==f.id && state.flights.some(x=>x.id===t.flightId));
+
   // Проход 2: пилот + борт + дата + время (регистронезависимо)
   if((state.transfers||[]).length===before){
     removedTransfers = removeLoss(t=>
@@ -611,7 +609,8 @@ async function syncDeleteFlight(idx){
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
       t.date===f.date &&
-      t.time===f.time
+      t.time===f.time &&
+      notOthers(t)
     );
   }
 
@@ -622,8 +621,23 @@ async function syncDeleteFlight(idx){
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
-      t.date===f.date
+      t.date===f.date &&
+      notOthers(t)
     );
+  }
+
+  // Компенсация наличия — РОВНО по снятым записям о потере (симметрия ledger↔qty).
+  // Ноль снятых записей при returned='no' — это легаси-вылет без движения (долг 42
+  // потерь, МАРШРУТ): наличие не трогаем, но говорим об этом вслух, а не молчим.
+  const restored = (typeof _compensateRemovedLosses==='function')
+    ? _compensateRemovedLosses(removedTransfers) : 0;
+  if(restored){
+    syncBumpStockVersion();
+    setTimeout(()=>syncPushStockSquads(), 300);
+  } else if(f.returned==='no' && f.drone && f.pilot){
+    const msg='Удалён вылет-потеря без записи о потере в журнале движений ('+f.pilot+' / '+f.drone+' / '+(f.date||'')+') — наличие не изменено: возвращать нечего.';
+    console.warn('[учёт] '+msg);
+    if(typeof showSyncToast==='function') showSyncToast('⚠ '+msg, 8000);
   }
 
   // tombstone и для вылета, и для удалённых loss-передач — чтобы неразрушающий
