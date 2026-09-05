@@ -3596,6 +3596,14 @@ function geoRecalcPilotMissing(key, progId, btnId){
   // Промах ключа не должен выглядеть сломанной кнопкой (раньше был молчаливый return)
   if(!sq){ if(prog) prog.textContent=' — расчёт не найден, список устарел: обновите раздел'; return; }
   if(!sq.start_point){ if(prog) prog.textContent=' — нет точки старта'; return; }
+  // Без базы точек пересчитывать нечем: страж в geoRecomputeFlights вызовет onDone(0), и ниже
+  // это выглядело бы зелёным «✓ Пересчитано: 0» — то есть отказ выдавался бы за успех
+  if(typeof geoHasBase==='function' && !geoHasBase()){
+    if(prog) prog.textContent=(typeof geoIsReady==='function'&&!geoIsReady())
+      ? ' — база точек ещё загружается, повторите'
+      : ' — база точек не загружена (.ldk)';
+    return;
+  }
   // Уже всё посчитано — нечего делать
   if(geoPilotMissingCount(sq.pilot)===0){
     if(prog) prog.textContent=' Все вылеты уже имеют дистанции';
@@ -3619,8 +3627,23 @@ function geoRecalcPilotMissing(key, progId, btnId){
   });
 }
 
+// Пересчитывать нечем, если база точек не загружена: geoComputeFlight вернёт null по всем
+// вылетам. Для «Пересчитать...» это просто пустая работа, а для «Сбросить блокировки» —
+// потеря: замки 🔒 снимаются безусловно ДО пересчёта, и вернуть их нечем (05.09.2026).
+function geoGuardBase(){
+  if(typeof geoHasBase==='function' && geoHasBase()) return true;
+  const loading=(typeof geoIsReady==='function' && !geoIsReady());
+  const msg=loading?'Гео-база ещё загружается из хранилища — повторите через несколько секунд.'
+                   :'Гео-база не загружена — дистанции считать не из чего.\nСначала загрузите .ldk (Администратор → Карта/Гео).';
+  setStatus('geo-status',loading?'База точек ещё загружается — повторите через несколько секунд.'
+                                :'База точек не загружена — пересчитывать нечем. Загрузите .ldk.','err');
+  alert(msg);
+  return false;
+}
+
 // Общий пересчёт всех пилотов без дистанций (из вкладки Карта/Гео)
 function geoRecalcAllMissing(){
+  if(!geoGuardBase()) return;
   geoRecomputeFlights({
     force:false,
     onProgress:(done,tot)=>setStatus('geo-status', tot?'Пересчёт: '+done+'/'+tot+'...':'Нет вылетов без дистанций','muted'),
@@ -3634,6 +3657,7 @@ function geoRecalcAllMissing(){
 
 // Пересчёт всех НЕзаблокированных вылетов (зафиксированные 🔒 не трогаются)
 function geoRecalcAllForce(){
+  if(!geoGuardBase()) return;
   geoRecomputeFlights({
     force:true, includeLocked:false,
     onProgress:(done,tot)=>setStatus('geo-status', tot?'Пересчёт: '+done+'/'+tot+'...':'Нет незаблокированных вылетов','muted'),
@@ -3647,6 +3671,7 @@ function geoRecalcAllForce(){
 
 // Сбросить ВСЕ блокировки и пересчитать всё (перезапись зафиксированных) — двойное подтверждение
 function geoRecalcAllResetLocks(){
+  if(!geoGuardBase()) return;   // иначе замки снимутся, а пересчитать будет нечем
   if(!confirm('Сбросить блокировки и пересчитать ВСЕ вылеты? Зафиксированные (🔒) дистанции будут перезаписаны.')) return;
   if(!confirm('Точно перезаписать даже вручную зафиксированные дистанции? Действие необратимо.')) return;
   (state.flights||[]).forEach(f=>{ delete f.geo_locked; });
@@ -4574,7 +4599,17 @@ function saveFlightEdit(key){
   // Дистанции зависят от returned (×2 при возврате, ×1 при потере) — пересчитываем
   if(oldReturned!==f.returned){
     if(f.result==='no'&&f.returned==='no'){ delete f.range_km; delete f.distance_km; } // борт не долетел
-    else { const r=geoComputeFlight(f); if(r){ f.range_km=r.range_km; f.distance_km=r.distance_km; f.geo_locked=true; } }
+    else {
+      const r=geoComputeFlight(f);
+      if(r){ f.range_km=r.range_km; f.distance_km=r.distance_km; f.geo_locked=true; }
+      else if(typeof geoRedistance==='function' && geoRedistance(f)){
+        // База не загружена или точка не нашлась. Дальность (старт→цель) от статуса не зависит
+        // и остаётся верной, а путь пересчитывается из неё арифметикой (×2 при возврате).
+        // Раньше здесь оставался путь ОТ ПРЕЖНЕГО статуса под 🔒 — заведомо неверное число,
+        // которое не чинил ни один массовый пересчёт.
+        if(typeof geoNoBaseNotice==='function') geoNoBaseNotice('правка вылета');
+      }
+    }
   }
   // Серая фиксация: первый ✓ → 'sent' (серая, полоса свёрнута); ✓ из переоткрытой
   // полосы ('editing') → 'locked' (финализация, правка закрыта досрочно).

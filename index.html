@@ -667,7 +667,7 @@
   <div class="adm-panel" id="adm-geo" style="display:none">
     <div class="card" style="margin-bottom:12px">
       <div class="card-title">Карта / Геоданные</div>
-      <div class="notice" style="margin-bottom:10px">Данные точек хранятся <b>только в этом браузере</b> (localStorage) и никогда не отправляются в облако. Формат — AlpineQuest <code>.ldk</code>.</div>
+      <div class="notice" style="margin-bottom:10px">Данные точек хранятся <b>только в этом браузере</b> (IndexedDB) и никогда не отправляются в облако — <b>в облаке их копии нет</b>, восстановить можно только повторной загрузкой <code>.ldk</code>. Формат — AlpineQuest <code>.ldk</code>.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
         <button class="btn btn-primary" onclick="document.getElementById('ldkInput').click()">📂 Загрузить .ldk</button>
         <input type="file" id="ldkInput" accept=".ldk" style="display:none" onchange="geoImportLDK(this)">
