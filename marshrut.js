@@ -214,7 +214,10 @@ function _marshrutQtyMap(){
   return qty;
 }
 
-function marshrutCompare(){
+// opts.quiet — без вывода в консоль (самопроверка из sync.js после merge/tombstone; 06.09.2026).
+// Без аргумента — прежний консольный режим, вывод и возврат не менялись.
+function marshrutCompare(opts){
+  const quiet=!!(opts&&opts.quiet);
   const N=_mNorm;
   const bal=getAllBalances();
   const qty=_marshrutQtyMap(); // единая карта наличия (см. выше)
@@ -234,14 +237,16 @@ function marshrutCompare(){
   });
   const byName=(a,b)=>a.model.localeCompare(b.model,'ru')||a.location.localeCompare(b.location,'ru');
   diffs.sort(byName); negatives.sort(byName);
-  const _cut=marshrutCutTs();
-  console.log('[МАРШРУТ] Самосверка qty (старая) vs getBalance (новая), пар: '+keys.size+'. '+
-    (_cut?('ЧЕРТА ПРОВЕДЕНА ('+new Date(_cut).toLocaleString('ru')+') — до-чертовая история заморожена, '+
-           'критерий Этапа 4 действует: расхождений должно быть 0.')
-        :'Черты в данных НЕТ — легаси-расхождения ОЖИДАЕМЫ (базовая линия наблюдения, Этап 2).'));
-  if(diffs.length){ console.log('[МАРШРУТ] РАСХОЖДЕНИЯ (qty ≠ getBalance): '+diffs.length); console.table(diffs); }
-  if(negatives.length){ console.log('[МАРШРУТ] МИНУСЫ (getBalance < 0) — сигнал недостающего прихода, НЕ ошибка (ADR §4): '+negatives.length); console.table(negatives); }
-  if(!diffs.length && !negatives.length) console.log('[МАРШРУТ] Сверка чиста: qty == getBalance по всем парам');
-  console.log('[МАРШРУТ] Сводка: пар всего '+keys.size+' / расхождений '+diffs.length+' / минусов '+negatives.length);
+  if(!quiet){
+    const _cut=marshrutCutTs();
+    console.log('[МАРШРУТ] Самосверка qty (старая) vs getBalance (новая), пар: '+keys.size+'. '+
+      (_cut?('ЧЕРТА ПРОВЕДЕНА ('+new Date(_cut).toLocaleString('ru')+') — до-чертовая история заморожена, '+
+             'критерий Этапа 4 действует: расхождений должно быть 0.')
+          :'Черты в данных НЕТ — легаси-расхождения ОЖИДАЕМЫ (базовая линия наблюдения, Этап 2).'));
+    if(diffs.length){ console.log('[МАРШРУТ] РАСХОЖДЕНИЯ (qty ≠ getBalance): '+diffs.length); console.table(diffs); }
+    if(negatives.length){ console.log('[МАРШРУТ] МИНУСЫ (getBalance < 0) — сигнал недостающего прихода, НЕ ошибка (ADR §4): '+negatives.length); console.table(negatives); }
+    if(!diffs.length && !negatives.length) console.log('[МАРШРУТ] Сверка чиста: qty == getBalance по всем парам');
+    console.log('[МАРШРУТ] Сводка: пар всего '+keys.size+' / расхождений '+diffs.length+' / минусов '+negatives.length);
+  }
   return {diffs, negatives, total:keys.size};
 }

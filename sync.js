@@ -138,7 +138,9 @@ async function syncPost(url, body){
       // сервера — повторная отправка через no-cors создала бы дубль-строку (append_one).
       return { ok:true, data:null, unverified:true };
     }
-    if(d.error) throw new Error(d.error);
+    // Сервер ОТВЕТИЛ ошибкой — запрос дошёл; повтор через no-cors бессмыслен и раньше
+    // МАСКИРОВАЛ ошибку как «unverified успех» (v7.8: конфликт версий склада должен быть виден).
+    if(d.error) return { ok:false, error:d.error, serverError:true, data:d };
     return { ok:true, data:d };
   }catch(e){
     try{
@@ -151,6 +153,24 @@ async function syncPost(url, body){
       return { ok:false, error:e2.message };
     }
   }
+}
+
+// GET с таймаутом (06.09.2026). Раньше ни один GET (read_since/read) таймаута не имел:
+// зависший запрос в пре-чеке пуша блокировал _stockPushChain навсегда (склад молча
+// переставал выгружаться), а зависший поллинг накапливал параллельные вызовы.
+const SYNC_GET_TIMEOUT_MS  = 25000; // лёгкие запросы: read_since
+const SYNC_READ_TIMEOUT_MS = 60000; // полный read всех листов (~1700 шифрованных строк)
+async function syncFetchJson(u, ms){
+  const ctrl = new AbortController();
+  const tid = setTimeout(()=>ctrl.abort(), ms||SYNC_GET_TIMEOUT_MS);
+  try{
+    const r = await fetch(u, {redirect:'follow', signal:ctrl.signal});
+    return await r.json();
+  } finally { clearTimeout(tid); }
+}
+// Запись в журнал действий из sync-слоя (logAction живёт в app.js — рантайм-вызов с гардом).
+function syncLogEvent(action, details){
+  try{ if(typeof logAction==='function' && typeof authUser!=='undefined') logAction('sync', action, details); }catch(e){}
 }
 
 // Отметка времени успешной синхронизации с облаком. Читается renderSettingsStatus
@@ -252,7 +272,8 @@ async function trySendQueueItem(item, url, key, token){
       row: enc
     });
     const res = await syncPost(url, body);
-    if(res.ok) pendingQueue.markTried(_qid(item));
+    if(res.ok||res.serverError) pendingQueue.markTried(_qid(item)); // ответ сервера (в т.ч. ошибка) = попытка была
+    if(res.serverError) console.warn('[SYNC] append_one отклонён сервером:', res.error);
   }catch(e){ console.warn('[SYNC] send error:', e.message); }
 }
 
@@ -369,6 +390,11 @@ function syncPruneStateByTombstones(){
   }
   if(Array.isArray(state.transfers)){
     const n=state.transfers.length;
+    // Снятые по ЧУЖОМУ tombstone записи о потере: наличие здесь НЕ компенсируем — его несёт
+    // снимок склада устройства, сделавшего удаление (syncDeleteFlight → _compensateRemovedLosses
+    // → push); локальная компенсация задвоила бы её тем же merge (форензика 06.09, §7).
+    // Только считаем — pollCloud после приёма запускает самопроверку qty vs ledger.
+    syncPruneStateByTombstones.lastLoss=state.transfers.filter(t=>t.id&&tb.has(t.id)&&t.type==='loss').length;
     state.transfers=state.transfers.filter(t=>!t.id||!tb.has(t.id));
     if(state.transfers.length!==n) removed=true;
   }
@@ -418,7 +444,70 @@ function syncStockSetBase(stock, squads, version){
 }
 // Забыть базу — для операций полной замены state (импорт JSON, сброс): следующий пуш
 // идёт без merge (импорт = полная замена, а не дельта к прежнему снимку).
-function syncStockForgetBase(){ _stockBase=null; try{ localStorage.removeItem('sync_stock_base'); }catch(e){} }
+function syncStockForgetBase(){ _stockBase=null; syncStockClearPending(); try{ localStorage.removeItem('sync_stock_base'); }catch(e){} }
+
+// ===== Неподтверждённый пуш склада (06.09.2026, ФОРЕНЗИКА_2026-09-06_ПВХ2д.md) =====
+// Последний отправленный снимок, чья доставка не подтверждена. Персистентен (localStorage
+// 'sync_stock_pending'): переживает F5. Подтверждение — ТОЖДЕСТВОМ версии (ответ writeAll,
+// версия снимка облака, цепочка версий v7.8), никогда — неравенством времени.
+let _stockPending=null;
+try{ _stockPending=JSON.parse(localStorage.getItem('sync_stock_pending')||'null'); }catch(e){ _stockPending=null; }
+function syncStockSetPending(p, reason){
+  _stockPending={version:p.version, hash:syncStockHash(p.stock,p.squads), stock:p.stock, squads:p.squads, reason:reason||'', ts:Date.now()};
+  try{ localStorage.setItem('sync_stock_pending', JSON.stringify(_stockPending)); }catch(e){ if(typeof lsQuotaWarn==='function') lsQuotaWarn(e); }
+}
+function syncStockClearPending(version){
+  if(_stockPending && version && _stockPending.version>version) return; // более поздний пуш ещё не подтверждён
+  _stockPending=null;
+  try{ localStorage.removeItem('sync_stock_pending'); }catch(e){}
+}
+function syncStockHasPending(){ return !!_stockPending; }
+// Ограниченный автоповтор ТОЧНО не севшего пуша (раньше дельта ждала следующей операции оператора).
+const _stockRepush={};
+function syncStockScheduleRepush(version, delayMs){
+  const k=String(version||0);
+  _stockRepush[k]=(_stockRepush[k]||0)+1;
+  if(_stockRepush[k]>3){ console.warn('[SYNC] stock push: 3 повтора не удались — жду следующей операции/восстановления сети'); return; }
+  setTimeout(()=>syncPushStockSquads(), delayMs||3000);
+}
+// Облако показало НАШ пуш (равная версия) — база := снимок облака, без merge.
+// Возвращает true, если база действительно двигалась.
+function syncStockRebaseOwn(remote){
+  const same=_stockBase && _stockBase.version===remote.version &&
+    syncStockHash(_stockBase.stock,_stockBase.squads)===syncStockHash(remote.stock,remote.squads);
+  if(same){ syncStockClearPending(remote.version); return false; }
+  syncStockSetBase(remote.stock, remote.squads, remote.version);
+  syncStockClearPending(remote.version);
+  console.warn('[SYNC] склад: облако показало наш пуш '+remote.version+' — база перебазирована без merge (подтверждение по версии)');
+  syncLogEvent('stock_confirm','пуш склада '+remote.version+' подтверждён по версии снимка (подтверждение записи ранее не прошло, база отставала)');
+  return true;
+}
+// Пары модель×локация, у которых количество изменилось между двумя снимками — для журнала действий.
+function syncStockDiffKeys(before, after){
+  const idx=s=>{ const m=new Map();
+    (s.stock||[]).forEach(r=>{ const k='склад:'+_stKey(r); m.set(k,(m.get(k)||0)+(+r.qty||0)); });
+    (s.squads||[]).forEach(q=>(q.drones||[]).forEach(d=>{ const k=_stN(q.pilot)+'/'+_stN(d.name); m.set(k,(m.get(k)||0)+(+d.qty||0)); }));
+    return m; };
+  const a=idx(before), b=idx(after), out=[];
+  new Set([...a.keys(),...b.keys()]).forEach(k=>{ const x=a.get(k)||0, y=b.get(k)||0; if(x!==y) out.push(k+': '+x+'→'+y); });
+  return out;
+}
+// Самопроверка «наличие vs журнал движений» после события, которое могло их развести
+// (merge с дельтой, снятие loss по чужому tombstone). Только рост числа расхождений — тост
+// + запись в журнал; не блокирует (транзиентные расхождения до прихода снимка допустимы).
+let _stockSelfCheckBase=null;
+function syncStockSelfCheck(reason){
+  if(typeof marshrutCompare!=='function') return;
+  try{
+    const r=marshrutCompare({quiet:true});
+    const n=r.diffs.length;
+    if(_stockSelfCheckBase!==null && n>_stockSelfCheckBase){
+      showSyncToast('⚠ Склад разошёлся с журналом движений: '+n+' пар — '+reason, 10000);
+      syncLogEvent('stock_selfcheck', reason+': '+r.diffs.map(d=>d.model+'|'+d.location+' qty '+d.qty+' ≠ ledger '+d.balance).join('; '));
+    }
+    _stockSelfCheckBase=n;
+  }catch(e){}
+}
 const _stN = s => String(s||'').trim().toLowerCase();
 const _stKey = r => _stN(r.name)+'|'+(r.status||'bg');
 // Канонический отпечаток содержимого (без id/_sv): сортированные количества по ключам.
@@ -489,10 +578,33 @@ function syncStockMerge3(base, local, remote){
   return {stock, squads};
 }
 
-// Облачный снимок новее нашего? (строго по версии ИЛИ равная версия с иным содержимым, чем БАЗА)
+// Облачный снимок новее нашего? Строго по версии — да. РАВНАЯ версия — это по построению
+// НАШ пуш (версия = Date.now() устройства-писателя, коллизия по миллисекунде между
+// устройствами исключена). Если строки state несут тот же штамп _sv (encRow пишет его в
+// объекты state при пуше), state ПРОИСХОДИТ от этого пуша (плюс, возможно, ещё не
+// выгруженные операции): облако показывает наш собственный снимок, а база просто отстала
+// (подтверждение записи не прошло) → ПЕРЕБАЗИРОВАТЬ, НЕ сливать. merge(старая база, state,
+// remote) наложил бы дельту ВТОРОЙ раз — так 05.09.2026 19:52 склад получил {не бг 4,
+// Толстый 4} (ФОРЕНЗИКА_2026-09-06_ПВХ2д.md). Строки state СТАРЕЕ версии — стейл droneState
+// другой вкладки (случай 21.08) — прежняя логика: содержимое ≠ базе → принять.
 function syncStockRemoteIsNewer(remote){
+  // (0) Это НАШ снимок (подтверждённый или ещё нет): строки state несут его штамп _sv, либо он
+  //     совпадает с неподтверждённым пушем. База := он, merge НЕ выполнять (иначе дельта дважды).
+  const own = (syncStockMaxSv(state.stock,state.squads) === remote.version) ||
+              (!!_stockPending && _stockPending.version === remote.version);
+  if(own){ syncStockRebaseOwn(remote); return false; }
+  // (1) Строго новее нашей версии — чужая запись, принять.
   if(remote.version > _stockVersion) return true;
-  if(remote.version === _stockVersion && _stockBase && syncStockHash(remote.stock,remote.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads)) return true;
+  // (2) Версия ≠ версии базы — запись, которой мы ещё НЕ ВИДЕЛИ, даже если её номер меньше нашего
+  //     bump (спецветки saveTransfer/trSaveEdit бампят версию ДО пуша; чужой пуш, сделанный чуть
+  //     раньше и ещё не полученный поллингом, иначе отвергался и ПЕРЕЗАПИСЫВАЛСЯ нашим снимком).
+  //     Merge наложит нашу дельту относительно базы — последнего виденного снимка.
+  if(_stockBase && remote.version !== _stockBase.version &&
+     syncStockHash(remote.stock,remote.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads)) return true;
+  // (3) Равная версия, но строки state старее (стейл droneState другой вкладки, случай 21.08):
+  //     содержимое ≠ базе → принять.
+  if(remote.version === _stockVersion && _stockBase &&
+     syncStockHash(remote.stock,remote.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads)) return true;
   return false;
 }
 // Единая точка приёма облачного снимка склада. Локальная дельта относительно базы
@@ -501,9 +613,14 @@ function syncStockRemoteIsNewer(remote){
 function syncAcceptRemoteStock(remote){
   const hadDelta = !!(_stockBase && syncStockHash(state.stock,state.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads));
   if(hadDelta){
-    const m=syncStockMerge3(_stockBase, {stock:state.stock,squads:state.squads}, remote);
+    const before={stock:state.stock,squads:state.squads};
+    const m=syncStockMerge3(_stockBase, before, remote);
+    const ch=syncStockDiffKeys(before,m); // что изменилось в НАШЕМ состоянии (чужие правки + наложение дельты)
     state.stock=m.stock; state.squads=m.squads;
-    console.warn('[SYNC] склад: облачный снимок новее — локальная дельта объединена (3-way merge)');
+    console.warn('[SYNC] склад: облачный снимок новее — локальная дельта объединена (3-way merge)'+(ch.length?': '+ch.join('; '):''));
+    // Аудируемый след: инцидент 05.09 восстанавливался только по суточному бэкапу листа —
+    // сам merge нигде не логировался. Записей — единицы в неделю, кап actlog не страдает.
+    if(ch.length) syncLogEvent('stock_merge','3-way merge склада (база '+(_stockBase.version||0)+', облако '+(remote.version||0)+', локаль '+_stockVersion+'): '+ch.join('; '));
   } else {
     state.stock=remote.stock; state.squads=remote.squads;
   }
@@ -525,30 +642,38 @@ function syncStockReconcileOnLoad(){
     if(typeof lsWriteState==='function') lsWriteState(); else try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){ console.error('[STORAGE] write failed', e&&e.name); }
   }
 }
-// Дешёвая проверка серверного времени последней записи склада (пустые дельты + stock_updated_ts).
-async function syncFetchStockTs(){
+// Дешёвая проверка серверных метаданных склада (пустые дельты read_since): ts — серверное
+// время последней записи (stock_updated_ts); version/chain — серверная версия и цепочка
+// последних версий (Backend v7.8; на старом бэкенде 0/[]). null — проверить не удалось.
+async function syncFetchStockMeta(){
   const {url,token}=syncGetCfg(); if(!url||!token) return null;
   try{
-    const r=await fetch(url+'?action=read_since&since=9000000000000000&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
-    const d=await r.json(); if(d.error) return null;
-    return +d.stock_updated_ts||0;
+    const d=await syncFetchJson(url+'?action=read_since&since=9000000000000000&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_GET_TIMEOUT_MS);
+    if(!d||d.error) return null;
+    return { ts:+d.stock_updated_ts||0, version:+d.stock_version||0, chain:Array.isArray(d.stock_chain)?d.stock_chain.map(Number):[] };
   }catch(e){ return null; }
 }
-// Полный облачный снимок склада → {stock,squads,version} | null
+async function syncFetchStockTs(){ const m=await syncFetchStockMeta(); return m?m.ts:null; }
+// Полный облачный снимок склада → {stock,squads,version,ts} | null (ts — серверное время строк)
 async function syncFetchStockSnapshot(){
   const {url,key,token}=syncGetCfg(); if(!url||!token) return null;
   try{
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
-    const d=await r.json(); if(d.error) return null;
+    const d=await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
+    if(!d||d.error) return null;
     const stock=await syncDecryptRows(d.stock||[],key,'stock');
     const squads=(await syncDecryptRows(d.squads||[],key,'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
-    return {stock,squads,version:syncStockMaxSv(stock,squads)};
+    const ts=Math.max(0, ...(d.stock||[]).map(r=>+r.ts||0), ...(d.squads||[]).map(r=>+r.ts||0));
+    return {stock,squads,version:syncStockMaxSv(stock,squads),ts};
   }catch(e){ return null; }
 }
 
 // --- Время последнего поллинга ---
 let _lastPollTs = Date.now();
-let _lastStockTs = Date.now(); // Инициализируем текущим временем — не грузим старые изменения склада
+// _lastStockTs — СЕРВЕРНОЕ время последней виденной записи склада (stock_updated_ts / ts строк).
+// Никогда не клиентское: смешение часов после каждой полной синхронизации открывало гейт
+// поллинга на собственную запись (серверный ts на ~2.5 с позже клиентского bump — форензика 06.09).
+// 0 = ещё ничего не видели: первый поллинг прочитает снимок и сверится с версией (дёшево, один раз).
+let _lastStockTs = 0;
 
 // ============================================================
 // ЗАПИСЬ ИЗМЕНЕНИЙ — единая точка входа для всех операций
@@ -700,13 +825,15 @@ async function _syncPushStockSquadsNow(){
   // Без базы (первый пуш после обновления) дельту не вычислить — приём облака здесь
   // затёр бы только что сделанную правку; в этом окне — прежнее поведение, база
   // фиксируется ниже после пуша.
-  const remoteTs = _stockBase ? await syncFetchStockTs() : null;
+  const meta = _stockBase ? await syncFetchStockMeta() : null;
+  const remoteTs = meta ? meta.ts : null;
   if(remoteTs!==null && remoteTs > _lastStockTs){
     const remote = await syncFetchStockSnapshot();
     if(remote && syncStockRemoteIsNewer(remote)){
       const hadDelta = syncAcceptRemoteStock(remote);
       showSyncToast(hadDelta ? '⚠ Склад изменён на другом устройстве — изменения объединены' : '↓ Склад обновлён с другого устройства', 5000);
       if(typeof renderInventory==='function') try{ renderInventory(); renderDashboard(); }catch(e){}
+      if(hadDelta) syncStockSelfCheck('merge перед выгрузкой склада');
       if(!hadDelta){ _lastStockTs = remoteTs; return; } // нашей дельты нет — пушить нечего
     }
     _lastStockTs = remoteTs;
@@ -723,28 +850,95 @@ async function _syncPushStockSquadsNow(){
   };
   const stock  = await Promise.all(state.stock.map((d,i)=>encRow(d,i)));
   const squads = await Promise.all(state.squads.map((sq,i)=>encRow(sq,i)));
+  // Снимок, который РЕАЛЬНО уходит (id/_sv уже проставлены): база := он, а не state в момент
+  // подтверждения — операция оператора во время POST иначе попадала в базу, не побывав в облаке.
+  const pushed = { stock: JSON.parse(JSON.stringify(state.stock)), squads: JSON.parse(JSON.stringify(state.squads)), version: _stockVersion,
+                   expect: (_stockBase && _stockBase.version) || 0 };
   const data = geoStripFromSync({stock, squads}); // ГЕО (geo_points_db) НИКОГДА не уходит в облако
-  const body = JSON.stringify({action:'write', token, data});
-  const prevTs = _lastStockTs;
+  // v7.8: stock_version/stock_expect — серверный compare-and-swap (старый бэкенд их игнорирует)
+  const body = JSON.stringify({action:'write', token, data, stock_version:pushed.version, stock_expect:pushed.expect});
+  syncStockSetPending(pushed,'inflight');
   const res = await syncPost(url, body);
-  if(res.ok){
-    // POST no-cors непроверяем → подтверждаем запись сдвигом СЕРВЕРНОГО stock_updated_ts
-    // (заодно отметка «свою запись видели» в серверном времени, без смешения часов).
-    const srvTs = await syncFetchStockTs();
-    const landed = srvTs!==null ? srvTs>prevTs : null; // null — проверить не удалось (сеть)
-    if(landed!==false){
-      _lastStockTs = srvTs!==null ? srvTs : _stockVersion;
-      // Выгруженное = новая база. При недоступной проверке базу ставим только если её
-      // ещё нет (bootstrap); иначе оставляем прежнюю — дельта сохранится до следующего пуша.
-      if(landed===true || !_stockBase) syncStockSetBase(state.stock, state.squads, _stockVersion);
-      if(typeof lsWriteState==='function') lsWriteState(); else try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){ console.error('[STORAGE] write failed', e&&e.name); } // _sv строк в droneState (сверка при загрузке)
-      console.log('[SYNC] stock+squads OK, sv:', _stockVersion, landed===true?'(подтверждено)':'(без подтверждения)');
-    } else {
-      console.warn('[SYNC] stock push: запись в облако НЕ подтверждена (stock_updated_ts не сдвинулся) — дельта сохранена, повтор при следующем пуше');
-      showSyncToast('⚠ Склад не записан в облако — повтор при следующей синхронизации', 5000);
+  if(!res.ok){
+    if(res.serverError && res.data && res.data.error==='stock_conflict'){
+      // v7.8 CAS: облако ушло дальше нашей базы, запись НЕ сделана. Перечитать снимок, принять
+      // (наша дельта наложится merge'ем на актуальное), повторить пуш. Если в цепочке версий есть
+      // наш прежний неподтверждённый пуш — сначала база := он (точное подтверждение).
+      console.warn('[SYNC] stock push: конфликт версий (облако '+res.data.current+', ожидали '+pushed.expect+') — перечитываю снимок');
+      syncLogEvent('stock_conflict','пуш склада '+pushed.version+' отклонён сервером: облако '+res.data.current+', ожидали '+pushed.expect);
+      await syncStockResolveConflict(res.data, pushed);
+      return;
+    }
+    console.warn('[SYNC] stock push failed:', res.error);
+    syncStockSetPending(pushed,'send_failed');
+    syncStockScheduleRepush(pushed.version);
+    return;
+  }
+  // ПОДТВЕРЖДЕНИЕ — только тождеством, никогда неравенством времени (форензика 06.09):
+  // (a) ответ writeAll {status:'ok',ts} атомарен с записью, ts = будущий stock_updated_ts;
+  let srvTs=null, how='';
+  if(res.data && res.data.status==='ok' && +res.data.ts>0){ srvTs=+res.data.ts; how='ответом сервера'; }
+  else {
+    // (b) ответ нечитаем (no-cors/HTML): подтверждаем ТОЖДЕСТВОМ версии снимка облака
+    const snap = await syncFetchStockSnapshot();
+    if(snap && snap.version===pushed.version){ srvTs=snap.ts||null; how='снимком (версия совпала)'; }
+    else if(snap && snap.version>pushed.version){
+      // Облако ушло дальше: кто-то записал после нас. Легла ли наша запись — точно знает только
+      // цепочка версий v7.8; без неё считаем, что легла (слепая чужая запись поверх нашей
+      // несевшей требует двух отказов транспорта подряд), и говорим об этом вслух.
+      const m2 = await syncFetchStockMeta();
+      const inChain = !!(m2 && m2.chain.length && m2.chain.includes(pushed.version));
+      const assumed = !(m2 && m2.chain.length);
+      if(inChain || assumed){ syncStockSetBase(pushed.stock,pushed.squads,pushed.version); syncStockClearPending(pushed.version); }
+      const msg='облако ушло дальше пуша '+pushed.version+' (версия '+snap.version+'): '+(inChain?'наш пуш в цепочке версий — подтверждён':(assumed?'цепочки версий нет — считаем пуш доставленным':'наш пуш НЕ в цепочке — не доставлен'));
+      console.warn('[SYNC] stock push: '+msg);
+      syncLogEvent(inChain?'stock_confirm':(assumed?'stock_assumed_landed':'stock_not_landed'), msg);
+      if(syncStockRemoteIsNewer(snap)){
+        const had=syncAcceptRemoteStock(snap);
+        if(typeof renderInventory==='function') try{ renderInventory(); renderDashboard(); }catch(e){}
+        if(had){ syncStockSelfCheck('merge после обгона пуша'); syncStockScheduleRepush(pushed.version); }
+      }
+      return;
+    }
+    else if(snap && snap.version<pushed.version){
+      console.warn('[SYNC] stock push: запись в облако НЕ легла (версия облака '+snap.version+' < '+pushed.version+') — повтор');
+      showSyncToast('⚠ Склад не записан в облако — повторяю', 5000);
+      syncStockSetPending(pushed,'not_landed');
+      syncStockScheduleRepush(pushed.version);
+      return;
+    }
+    else {
+      // Сеть: подтвердить нечем. База и _lastStockTs НЕ трогаются; следующее чтение снимка
+      // (поллинг/полная синхронизация) подтвердит по версии (syncStockRebaseOwn) — без merge.
+      console.warn('[SYNC] stock push: доставка не подтверждена (сеть) — база не сдвинута, подтверждение по версии при следующем чтении');
+      showSyncToast('⚠ Склад: доставка в облако не подтверждена — проверю при следующей синхронизации', 5000);
+      syncStockSetPending(pushed,'unverified');
+      return;
     }
   }
-  else console.warn('[SYNC] stock push failed:', res.error);
+  if(srvTs) _lastStockTs = srvTs;
+  syncStockSetBase(pushed.stock, pushed.squads, pushed.version);
+  syncStockClearPending(pushed.version);
+  if(typeof lsWriteState==='function') lsWriteState(); else try{ localStorage.setItem('droneState',JSON.stringify(state)); }catch(e){ console.error('[STORAGE] write failed', e&&e.name); } // _sv строк в droneState (сверка при загрузке)
+  console.log('[SYNC] stock+squads OK, sv:', pushed.version, '(подтверждено '+how+')');
+}
+// v7.8: сервер отклонил запись склада (compare-and-swap) — облако новее нашей базы.
+async function syncStockResolveConflict(info, pushed){
+  const chain=Array.isArray(info&&info.chain)?info.chain.map(Number):[];
+  const prev=_stockPending && _stockPending.version<pushed.version ? _stockPending : null;
+  if(prev && chain.includes(prev.version)){ // прежний неподтверждённый пуш лёг — база := он
+    syncStockSetBase(prev.stock,prev.squads,prev.version);
+    syncLogEvent('stock_confirm','пуш склада '+prev.version+' подтверждён цепочкой версий сервера');
+  }
+  syncStockClearPending();
+  const snap=await syncFetchStockSnapshot();
+  if(!snap){ syncStockScheduleRepush(pushed.version); return; }
+  if(syncStockRemoteIsNewer(snap)){
+    const had=syncAcceptRemoteStock(snap);
+    if(typeof renderInventory==='function') try{ renderInventory(); renderDashboard(); }catch(e){}
+    if(had) syncStockSelfCheck('merge после конфликта версий');
+  }
+  if(_stockBase && syncStockHash(state.stock,state.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads)) syncStockScheduleRepush(pushed.version, 500);
 }
 
 // Отправить полный снимок (flights + transfers).
@@ -762,8 +956,7 @@ async function syncPushAll(silent=false){
   // поведению), append-записи всё равно дублируются через pendingQueue.
   if(token){
     try{
-      const r = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
-      const d = await r.json();
+      const d = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
       if(d.error) throw new Error(d.error);
       syncMergeCloudTombstones(d.tombstones); // Путь Б: подтянуть чужие удаления ДО merge
       const tb = tombstones.load();
@@ -877,8 +1070,7 @@ async function syncPullAll(confirm_=false){
   if(confirm_ && !confirm('Загрузить данные из облака? Локальные изменения будут заменены.')) return null;
   syncIndicator('loading');
   try{
-    const r = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
-    const d = await r.json();
+    const d = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
     if(d.error) throw new Error(d.error);
     const loaded = {
       // flights/transfers — дедуп по id: дубль-строки облака иначе попадут в журнал
@@ -913,11 +1105,10 @@ async function syncPullAll(confirm_=false){
       // viewer'а (у него нет 30-сек поллинга — только этот полный путь).
       pendingQueue.confirmDelivered(new Set([...entries.map(e=>e.id), ...d.actlog.map(r=>r.id)].filter(Boolean)));
     }
-    if(d.stock&&d.stock.length){
-      // без имени листа (тихо): те же строки d.stock уже просигналили при сборке loaded выше
-      const remoteStockVersion = Math.max(...(await syncDecryptRows(d.stock,key)).map(s=>s._sv||0));
-      _lastStockTs = remoteStockVersion;
-    }
+    // Отметка «эту запись склада видели» — СЕРВЕРНОЕ время строк (колонка ts readAll), не
+    // клиентский _sv: тот на ~2.5 с меньше серверного ts, и после каждой полной синхронизации
+    // гейт поллинга «открывался» на нашу же запись (форензика 06.09). Повторная расшифровка не нужна.
+    if(d.stock&&d.stock.length){ _lastStockTs = Math.max(_lastStockTs, ...d.stock.map(r=>+r.ts||0)); }
     syncStampLastSync(); // облако прочитано целиком — отметка для индикатора в Настройках
     return loaded;
   }catch(e){
@@ -988,7 +1179,7 @@ async function syncPullOnLogin(){
     // Отправляем накопленное
     setTimeout(()=>syncFlushQueue(), 1000);
   }
-  if(stockDelta) setTimeout(()=>syncPushStockSquads(), 800); // объединённый снимок — в облако
+  if(stockDelta){ syncStockSelfCheck('merge при полной синхронизации'); setTimeout(()=>syncPushStockSquads(), 800); } // объединённый снимок — в облако
   saveLocal();
   syncIndicator('ok');
   syncRenderAll();
@@ -1041,8 +1232,7 @@ async function pollCloud(){
   const ind = document.getElementById('syncIndicator');
   try{
     const since = _lastPollTs;
-    const r = await fetch(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now(), {redirect:'follow'});
-    const d = await r.json();
+    const d = await syncFetchJson(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now(), SYNC_GET_TIMEOUT_MS);
     if(d.error){ console.warn('[POLL]', d.error); return; }
     _lastPollTs = Date.now();
 
@@ -1111,28 +1301,41 @@ async function pollCloud(){
       try{ localStorage.setItem('act_log',JSON.stringify(actLog)); }catch(e){}
     }
 
-    // Склад обновился у другого пользователя
+    // Склад обновился у другого пользователя (или это наша же запись, ещё не «увиденная»)
+    let stockMerged=false;
     if(d.stock_updated_ts && d.stock_updated_ts > _lastStockTs){
       console.log('[POLL] Склад обновился, загружаем');
-      _lastStockTs = d.stock_updated_ts;
       try{
-        const r2 = await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), {redirect:'follow'});
-        const d2 = await r2.json();
-        if(!d2.error){
-          const remoteStock  = await syncDecryptRows(d2.stock||[], key, 'stock');
-          const remoteSquads = (await syncDecryptRows(d2.squads||[], key, 'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
-          const remote = {stock:remoteStock, squads:remoteSquads, version:syncStockMaxSv(remoteStock,remoteSquads)};
-          // Гейт: версия новее ИЛИ равная с иным содержимым, чем база. Локальная
-          // несинхронизированная дельта накладывается (merge) и допушивается.
-          if(syncStockRemoteIsNewer(remote)){
-            const hadDelta = syncAcceptRemoteStock(remote);
-            changed = true;
-            console.log('[POLL] Склад обновлён, версия:', _stockVersion, hadDelta?'(+локальная дельта → пуш)':'');
-            if(hadDelta) setTimeout(()=>syncPushStockSquads(), 500);
-          }
+        const d2 = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
+        if(d2.error) throw new Error(d2.error);
+        const remoteStock  = await syncDecryptRows(d2.stock||[], key, 'stock');
+        const remoteSquads = (await syncDecryptRows(d2.squads||[], key, 'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
+        const remote = {stock:remoteStock, squads:remoteSquads, version:syncStockMaxSv(remoteStock,remoteSquads)};
+        // Гейт: версия новее ИЛИ равная с иным содержимым, чем база (равная версия со штампом
+        // наших строк = наш пуш → перебазирование без merge внутри syncStockRemoteIsNewer).
+        if(syncStockRemoteIsNewer(remote)){
+          const hadDelta = syncAcceptRemoteStock(remote);
+          changed = true; stockMerged = hadDelta;
+          console.log('[POLL] Склад обновлён, версия:', _stockVersion, hadDelta?'(+локальная дельта → пуш)':'');
+          if(hadDelta) setTimeout(()=>syncPushStockSquads(), 500);
         }
-      }catch(e){ console.warn('[POLL] stock sync error:', e.message); }
+        // Гейт сдвигаем ТОЛЬКО после успешного чтения и обработки снимка. Раньше — до чтения:
+        // один упавший read закрывал гейт до 5-минутной синхронизации (форензика 06.09).
+        _lastStockTs = d.stock_updated_ts;
+        pollCloud._snapFail = 0;
+      }catch(e){
+        console.warn('[POLL] stock sync error:', e.message);
+        pollCloud._snapFail = (pollCloud._snapFail||0)+1;
+        if(pollCloud._snapFail>=5){ // после 5 подряд отказов — не долбим read каждые 30 с, ждём полной синхронизации
+          _lastStockTs = d.stock_updated_ts; pollCloud._snapFail = 0;
+          console.warn('[POLL] снимок склада не читается 5 поллингов подряд — до полной синхронизации не повторяю');
+        }
+      }
     }
+    // Самопроверка после событий, способных развести наличие и журнал (только рост расхождений)
+    const prunedLoss = syncPruneStateByTombstones.lastLoss||0; syncPruneStateByTombstones.lastLoss=0;
+    if(stockMerged) syncStockSelfCheck('merge склада при поллинге');
+    else if(prunedLoss) syncStockSelfCheck('снята запись о потере по чужому tombstone');
 
     // Подтверждаем доставку отправленного: весь полный список id из ответа read_since
     // убираем из очереди СРАЗУ и обновляем индикатор (не ждём re-send/QUEUE_RETRY).

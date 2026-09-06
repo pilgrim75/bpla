@@ -414,6 +414,9 @@ window.addEventListener('offline',checkNet);
 window.addEventListener('online',()=>{
   const {url,token}=syncGetCfg();
   if(url&&token&&typeof syncFlushQueue==='function') syncFlushQueue();
+  // Неподтверждённый пуш склада (sync.js, 06.09.2026): пре-чек пуша сам увидит облако —
+  // подтвердит по версии, сольёт чужое или перезапишет.
+  if(url&&token&&typeof syncStockHasPending==='function'&&syncStockHasPending()&&typeof syncPushStockSquads==='function') syncPushStockSquads();
 });
 checkNet();
 
@@ -697,30 +700,38 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
   // Текст вылета меняем в любом случае
   f.drone=newDrone;
 
+  let applied=false;
   if(apply){
-    let sq=state.squads.find(s=>s.pilot===pilot);
-    if(!sq){ sq={pilot,drones:[]}; state.squads.push(sq); }
-    // 1) вернуть старый борт пилоту
-    const od=sq.drones.find(d=>d.name.toLowerCase()===oldDrone.toLowerCase());
-    if(od) od.qty++; else sq.drones.push({name:oldDrone,qty:1});
-    // 2) списать новый борт у пилота — в минус, если его нет (ADR-001 §4: минус = сигнал,
-    //    как в writeDroneLoss; строка снимается только при точном нуле)
-    let nd=sq.drones.find(d=>d.name.toLowerCase()===newDrone.toLowerCase());
-    if(!nd){ nd={name:newDrone,qty:0}; sq.drones.push(nd); }
-    nd.qty--;
-    if(nd.qty===0) sq.drones=sq.drones.filter(d=>d!==nd);
-    if(nd.qty<0) lossDeficitWarn({deficit:true,pilot,drone:newDrone,qty:nd.qty});
-    // 3) обновить запись о потере в transfers
-    updateLossTransferDrone(f, oldDrone, newDrone);
-    syncBumpStockVersion();
+    // 1) СНАЧАЛА запись о потере в журнале: без неё наличие двигать нельзя — дельта qty обязана
+    //    равняться дельте ledger (раньше qty менялся и при отсутствующей записи — форензика 06.09 §7)
+    if(!updateLossTransferDrone(f, oldDrone, newDrone)){
+      const msg='Запись о потере для этого вылета не найдена — наличие не изменено (изменён только борт в вылете).';
+      console.warn('[учёт] '+msg);
+      if(typeof showSyncToast==='function')showSyncToast('⚠ '+msg,8000);
+    } else {
+      let sq=state.squads.find(s=>s.pilot===pilot);
+      if(!sq){ sq={pilot,drones:[]}; state.squads.push(sq); }
+      // 2) вернуть старый борт пилоту
+      const od=sq.drones.find(d=>d.name.toLowerCase()===oldDrone.toLowerCase());
+      if(od) od.qty++; else sq.drones.push({name:oldDrone,qty:1});
+      // 3) списать новый борт у пилота — в минус, если его нет (ADR-001 §4: минус = сигнал,
+      //    как в writeDroneLoss; строка снимается только при точном нуле)
+      let nd=sq.drones.find(d=>d.name.toLowerCase()===newDrone.toLowerCase());
+      if(!nd){ nd={name:newDrone,qty:0}; sq.drones.push(nd); }
+      nd.qty--;
+      if(nd.qty===0) sq.drones=sq.drones.filter(d=>d!==nd);
+      if(nd.qty<0) lossDeficitWarn({deficit:true,pilot,drone:newDrone,qty:nd.qty});
+      syncBumpStockVersion();
+      applied=true;
+    }
   }
 
   // Дефект C (10.06.2026): saveLocal вместо saveLocalQuiet — правка f.drone и запись
   // о потере уходят debounce-write'ом (syncPushAll неразрушающий), иначе плановый
   // syncPullOnLogin (5 мин) успевал откатить их облачной версией. Склад — точечно.
   saveLocal();
-  if(apply) syncPushStockSquads();
-  logAction('flight','edit','Адм: смена борта в потере '+oldDrone+' → '+newDrone+' у '+(pilot||'')+(apply?'':' — без пересчёта склада'));
+  if(applied) syncPushStockSquads();
+  logAction('flight','edit','Адм: смена борта в потере '+oldDrone+' → '+newDrone+' у '+(pilot||'')+(applied?'':(apply?' — без пересчёта склада (запись о потере не найдена)':' — без пересчёта склада')));
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
@@ -734,7 +745,8 @@ function updateLossTransferDrone(f, oldDrone, newDrone){
   if(f.id) rec=ts.find(t=>t.type==='loss'&&t.flightId===f.id);
   if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&t.time===f.time);
   if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date);
-  if(rec) rec.drone=newDrone;
+  if(rec){ rec.drone=newDrone; return true; }
+  return false; // записи нет — вызывающий наличие не трогает
 }
 
 // Диалог подтверждения смены борта в потере. Возвращает Promise<bool>.
@@ -886,14 +898,15 @@ function returnLossDrone(f){
   // запись. Ноль снятых записей — это легаси-вылет из долга «42 потери без loss»: его
   // списания в журнале нет, возвращать нечего (симметрично syncDeleteFlight).
   const cutOn=typeof marshrutCutTs==='function'&&marshrutCutTs()>0;
-  const frozenOnly=cutOn&&!removedTransfers.some(t=>!_isPreCutTransfer(t));
-  if(!frozenOnly){
-    const sq=state.squads.find(s=>s.pilot===f.pilot);
-    if(sq){
-      const d=sq.drones.find(d=>d.name.toLowerCase()===dLow);
-      if(d){ d.qty++; if(d.qty===0) sq.drones=sq.drones.filter(x=>x!==d); } // −1→0: минус закрыт, строку снимаем
-      else sq.drones.push({name:f.drone,qty:1});
-    }
+  const live=removedTransfers.filter(t=>!_isPreCutTransfer(t)); // без черты — все снятые
+  if(live.length){
+    // Симметрия ledger↔qty (06.09.2026): наличие растёт РОВНО на сумму снятых пост-чертовых
+    // записей и в расчёте записи (создаётся, если его нет). Раньше — +1 один раз при N
+    // записях и ничего при отсутствующем расчёте (форензика 06.09 §7).
+    live.forEach(t=>_restoreSquadQty(t.pilot||f.pilot, t.drone||f.drone, parseInt(t.qty,10)||1));
+  } else if(!cutOn){
+    // Без черты и без записи о потере (легаси-вылет долга «42 потери без loss») — +1 как раньше
+    _restoreSquadQty(f.pilot, f.drone, 1);
   } else {
     const msg=removedTransfers.length
       ?'Потеря записана до черты — наличие не изменено (история заморожена).'
@@ -2673,12 +2686,15 @@ function saveTransfer(){
         if(nbgSrc.qty===0)state.stock=state.stock.filter(d=>d!==nbgSrc);
       }
     } else { // from = конкретный пилот: списываем У ПИЛОТА (а не со склада)
-      const sq=state.squads.find(s=>s.pilot===from);
+      let sq=state.squads.find(s=>s.pilot===from);
       const di=sq&&sq.drones.find(d=>d.name.toLowerCase()===dl);
       if(!di||di.qty<qty){
         if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
+        // Расчёта-источника нет — заводим его с минусом (ADR-001 §4): раньше запись движения
+        // писалась, а наличие не двигалось — тихий no-op, ledger −q при qty 0 (форензика 06.09 §7)
+        if(!sq){sq={pilot:from,drones:[]};state.squads.push(sq);}
         if(di){di.qty-=qty;}
-        else if(sq){sq.drones.push({name:drone,qty:-qty});}
+        else{sq.drones.push({name:drone,qty:-qty});}
       } else {
         di.qty-=qty;
         if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);
@@ -2732,17 +2748,18 @@ function saveTransfer(){
       if(item.qty===0)state.stock=state.stock.filter(d=>d!==item);
     }
   } else {
-    const sq=state.squads.find(s=>s.pilot===from);
-    if(sq){
-      const di=sq.drones.find(d=>d.name.toLowerCase()===drone.toLowerCase());
-      if(!di||di.qty<qty){
-        if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
-        if(di){di.qty-=qty;}
-        else{sq.drones.push({name:drone,qty:-qty});}
-      } else {
-        di.qty-=qty;
-        if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);
-      }
+    let sq=state.squads.find(s=>s.pilot===from);
+    const di=sq&&sq.drones.find(d=>d.name.toLowerCase()===drone.toLowerCase());
+    if(!di||di.qty<qty){
+      if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
+      // Расчёта-источника нет — заводим его с минусом (ADR-001 §4): раньше `if(sq)` молча
+      // пропускал списание, а запись движения всё равно писалась (форензика 06.09 §7)
+      if(!sq){sq={pilot:from,drones:[]};state.squads.push(sq);}
+      if(di){di.qty-=qty;}
+      else{sq.drones.push({name:drone,qty:-qty});}
+    } else {
+      di.qty-=qty;
+      if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);
     }
   }
 
@@ -2966,29 +2983,36 @@ function _trMinsLeft(t){return Math.max(1,Math.round((TRANSFER_EDIT_WINDOW_MS-(D
 // симметричным; минус не маскируется (сигнал расхождения, отобразится красным).
 // adjust/loss сюда НЕ попадают (adjust остатков сам не менял, loss не правится).
 function _trEffect(t,sign){
-  const q=n=>sign*(parseInt(n)||1);
+  // qty по умолчанию 0 — ровно как читает журнал _marshrutWalk (+(t.qty||0)); раньше 1,
+  // и сторно записи без qty двигало наличие, не двигая ledger (форензика 06.09 §7)
+  const q=n=>sign*(parseInt(n)||0);
   // Типы БЕЗ эффекта на остатки — явный выход (04.09.2026). loss/adjust сюда и раньше
   // не доходили (полоса их не открывает), startbalance добавлен под черту Этапа 3:
   // молчаливое «нет ветки» неотличимо от забытого типа, а цена ошибки — сторно,
   // сдвигающее журнал без наличия. Новый тип движения обязан появиться ЗДЕСЬ.
   if(t.type==='loss'||t.type==='adjust'||t.type==='startbalance')return;
   if(t.type==='arrival'){
-    _trStockAdd(t.drone,'bg',q(t.qty));
+    // Локация прихода — как в _marshrutWalk: t.to||t.location||'склад'. adminAddStock пишет
+    // приход «не бг» с локацией — сторно раньше двигало bg при ledger «не бг» (форензика 06.09 §7)
+    _trStockAdd(t.drone,_trLocStatus(t.to||t.location),q(t.qty));
   } else if(t.type==='exchange'){
     if(t.give)_trStockAdd(t.give,'bg',-q(t.giveQty));
     if(t.get)_trStockAdd(t.get,'bg',q(t.getQty));
   } else if(t.type==='transfer'){
     const d=q(t.qty);
     const side=(loc,delta)=>{
-      if(loc==='склад')_trStockAdd(t.drone,'bg',delta);
-      else if(loc==='не бг')_trStockAdd(t.drone,'nbg',delta);
-      else if(loc==='списан'){} // выбытие — физической строки-приёмника нет
+      const l=_rowN(loc); // нормализация как в ledger (_mNorm: lowercase+trim)
+      if(l==='склад')_trStockAdd(t.drone,'bg',delta);
+      else if(l==='не бг')_trStockAdd(t.drone,'nbg',delta);
+      else if(l==='списан'){} // выбытие — физической строки-приёмника нет
       else _trSquadAdd(loc,t.drone,delta);
     };
     side(t.from,-d);
     side(t.to,d);
   }
 }
+// Локация журнала → статус строки склада (обратное к _stockLoc; 'lost'/'списан' не бывают приходом)
+function _trLocStatus(loc){ const l=_rowN(loc); return l==='не бг'?'nbg':(l==='lost'||l==='списан')?'lost':'bg'; }
 function _trStockAdd(name,status,delta){
   if(!name||!delta)return;
   const nl=String(name).toLowerCase();
@@ -2999,7 +3023,7 @@ function _trStockAdd(name,status,delta){
 }
 function _trSquadAdd(pilot,name,delta){
   if(!pilot||!name||!delta)return;
-  let sq=state.squads.find(s=>s.pilot===pilot);
+  let sq=state.squads.find(s=>_rowN(s.pilot)===_rowN(pilot)); // как ledger — без учёта регистра (раньше строгое === плодило дубль-расчёт)
   if(!sq){sq={id:genId('sq'),pilot,drones:[]};state.squads.push(sq);} // как writeDroneLoss
   const nl=String(name).toLowerCase();
   let d=sq.drones.find(x=>x.name.toLowerCase()===nl);
