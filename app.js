@@ -123,7 +123,8 @@ function modalOverlay(innerHTML){
 }
 
 // Конструктор записи перемещения с дефолтами id/date/time.
-// type: 'transfer'|'arrival'|'loss'|'exchange'
+// type (ADR-001 §3, с Этапа 3.3 новые записи): 'move'|'writeoff'|'handover'|'arrival'|'loss'|'adjust'|'startbalance';
+// легаси (история и устройства на старом коде, только чтение): 'transfer'|'exchange'
 // _submittedBy — автор записи (как у вылетов): для окна правки в «Изменениях»
 // (у записей до 14.08.2026 поля нет — их правят только tech/cmd/admin).
 // `_cut` — момент СОЗДАНИЯ записи (мс). По нему черта (Этап 3 МАРШРУТа) решает «до/после».
@@ -141,6 +142,17 @@ function makeTransfer(type,fields){
   const now=Date.now();
   return {id:genId('t'),type,date:todayISO(),time:nowHM(),_cut:(cut&&now<=cut)?cut+1:now,...(by?{_submittedBy:by}:{}),...fields};
 }
+// Локация движения (Этап 3.3): 'склад' / 'не бг' — насквозь, иначе ключ расчёта через
+// squadKeyOf (ADR-001 §3, сейчас тождество). Для writeoff/handover, у которых локация
+// лежит в t.location (так их читает _marshrutWalk).
+function _moveLoc(loc){
+  const l=_rowN(loc);
+  return (l==='склад'||l==='не бг')?l:squadKeyOf(loc||'');
+}
+// Признак «коррекции склада», оформленной через форму обмена (Этап 3.3, аудит 12.08:
+// 03.08 — exchange с подразделением «коррекция склада»). Такое движение — не передача
+// наружу, а ручная коррекция: пишется adjust с причиной, в балансе — на стороне прихода.
+function _isCorrectionUnit(unit){ return /коррекц/i.test(String(unit||'')); }
 
 // ===== ЛОКАЦИЯ СТРОКИ СКЛАДА (единая точка, 04.09.2026 — подготовка к черте) =====
 // Статус строки склада ↔ локация журнала движений. Соответствие обязано совпадать
@@ -1004,7 +1016,7 @@ function adminEditStock(key,field,val){
 // парам (подпись этого механизма видна в базовой линии ADR §8: зеркальные ±1
 // «Гамаюн12 не бг / склад», «Курьер21 не бг / склад»).
 // Теперь количество физически переезжает в строку целевого статуса и порождает
-// запись type='transfer' — ровно ту же, что создаёт штатная передача «склад → не бг».
+// запись type='move' (до Этапа 3.3 — 'transfer') — ту же, что создаёт штатная передача «склад → не бг».
 // Возвращает true, если правка применена (или применять нечего).
 function adminMoveStockStatus(idx,newStatus){
   const it=state.stock[idx]; if(!it)return false;
@@ -1035,7 +1047,7 @@ function adminMoveStockStatus(idx,newStatus){
   // Количество переезжает в строку целевого статуса (схлоп с существующей, если есть)
   if(tgt){ tgt.qty=(tgt.qty||0)+q; state.stock.splice(idx,1); }
   else { it.status=newStatus; }
-  const op=makeTransfer('transfer',{from,to,drone:it.name,qty:q,note:'смена статуса строки склада'});
+  const op=makeTransfer('move',{from,to,drone:it.name,qty:q,note:'смена статуса строки склада'}); // Этап 3.3: было 'transfer'
   if(!state.transfers)state.transfers=[];
   state.transfers.unshift(op);
   syncAddTransfer(op);
@@ -1727,6 +1739,10 @@ function adminRenameModelRun(){
 // передачи в «списан» (saveTransfer уменьшает qty — фактическое выбытие): она
 // считается отдельно (writeoff_t) и входит в diff_adj; перевод в «не бг» — внутреннее
 // (nbg_t — справочно, в баланс не входит).
+// Типы Этапа 3.3 (ADR-001 §3) читаются как их легаси-эквиваленты: move = transfer,
+// writeoff = transfer to='списан' (writeoff_t), handover = exchange.give (outflow),
+// приход по обмену пишется обычным arrival (intake). Коррекция через форму обмена
+// теперь adjust (раньше — exchange.give в outflow): diff_* те же, меняются колонки.
 // Две гипотезы о stock-строках со статусом lost/«списан» (формулы расходятся ровно
 // на их сумму, колонка lost): diff_A — независимое наличие (intake − (всё наличие +
 // give + loss)); diff_B — дубль учёта loss-передач, игнорируются (intake − (наличие
@@ -1769,13 +1785,19 @@ function _stockAuditCompute(){
     }
     else if(t.type==='loss'){ const m=get(t.drone); if(m)m.lossSum+=t.qty||1; }
     else if(t.type==='adjust'){ const m=get(t.drone); if(m)m.adjust+=t.qty||0; } // знаковая дельта ручной коррекции
-    else if(t.type==='transfer'){
+    else if(t.type==='transfer'||t.type==='move'){
       // Внутреннее перемещение — игнор, кроме спецприёмников saveTransfer:
-      // «списан» = фактическое выбытие (qty уменьшен без loss-записи), «не бг» — справочно
+      // «списан» = фактическое выбытие (qty уменьшен без loss-записи), «не бг» — справочно.
+      // 'move' — тип Этапа 3.3 (ADR-001 §3) вместо 'transfer'; в «списан» он не пишется
+      // (для этого writeoff), но легаси-семантика сохранена на случай ручных записей.
       const to=norm(t.to);
       if(to==='списан'){ const m=get(t.drone); if(m)m.writeoffT+=t.qty||0; }
       else if(to==='не бг'){ const m=get(t.drone); if(m)m.nbgT+=t.qty||0; }
     }
+    // ── Типы Этапа 3.3 (ADR-001 §3) — та же балансовая семантика, что у легаси-эквивалентов:
+    else if(t.type==='writeoff'){ const m=get(t.drone); if(m)m.writeoffT+=t.qty||0; } // = transfer to='списан'
+    else if(t.type==='handover'){ const m=get(t.drone); if(m)m.exGive+=t.qty||0; }    // = exchange.give (выбытие наружу)
+    // startbalance — намеренно игнор (черта Этапа 3; старый аудит её не знает, qty она не меняет)
   });
 
   const summary=Object.values(models).map(m=>{
@@ -2709,7 +2731,12 @@ function saveTransfer(){
     }
 
     if(!state.transfers)state.transfers=[];
-    const op=makeTransfer('transfer',{from,to,drone,qty,note}); // реальный from (раньше хардкод 'склад')
+    // Этап 3.3 (ADR-001 §3): «→ списан» — выбытие 'writeoff' (локация = источник; to:'списан'
+    // оставлен для читаемости на устройствах со старым кодом — там запись рисуется как
+    // «Передача X → списан»); «→ не бг» — перемещение 'move'. Реальный from (раньше хардкод 'склад').
+    const op=to==='списан'
+      ? makeTransfer('writeoff',{from,to,location:_moveLoc(from),drone,qty,note})
+      : makeTransfer('move',{from,to,drone,qty,note});
     state.transfers.unshift(op);
     syncBumpStockVersion();
     saveLocal();
@@ -2777,7 +2804,7 @@ function saveTransfer(){
   }
 
   if(!state.transfers)state.transfers=[];
-  const op=makeTransfer('transfer',{from,to,drone,qty,note});
+  const op=makeTransfer('move',{from,to,drone,qty,note}); // Этап 3.3: было 'transfer'
   state.transfers.unshift(op);
   saveLocal();
   syncAddTransfer(op);
@@ -2813,6 +2840,9 @@ function saveExchange(){
   } else if(!give||!get){
     alert('Заполните отданный и полученный борт');return;
   }
+  // «Коррекция склада» через форму обмена — это не передача наружу (Этап 3.3): пишем adjust.
+  const isCorr=_isCorrectionUnit(unit);
+  if(isCorr&&!confirm('Подразделение «'+unit+'» распознано как КОРРЕКЦИЯ склада.\n\nБудет записана коррекция количества (adjust) с причиной, а не передача/приход от подразделения.\n\nПродолжить?'))return;
 
   // Списать отданный борт со склада. Слепой путь закрыт по ADR-001 §4 (21.08.2026,
   // минус = сигнал): раньше клэмп Math.max(0,…) и «не найден — всё равно оформить»
@@ -2836,12 +2866,26 @@ function saveExchange(){
     else{state.stock.push({name:get,qty:getQty,status:'bg'});}
   }
 
-  // Записать в историю
+  // Записать в историю. Этап 3.3 (ADR-001 §3): тип 'exchange' упразднён для НОВЫХ записей.
+  // Отдали → 'handover' (выбытие со склада, не потеря и не списание); получили → 'arrival'
+  // с источником unit; двусторонний обмен → ДВЕ записи с общим ключом связи link.
+  // Коррекция через форму обмена → adjust (recordAdjust сам пишет и отправляет запись).
+  // Старые exchange-записи продолжают читаться везде (история + устройства на старом коде).
   if(!state.transfers)state.transfers=[];
-  const exOp=makeTransfer('exchange',{date,unit,give,giveQty,get,getQty,note});
-  state.transfers.unshift(exOp);
+  if(isCorr){
+    const why='через форму обмена «'+unit+'»'+(note?': '+note:'');
+    if(give)recordAdjust(give,-giveQty,'склад',why);
+    if(get)recordAdjust(get,getQty,'склад',why);
+  } else {
+    const link=(give&&get)?genId('x'):'';
+    const lk=link?{link}:{};
+    const ops=[];
+    if(give)ops.push(makeTransfer('handover',{date,unit,drone:give,qty:giveQty,from:'склад',to:unit,location:'склад',...lk,note}));
+    if(get)ops.push(makeTransfer('arrival',{date,unit,drone:get,qty:getQty,to:'склад',location:'склад',...lk,note}));
+    ops.forEach(op=>state.transfers.unshift(op));
+    ops.forEach(op=>syncAddTransfer(op));
+  }
   saveLocal();
-  syncAddTransfer(exOp);
   syncPushStockSquads();
   if(giveDeficit){
     const msg=`⚠ Склад (БГ) не имеет ${give} ×${giveQty} — остаток уходит в минус (${giveDeficit.qty}). Обмен оформлен; если борт был на складе без прихода — оформите приход/коррекцию (минус закроется).`;
@@ -2849,7 +2893,7 @@ function saveExchange(){
     if(typeof showSyncToast==='function')showSyncToast(msg,8000);
     setStatus('saveStatus',msg,'warn');
   }
-  logAction('transfer','exchange','Обмен с '+unit+': '+[give?('отдали '+give+' ×'+giveQty):'',get?('получили '+get+' ×'+getQty):''].filter(Boolean).join(', ')+(giveDeficit?' [склад в минус: '+giveDeficit.qty+']':''));
+  logAction('transfer','exchange',(isCorr?'Коррекция через форму обмена («'+unit+'»): ':'Обмен с '+unit+': ')+[give?('отдали '+give+' ×'+giveQty):'',get?('получили '+get+' ×'+getQty):''].filter(Boolean).join(', ')+(giveDeficit?' [склад в минус: '+giveDeficit.qty+']':''));
   renderInventory();
   renderDashboard();
   document.getElementById('exchangeCard').style.display='none';
@@ -2881,9 +2925,11 @@ function renderTransfersLog(){
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     } else if(op.type==='arrival'){
+      // Этап 3.3: приход по обмену несёт источник unit (+ link, если обмен двусторонний)
+      const src=op.unit?` · от ${esc(op.unit)}${op.link?' (обмен)':''}`:'';
       row=`<div class="change-row${grey}">
         <div class="change-badge-in">Поступление</div>
-        <div class="change-detail"><span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-detail"><span>${esc(op.drone)} × ${op.qty}</span>${src}${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
     } else if(op.type==='exchange'){
@@ -2900,6 +2946,20 @@ function renderTransfersLog(){
         <div class="change-detail"><span>${esc(op.unit)}</span> · ${exDetail}${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
+    } else if(op.type==='handover'){
+      // Этап 3.3: передача наружу (было exchange.give). Выбытие, не потеря и не списание.
+      row=`<div class="change-row${grey}">
+        <div class="badge-warn">${op.link?'Обмен':'Передача'}</div>
+        <div class="change-detail"><span>${esc(op.unit||op.to||'')}</span> · отдали: <span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
+      </div>`;
+    } else if(op.type==='writeoff'){
+      // Этап 3.3: списание (было transfer to='списан'). Не боевая потеря.
+      row=`<div class="change-row${grey}">
+        <div class="badge-danger">Списание</div>
+        <div class="change-detail">${esc(op.location||op.from||'')} · <span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
+        <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
+      </div>`;
     } else if(op.type==='adjust'){
       row=`<div class="change-row${grey}">
         <div class="badge-warn">Коррекция</div>
@@ -2914,9 +2974,9 @@ function renderTransfersLog(){
         <div class="change-detail">${esc(op.location||op.to||'')} · <span>${esc(op.drone)} ${op.qty>0?'+':''}${esc(op.qty)}</span>${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
-    } else {
+    } else { // 'move' (Этап 3.3) и легаси 'transfer' — перемещение внутри подразделения
       row=`<div class="change-row${grey}">
-        <div class="change-badge-in">Передача</div>
+        <div class="change-badge-in">${op.type==='move'?'Перемещение':'Передача'}</div>
         <div class="change-detail">${esc(op.from)} → ${esc(op.to)} · <span>${esc(op.drone)} × ${op.qty}</span>${op.note?` · ${esc(op.note)}`:''}</div>
         <div class="change-time">${esc(op.date)} ${esc(op.time||'')}</div>${pen}
       </div>`;
@@ -2998,18 +3058,23 @@ function _trEffect(t,sign){
   } else if(t.type==='exchange'){
     if(t.give)_trStockAdd(t.give,'bg',-q(t.giveQty));
     if(t.get)_trStockAdd(t.get,'bg',q(t.getQty));
-  } else if(t.type==='transfer'){
+  } else if(t.type==='transfer'||t.type==='move'){ // 'move' — Этап 3.3, та же семантика
     const d=q(t.qty);
-    const side=(loc,delta)=>{
-      const l=_rowN(loc); // нормализация как в ledger (_mNorm: lowercase+trim)
-      if(l==='склад')_trStockAdd(t.drone,'bg',delta);
-      else if(l==='не бг')_trStockAdd(t.drone,'nbg',delta);
-      else if(l==='списан'){} // выбытие — физической строки-приёмника нет
-      else _trSquadAdd(loc,t.drone,delta);
-    };
-    side(t.from,-d);
-    side(t.to,d);
+    _trSide(t.drone,t.from,-d);
+    _trSide(t.drone,t.to,d);
+  } else if(t.type==='writeoff'||t.type==='handover'){
+    // Этап 3.3: выбытие из локации записи (как _marshrutWalk: t.location||t.from)
+    _trSide(t.drone,t.location||t.from||(t.type==='handover'?'склад':''),-q(t.qty));
   }
+}
+// Сторона движения → строка наличия (нормализация как в ledger, _mNorm: lowercase+trim)
+function _trSide(drone,loc,delta){
+  const l=_rowN(loc);
+  if(!l)return;
+  if(l==='склад')_trStockAdd(drone,'bg',delta);
+  else if(l==='не бг')_trStockAdd(drone,'nbg',delta);
+  else if(l==='списан'){} // выбытие — физической строки-приёмника нет
+  else _trSquadAdd(loc,drone,delta);
 }
 // Локация журнала → статус строки склада (обратное к _stockLoc; 'lost'/'списан' не бывают приходом)
 function _trLocStatus(loc){ const l=_rowN(loc); return l==='не бг'?'nbg':(l==='lost'||l==='списан')?'lost':'bg'; }
@@ -3033,8 +3098,9 @@ function _trSquadAdd(pilot,name,delta){
 }
 
 // Селект от/кому для полосы transfer: склад + пилоты + спецприёмники (легаси-значение не теряем)
-function _trFromToSel(which,cur,fid){
-  const opts=['склад',...state.squads.map(s=>s.pilot),'не бг'].concat(which==='to'?['списан']:[]);
+// noWriteoff — для 'move' (Этап 3.3): «→ списан» это отдельный тип writeoff, не перемещение
+function _trFromToSel(which,cur,fid,noWriteoff){
+  const opts=['склад',...state.squads.map(s=>s.pilot),'не бг'].concat(which==='to'&&!noWriteoff?['списан']:[]);
   if(cur&&!opts.includes(cur))opts.unshift(cur);
   return '<select style="font-size:11px;padding:2px 3px" id="tredit-'+which+'-'+fid+'">'
     +opts.map(o=>'<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>').join('')+'</select>';
@@ -3075,8 +3141,12 @@ function renderTransferEditRow(t){
   let body='';
   if(t.type==='arrival'){
     body=inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46);
-  } else if(t.type==='transfer'){
-    body=inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46)+_trFromToSel('from',t.from,fid)+'<span style="color:var(--muted)">→</span>'+_trFromToSel('to',t.to,fid);
+  } else if(t.type==='transfer'||t.type==='move'){
+    body=inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46)+_trFromToSel('from',t.from,fid)+'<span style="color:var(--muted)">→</span>'+_trFromToSel('to',t.to,fid,t.type==='move');
+  } else if(t.type==='writeoff'){ // Этап 3.3: списание — модель, кол-во, откуда
+    body=inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46)+_trFromToSel('from',t.from||t.location,fid)+'<span style="color:var(--muted)">→ списан</span>';
+  } else if(t.type==='handover'){ // Этап 3.3: передача наружу (со склада)
+    body=inp('unit',t.unit,90,'Подразделение')+inp('drone',t.drone,90,'БПЛА')+num('qty',t.qty,46);
   } else if(t.type==='exchange'){
     body=inp('unit',t.unit,90,'Подразделение')+inp('give',t.give,80,'Отдали')+num('giveQty',t.giveQty,46)+inp('get',t.get,80,'Получили')+num('getQty',t.getQty,46);
   } else if(t.type==='adjust'){
@@ -3126,10 +3196,21 @@ function trSaveEdit(key){
   if(t.type==='arrival'){
     typed={drone:take('drone',t.drone),qty:take('qty',t.qty,true)};
     if(!typed.drone){alert('Укажите БПЛА');return;}
-  } else if(t.type==='transfer'){
+  } else if(t.type==='transfer'||t.type==='move'){
     typed={drone:take('drone',t.drone),qty:take('qty',t.qty,true),from:take('from',t.from),to:take('to',t.to)};
     if(!typed.drone){alert('Укажите БПЛА');return;}
     if(typed.from===typed.to){alert('Отправитель и получатель совпадают');return;}
+    // Этап 3.3: новая запись сторно — уже типа ADR-001 §3 (легаси transfer → move / writeoff)
+    if(_rowN(typed.to)==='списан'){ typed.type='writeoff'; typed.location=_moveLoc(typed.from); }
+    else if(t.type==='transfer'){ typed.type='move'; }
+  } else if(t.type==='writeoff'){
+    typed={drone:take('drone',t.drone),qty:take('qty',t.qty,true),from:take('from',t.from||t.location)};
+    if(!typed.drone){alert('Укажите БПЛА');return;}
+    typed.location=_moveLoc(typed.from); // локация выбытия — её читает _marshrutWalk
+  } else if(t.type==='handover'){
+    typed={unit:take('unit',t.unit),drone:take('drone',t.drone),qty:take('qty',t.qty,true)};
+    if(!typed.drone){alert('Укажите БПЛА');return;}
+    typed.to=typed.unit;
   } else if(t.type==='exchange'){
     typed={unit:take('unit',t.unit),give:take('give',t.give),giveQty:take('giveQty',t.giveQty,true),get:take('get',t.get),getQty:take('getQty',t.getQty,true)};
     if(!typed.give&&!typed.get){alert('Заполните отданный или полученный борт');return;}

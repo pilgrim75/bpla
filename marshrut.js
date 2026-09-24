@@ -129,15 +129,16 @@ function _marshrutWalk(){
         _mAdd(map, t.drone, t.location||t.to||MARSHRUT_STOCK_LOC, +(t.qty||0));
         break;
       }
-      // ── ЛЕГАСИ (временно, до Этапа 3 — миграция типов, ADR §7) ──
+      // ── ЛЕГАСИ (ADR §7). С Этапа 3.3 новые записи пишутся move/writeoff/handover/arrival;
+      //    эти ветки — для истории и для записей устройств на старом коде (до обновления). ──
       case 'exchange': {
-        // TODO Этап 3: exchange → handover. Сейчас: движение всегда против склада.
+        // Легаси обмен: движение всегда против склада (новый код пишет handover + arrival).
         if(t.get)  _mAdd(map, t.get,  MARSHRUT_STOCK_LOC, +(t.getQty||0));
         if(t.give) _mAdd(map, t.give, MARSHRUT_STOCK_LOC, -(t.giveQty||0));
         break;
       }
       case 'transfer': {
-        // TODO Этап 3: transfer → move (и to='списан' → writeoff). Сейчас: как move,
+        // Легаси перемещение (новый код пишет move / writeoff). Читается как move,
         // обе локации буквально (включая псевдо-локации 'не бг'/'списан').
         const q=+(t.qty||0);
         _mAdd(map, t.drone, t.from, -q);

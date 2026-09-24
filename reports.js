@@ -236,9 +236,14 @@ function reportStock(out){
         else exTxt='← Получено от '+op.unit+': '+op.get+' — '+op.getQty+' шт.';
         return pfx+exTxt+(op.note?' ('+op.note+')':'');
       }
-      if(op.type==='arrival') return pfx+'📦 Поступление: '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      // Этап 3.3 (ADR-001 §3): приход по обмену несёт источник unit; передача наружу — handover;
+      // списание — writeoff. Строки — те же, что печатались по легаси exchange/transfer.
+      if(op.type==='arrival') return pfx+(op.unit?'← Получено от '+op.unit+(op.link?' (обмен)':'')+': ':'📦 Поступление: ')+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      if(op.type==='handover') return pfx+'→ Передача '+(op.unit||op.to||'')+(op.link?' (обмен)':'')+': отдали '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      if(op.type==='writeoff') return pfx+'✖ Списание ('+(op.location||op.from||'')+'): '+op.drone+' — '+op.qty+' шт.'+(op.note?' ('+op.note+')':'');
+      if(op.type==='adjust') return pfx+'± Коррекция ('+(op.location||'')+'): '+(op.drone||'')+' '+((op.qty||0)>0?'+':'')+(op.qty||0)+' шт.'+(op.note?' ('+op.note+')':'');
       if(op.type==='startbalance') return pfx+'⚑ Стартовый остаток ('+(op.location||op.to||'')+'): '+(op.drone||'')+' — '+(op.qty||0)+' шт.'+(op.note?' ('+op.note+')':'');
-      // Хвостовая ветка ловит и типы без своей строки (adjust, будущие move/writeoff/handover):
+      // Хвостовая ветка — move и легаси transfer (from → to), а также неизвестные типы:
       // подставляем пустые строки, иначе незаполненное направление печаталось как «undefined»
       return pfx+'→ '+(op.from||'')+' → '+(op.to||'')+': '+(op.drone||'')+' — '+(op.qty||0)+' шт.'+(op.note?' ('+op.note+')':'');
     };
@@ -431,7 +436,8 @@ function reportSummary(out,f){
 }
 
 function reportIssued(out,from,to,filterPilot,filterDrones){
-    let transList=(state.transfers||[]).filter(t=>t.type==='transfer'&&t.to!=='склад'&&t.to!=='не бг'&&t.to!=='списан');
+    // Выдача = перемещение в расчёт: легаси 'transfer' и 'move' Этапа 3.3 (ADR-001 §3)
+    let transList=(state.transfers||[]).filter(t=>(t.type==='transfer'||t.type==='move')&&t.to!=='склад'&&t.to!=='не бг'&&t.to!=='списан');
     if(from) transList=transList.filter(t=>t.date>=from);
     if(to)   transList=transList.filter(t=>t.date<=to);
     if(filterPilot) transList=transList.filter(t=>t.to===filterPilot);
