@@ -1,12 +1,10 @@
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['app.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
 
-// ============ ВЕРСИЯ КЛИЕНТА (25.09.2026, минимум проекта «контроль версии») ============
-// APP_BUILD — целое, СТРОГО растёт при каждой выкладке (формат ГГГГММДДNN). Пишется в каждую
-// запись журнала действий (logAction → поле build): в Администратор → Пользователи видно,
-// на какой сборке каждое устройство входило последний раз, и кому нужно обновиться.
-// ?v=, version.json и автообновление — отдельно (_НЕ_ПУБЛИКОВАТЬ/ПРОЕКТ_контроль_версии_2026-09-25.md).
-// ПРИ ВЫКЛАДКЕ: поднять APP_BUILD (и APP_VERSION — вместе с `.version` в index.html при релизе).
-const APP_VERSION='0.28';
-const APP_BUILD=2026092501;
+// ============ ВЕРСИЯ КЛИЕНТА ============
+// APP_VERSION/APP_BUILD с v0.29 живут в version.js (первый <script>, единый источник; правит
+// только tools/bump-version.js). APP_BUILD пишется в каждую запись журнала действий
+// (logAction → поле build) и в каждый POST (syncPost → client_build); проверка новой сборки,
+// автообновление и режим «версия устарела» — update.js.
 
 // ============ STATE ============
 // Базовый каталог моделей (страховочный список). Реальный парк может опережать его —
@@ -86,6 +84,13 @@ function isViewerRole(role){return role==='viewer';}
 // а не только скрытием кнопок (защита от вызова из консоли/обходных путей UI).
 // Запись в облако дополнительно блокирует sync-слой (syncReadOnly в sync.js).
 function guardWrite(){
+  // Контроль версии (v0.29, update.js): устаревшая сборка / смешанная загрузка файлов —
+  // устройство работает как наблюдатель, пока его не обновят. Проверка ПЕРВОЙ: локальная
+  // правка, которую нельзя отправить (сервер v7.10 отклонит), разъехалась бы с облаком.
+  if(typeof updWriteBlocked==='function'&&updWriteBlocked()){ alert(updWriteBlockedText()); return false; }
+  // Нет version.js или update.js — это тоже файлы разных сборок (новый app.js со старым index.html,
+  // первый переход v0.28→v0.29): писать нельзя, проверки версии просто нет (ревью v0.29).
+  if(typeof APP_BUILD!=='number'||typeof updWriteBlocked!=='function'){ alert('Приложение загрузилось не полностью (файлы разных версий) — запись отключена. Обновите страницу (Ctrl+F5).'); return false; }
   if(!isViewerRole(state.role)&&!isViewerRole(authUser.role))return true;
   alert('Роль «Наблюдатель» — только просмотр');
   return false;
@@ -128,6 +133,7 @@ function hasAnyRole(roles){return roles.includes(currentRole())||(!!actingRole()
 // Затемнённый модальный оверлей. Возвращает контейнер (.appendChild уже сделан).
 function modalOverlay(innerHTML){
   const ov=document.createElement('div');
+  ov.className='modal-ov'; // метка «открыт диалог»: автообновление версии (update.js) не перезагружает поверх него
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
   ov.innerHTML=innerHTML;
   document.body.appendChild(ov);
@@ -318,12 +324,14 @@ function lsQuotaWarn(e){
     const now=Date.now();
     if(now-_lsQuotaLastToast>15000){ _lsQuotaLastToast=now; if(typeof showSyncToast==='function') showSyncToast('⛔ ХРАНИЛИЩЕ ПЕРЕПОЛНЕНО — данные НЕ сохранены локально', 10000); }
     setStatus('saveStatus','⛔ Хранилище переполнено — не сохранено локально','err');
+    if(typeof _updLayoutBars==='function')_updLayoutBars(); // полоса версии (update.js) — под эту
   }catch(_){}
 }
 function lsQuotaOk(){
   if(!_lsQuotaActive)return;
   _lsQuotaActive=false;
   const bar=document.getElementById('lsQuotaBar'); if(bar)bar.remove();
+  if(typeof _updLayoutBars==='function')_updLayoutBars();
   console.log('[STORAGE] localStorage снова пишется');
 }
 // Единственная точка записи droneState: бросает наружу ТОЛЬКО через lsQuotaWarn (видимо).
@@ -331,11 +339,17 @@ function lsWriteState(){
   try{ localStorage.setItem('droneState',JSON.stringify(state)); lsQuotaOk(); return true; }
   catch(e){ lsQuotaWarn(e); return false; }
 }
-function saveLocal(){
+// opts.noDirty — сохраняется загруженное из облака, а не правка оператора: метку невыгруженных
+// правок (sync.js, SYNC_DIRTY_KEY) не ставить. Иначе плановая полная синхронизация сама себе
+// ставила бы метку, и на устройстве, которому запись запрещена, она не снималась бы никогда.
+function saveLocal(opts){
   lsWriteState();
+  if(!(opts&&opts.noDirty)&&typeof syncMarkDirty==='function')syncMarkDirty();
   // Debounce — отправляем в облако через 2 сек после последнего изменения
   clearTimeout(saveLocal._timer);
+  saveLocal._armed=true; // автообновление версии (update.js) не перезагружает, пока выгрузка ждёт
   saveLocal._timer=setTimeout(()=>{
+    saveLocal._armed=false;
     const {url,token}=syncGetCfg();
     if(url&&token&&navigator.onLine)syncPushAll(true);
   },2000);
@@ -346,6 +360,7 @@ function saveLocal(){
 function saveLocalQuiet(){
   lsWriteState();
   clearTimeout(saveLocal._timer); // отменяем отложенный полный write, если был запланирован
+  saveLocal._armed=false;         // отменённую выгрузку правок (если была) досылает метка SYNC_DIRTY_KEY
 }
 function loadLocal(){
   try{
@@ -436,11 +451,10 @@ window.addEventListener('online',checkNet);
 window.addEventListener('offline',checkNet);
 // При восстановлении сети — сразу досылаем накопленную очередь
 window.addEventListener('online',()=>{
-  const {url,token}=syncGetCfg();
-  if(url&&token&&typeof syncFlushQueue==='function') syncFlushQueue();
-  // Неподтверждённый пуш склада (sync.js, 06.09.2026): пре-чек пуша сам увидит облако —
+  // Очередь, невыгруженные правки (метка SYNC_DIRTY_KEY, v0.29) и склад — единой точкой.
+  // Неподтверждённый пуш склада (06.09.2026): пре-чек пуша сам увидит облако —
   // подтвердит по версии, сольёт чужое или перезапишет.
-  if(url&&token&&typeof syncStockHasPending==='function'&&syncStockHasPending()&&typeof syncPushStockSquads==='function') syncPushStockSquads();
+  if(typeof syncFlushLocalChanges==='function') syncFlushLocalChanges('online');
 });
 checkNet();
 
@@ -469,6 +483,7 @@ function showPage(id,btn){
     applySettingsVisibility(); // секции по ролям: admin — всё, остальные — ключ+статус
     // Управление пользователями переехало в Администратор → Пользователи (v0.26)
     renderSettingsStatus();
+    if(typeof updRenderAppCard==='function')updRenderAppCard(); // версия + установка PWA (update.js)
   }
   if(id==='admin'){
     // Инициализируем дефолтные даты фильтра
@@ -550,7 +565,7 @@ function showAdminTab(tab,btn){
   if(tab==='stock')renderAdminStock();
   if(tab==='squads')renderAdminSquads();
   if(tab==='ammo')renderAmmoList();
-  if(tab==='data')renderRenameModelSelect();
+  if(tab==='data'){renderRenameModelSelect(); if(typeof updRenderMinBuildCard==='function')updRenderMinBuildCard();}
   if(tab==='geo')renderGeoTab();
   if(tab==='actlog'){loadActLogFromCloud().then(()=>renderActLog());};
 }
@@ -940,7 +955,7 @@ function returnLossDrone(f){
   }
   // tombstone удалённых loss-передач — чтобы неразрушающий merge не вернул их из облака
   // Путь Б: публикуем удаление в облачный лист tombstones (распространение на устройства)
-  syncPublishTombstones(removedTransfers.map(t=>t.id));
+  syncPublishTombstones(removedTransfers.map(t=>t.id),'transfers');
   syncBumpStockVersion();
   setTimeout(()=>syncPushStockSquads(),300);
 }
@@ -1291,6 +1306,7 @@ function adminRenamePilot(oldName,newName){
   saveLocalQuiet();          // localStorage без отложенного полного write
   syncBumpStockVersion();    // §11 — иначе поллинг затрёт правку
   syncPushStockSquads();     // stock/squads
+  if(typeof syncMarkDirty==='function')syncMarkDirty(); // правка существующих записей: не выгрузится — дошлёт метка (раунд 2)
   syncToCloud(true);         // flights+transfers полным неразрушающим write (id стабилен)
 
   logAction('admin','rename_pilot','Переименован расчёт «'+oldName+'» → «'+newName+'»'+(mergeInto?' (СЛИЯНИЕ)':'')+'; правок: '+n);
@@ -1472,6 +1488,7 @@ function adminImportJSON(input){
       syncStockForgetBase(); // импорт = полная замена снимка, не дельта (без 3-way merge)
       syncBumpStockVersion();
       syncPushStockSquads();
+      if(typeof syncMarkDirty==='function')syncMarkDirty(); // импорт правит существующие записи — выгрузку закрепляет метка
       syncToCloud(true);
       renderDashboard();
       renderAdminFlights();
@@ -1493,7 +1510,7 @@ function adminClearFlights(){
   // tombstone на каждый id — иначе неразрушающий merge (syncPushAll) и поллинг
   // вернут все вылеты из облака в течение секунд, и «удаление» не сработает
   const _cnt=state.flights.length;
-  syncPublishTombstones(state.flights.map(f=>f.id).filter(Boolean)); // Путь Б: публикуем массовое удаление
+  syncPublishTombstones(state.flights.map(f=>f.id).filter(Boolean),'flights'); // Путь Б: публикуем массовое удаление
   state.flights=[];
   logAction('flight','clear','Удалены ВСЕ вылеты ('+_cnt+' зап.)');
   saveLocal();
@@ -1511,6 +1528,9 @@ function adminResetAll(){
   logAction('admin','reset','ПОЛНЫЙ СБРОС локальных данных');
   localStorage.removeItem('droneState');
   syncStockForgetBase(); // иначе сверка при загрузке восстановила бы склад из базы
+  // Сброс — осознанный отказ от локальных правок: метка невыгруженных правок иначе выгрузила бы
+  // после перезагрузки демо-state по умолчанию в облако (ревью v0.29, раунд 2)
+  if(typeof syncClearDirty==='function')syncClearDirty();
   location.reload();
 }
 
@@ -1558,7 +1578,7 @@ function adminCleanOrphanLosses(){
   state.transfers=keep;
   const restored=_compensateRemovedLosses(drop); // симметрия ledger↔qty
   // tombstone удалённых loss-записей — иначе неразрушающий merge/поллинг вернёт их из облака
-  syncPublishTombstones(drop.map(t=>t.id)); // Путь Б: публикуем удаление осиротевших потерь в облако
+  syncPublishTombstones(drop.map(t=>t.id),'transfers'); // Путь Б: публикуем удаление осиротевших потерь в облако
   saveLocal();
   syncBumpStockVersion();
   syncPushStockSquads();
@@ -1611,7 +1631,7 @@ function adminDedupeLossTransfers(){
     +'ДА — если каждый дубль реально списывал борт (нормальный случай: снятое движение возвращает остаток).\n'
     +'НЕТ — если дубли пришли из эпохи двойной записи (до 04.06.2026), когда списание было однократным:\n'
     +'тогда возврат раздует наличие.');
-  syncPublishTombstones(drop.map(t=>t.id)); // Путь Б: публикуем удаление дублей потерь в облако
+  syncPublishTombstones(drop.map(t=>t.id),'transfers'); // Путь Б: публикуем удаление дублей потерь в облако
   state.transfers=kept;
   const restored=restore?_compensateRemovedLosses(drop):0;
   // Немедленная выгрузка полным write (merge исключит tombstoned-записи);
@@ -1703,6 +1723,7 @@ function adminRenameModel(oldName,newName){
   saveLocalQuiet();          // localStorage без отложенного push
   syncBumpStockVersion();    // §11 — иначе поллинг затрёт правку (last-write-wins по _sv)
   syncPushStockSquads();     // stock/squads
+  if(typeof syncMarkDirty==='function')syncMarkDirty(); // правка существующих записей: не выгрузится — дошлёт метка (раунд 2)
   syncToCloud(true);         // flights+transfers полным неразрушающим write (id стабилен)
 
   // 4. След в журнале действий
@@ -3177,6 +3198,7 @@ function renderTransferEditRow(t){
 }
 
 function trSaveEdit(key){
+  if(!guardWrite())return; // версия устарела / смешанная загрузка (viewer сюда не доходит — окна правки у него нет)
   const t=_transferByKey(key);
   if(!t){alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.');return;}
   if(!canEditTransfer(t)){
@@ -3233,7 +3255,7 @@ function trSaveEdit(key){
     // Синхронно, без await между шагами — остатки не остаются в промежуточном состоянии.
     _trEffect(t,-1);
     state.transfers=state.transfers.filter(x=>x!==t);
-    if(typeof syncPublishTombstones==='function')syncPublishTombstones([String(t.id)]);
+    if(typeof syncPublishTombstones==='function')syncPublishTombstones([String(t.id)],'transfers');
     const newOp={...t,...typed,id:genId('t'),_cut:Date.now(),date,time,note}; // _cut — момент ЭТОЙ записи, не исходной
     if(authUser&&authUser.login)newOp._submittedBy=authUser.login;
     state.transfers.unshift(newOp);
@@ -3333,6 +3355,66 @@ function _stripDirty(draftMap,prefix,field,key){
   return {dirty:s===undefined||el.value!==s, value:el.value, el};
 }
 function _stripOpen(stateMap,draftMap,key,st){ stateMap.set(String(key),st); draftMap.set(String(key),{snap:{},dirty:{}}); }
+// Есть ли в открытых полосах ИЗМЕНЁННЫЕ поля (ввод, который потеряет перезагрузка).
+// Открытая, но нетронутая полоса перезагрузке не мешает — её можно открыть заново.
+function _stripHasDirty(stateMap,draftMap,prefix,fields){
+  let dirty=false;
+  stateMap.forEach((st,key)=>{
+    if(dirty||!_stripIsOpen(st))return;
+    const d=draftMap.get(key);
+    if(d&&Object.keys(d.dirty||{}).length){dirty=true;return;}
+    fields.forEach(f=>{
+      const el=_stripEl(prefix,f,key); if(!el||!d||d.snap[f]===undefined)return;
+      if(el.value!==d.snap[f])dirty=true;
+    });
+  });
+  return dirty;
+}
+// Причины, по которым страницу СЕЙЧАС нельзя перезагрузить без потери работы оператора.
+// Читает update.js (автообновление версии): пустой список — можно; иначе — только баннер
+// «Обновить», автопопытка позже. Здесь то, что знает только app.js/parser.js/reports.js;
+// фокус ввода, недавний ввод и пуш склада update.js проверяет сам.
+function appUnsavedReasons(){
+  const r=[];
+  try{
+    if(_stripHasDirty(_flEditState,_flEditDraft,'edit',FL_STRIP_FIELDS))r.push('правка вылета в журнале');
+    if(_stripHasDirty(_trEditState,_trEditDraft,'tredit',TR_STRIP_FIELDS))r.push('правка записи склада');
+  }catch(e){}
+  // Отложенная (debounce 2 с) или идущая полная выгрузка правок: перезагрузка сейчас оставила бы
+  // правку только локальной (её досылает метка SYNC_DIRTY_KEY, но зачем рисковать — ждём секунды).
+  if(saveLocal._armed||(typeof syncFullPushBusy==='function'&&syncFullPushBusy()))r.push('выгружаются правки');
+  // Быстрая форма вылета: только поля, которые сохранение вылета ОЧИЩАЕТ (точка, груз, примечание).
+  // Пилот и борт «липкие» — остаются после сохранения нарочно, и учёт их навсегда блокировал бы
+  // автообновление (ревью v0.29); их потеря при перезагрузке несущественна.
+  const fv=id=>{const el=document.getElementById(id);return el?String(el.value||'').trim():'';};
+  const shown=id=>{const el=document.getElementById(id);return !!el&&el.style.display!=='none';};
+  if(fv('qf-target')||fv('qf-ammo')||fv('qf-note'))r.push('заполняется форма вылета');
+  // Формы склада: поля очищаются при сохранении — непустое значит «начато и не проведено»
+  if(shown('transferCard')&&(fv('transDrone')||fv('transNote')))r.push('начата передача');
+  if(shown('exchangeCard')&&(fv('exUnit')||fv('exGive')||fv('exGet')||fv('exNote')))r.push('начат обмен');
+  if(shown('addDroneCard')&&fv('newDroneName'))r.push('начато поступление на склад');
+  // Текст для импорта, ещё не распознанный (после разбора его учитывают карточки ниже)
+  if(fv('rawMsg')&&!document.querySelector('#parsedCards [id^="pcard-"]'))r.push('текст для импорта');
+  // Ссылка нового пользователя на экране — пока открыта вкладка «Пользователи» (иначе навсегда)
+  const pa=document.getElementById('page-admin');
+  if(pa&&pa.classList.contains('active')&&shown('adm-users')&&shown('nu-link-result'))r.push('на экране ссылка пользователя');
+  const pv=document.getElementById('page-vtx');
+  if(pv&&pv.classList.contains('active')&&typeof _vtxBlocks!=='undefined'&&_vtxBlocks.length)r.push('конструктор VTX');
+  if(document.querySelector('.modal-ov')||window._woOverlay)r.push('открыт диалог');
+  if(window._parseBusy)r.push('идёт разбор сообщений');
+  // Распознанные, но не сохранённые карточки импорта (повторный разбор — снова платный запрос)
+  const pend=[...document.querySelectorAll('#parsedCards [id^="pcard-"]')].filter(c=>{
+    if(c.style.display==='none')return false;
+    const b=c.querySelector('[id^="pbtn-save-"]'); return !(b&&b.disabled);
+  });
+  if(pend.length)r.push('не сохранён импорт ('+pend.length+')');
+  if(window._reencryptBusy)r.push('идёт перешифровка облака');
+  if(typeof _userOpBusy!=='undefined'&&_userOpBusy.size)r.push('операция с пользователем');
+  const rb=document.getElementById('repRunBtn'); if(rb&&rb.disabled)r.push('формируется отчёт');
+  const rep=document.getElementById('page-report');
+  if(rep&&rep.classList.contains('active')&&(window._vrText||window._rpgText))r.push('на экране AI-отчёт');
+  return r;
+}
 
 // ============ FLIGHTS ============
 // Селектор периода журнала: Неделя (−7) / Месяц (−30) / Весь период.
@@ -4146,13 +4228,24 @@ function doLogin(){
   setStatus('loginError','Вход только по ссылке от администратора','muted');
 }
 
+// Результат: true — вход подтверждён; false — сервер ОТВЕТИЛ отказом (токен неверен/заблокирован);
+// 'offline' — сервер не ответил (нет сети, таймаут, HTML-страница Google вместо JSON). Раньше
+// оба неуспеха были false, и без сети приложение показывало экран входа — установленное PWA
+// офлайн не открывалось. Теперь 'offline' → вход по кэшу последней успешной авторизации.
+const AUTH_TIMEOUT_MS=15000;
 async function authByToken(token){
   const {url}=syncGetCfg();
   if(!url||!token)return false;
+  let d;
   try{
-    const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
-    const d=await r.json();
-    if(d.ok){
+    const ctrl=new AbortController(); const tid=setTimeout(()=>ctrl.abort(),AUTH_TIMEOUT_MS);
+    try{
+      const r=await fetch(url+'?action=auth&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow',signal:ctrl.signal});
+      d=await r.json();
+    }finally{clearTimeout(tid);}
+  }catch(e){return 'offline';}
+  try{
+    if(d&&d.ok){
       authToken=token;
       // actingRole (замещение, Backend v7.6) приходит при каждой авторизации —
       // и по ссылке, и по сохранённому токену; отдельно не персистится
@@ -4161,11 +4254,79 @@ async function authByToken(token){
       // 'Admin '/'ADMIN' (раньше это маскировал особый случай логина 'admin').
       authUser={login:String(d.login==null?'':d.login),role:String(d.role||'').toLowerCase().trim(),actingRole:_sanitizeActing(d.role,d.acting_role)}; // легаси-замещение правами не считается (как на сервере v7.9)
       localStorage.setItem('auth_token',token);
+      authCacheSave(token);
       return true;
     }
-    return false;
-  }catch(e){return false;}
+    // Отказ — только явный ok:false (сервер: 'No token' / 'Invalid token' / 'Disabled').
+    // {error:…} без ok — исключение/перегрузка Apps Script: это не «токен неверен», а сбой связи.
+    if(d&&d.ok===false){ authCacheClear(); return false; }
+    return 'offline';
+  }catch(e){return 'offline';}
 }
+// Кэш последней успешной авторизации — ТОЛЬКО для входа без сети (установленное PWA должно
+// открываться офлайн). Привязан к токену отпечатком (сам токен и так лежит в auth_token).
+// Права по кэшу — не защита: сервер проверяет роль при каждой записи; кэш лишь позволяет
+// увидеть данные и копить записи в очередь до появления связи.
+function _authTokenFp(t){let h=2166136261;const s=String(t||'');for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(36)+':'+s.length;}
+function authCacheSave(token){
+  try{localStorage.setItem('auth_user_cache',JSON.stringify({fp:_authTokenFp(token),login:authUser.login,role:authUser.role,actingRole:authUser.actingRole||'',ts:Date.now()}));}catch(e){}
+}
+function authCacheClear(){try{localStorage.removeItem('auth_user_cache');}catch(e){}}
+function authCacheLoad(token){
+  try{
+    const c=JSON.parse(localStorage.getItem('auth_user_cache')||'null');
+    if(!c||c.fp!==_authTokenFp(token)||!c.role)return null;
+    return {login:String(c.login||''),role:String(c.role||''),actingRole:_sanitizeActing(c.role,c.actingRole)};
+  }catch(e){return null;}
+}
+// Вход по кэшу состоялся без проверки сервером — при появлении связи проверяем токен заново:
+// подтверждён → обновить роль (могла смениться); отклонён → экран входа (данные в localStorage целы).
+let _authOffline=false, _authRecheckBusy=false;
+async function authRecheckOnline(){
+  if(!_authOffline||!navigator.onLine||_authRecheckBusy)return;
+  _authRecheckBusy=true;
+  try{
+    const tok=authToken||localStorage.getItem('auth_token')||'';
+    const before=authUser.role+'|'+(authUser.actingRole||'');
+    const ok=await authByToken(tok);
+    if(ok===true){
+      _authOffline=false;
+      const wasViewer=typeof syncIsViewer==='function'&&syncIsViewer();
+      // Роль применяем заново ТОЛЬКО при её смене: applyRoleFromAuth → switchRole очищает пилота
+      // в быстрой форме — посреди работы это сбрасывало бы ввод оператора (раунд 2 ревью v0.29).
+      const roleChanged=before!==authUser.role+'|'+(authUser.actingRole||'');
+      if(roleChanged)applyRoleFromAuth();
+      showSyncToast('✓ Связь восстановлена — вход подтверждён',4000);
+      // Вход в журнал — по правилу ветки 2 initAuth (раз в сутки / при смене сборки): сессия,
+      // начатая офлайн, иначе не видна в «Последнем входе» (ревью v0.29).
+      try{
+        if(localStorage.getItem('login_logged_date')!==todayISO()||localStorage.getItem('login_logged_build')!==String(APP_BUILD)){
+          logAction('auth','login','Вход: '+(authUser.login||'')+' (подтверждён после офлайн-старта)');
+          localStorage.setItem('login_logged_date',todayISO());
+          localStorage.setItem('login_logged_build',String(APP_BUILD));
+        }
+      }catch(e){}
+      if(cfg.url){
+        // Сначала выгрузить сделанное офлайн, потом загрузить облако — иначе полная загрузка
+        // приняла бы облачные версии поверх невыгруженных правок.
+        if(typeof syncFlushLocalChanges==='function')await syncFlushLocalChanges('auth-online');
+        await syncPullOnLogin();
+        if(roleChanged)applyRoleFromAuth(); // роль pilot зависит от загруженных squads
+        renderDashboard();
+      }
+      if(typeof syncIsViewer==='function'&&wasViewer!==syncIsViewer()&&typeof startPolling==='function')startPolling();
+    }else if(ok===false){
+      _authOffline=false;
+      authToken='';
+      showLoginError('Ссылка недействительна или заблокирована — войдите по новой ссылке');
+      showLoginScreen();
+    }
+  }finally{ _authRecheckBusy=false; }
+}
+window.addEventListener('online',()=>{ authRecheckOnline(); });
+// Событие 'online' приходит не всегда (сеть «есть», а сервер не отвечал) — повторная проверка
+// раз в минуту, пока вход не подтверждён сервером.
+setInterval(()=>{ if(_authOffline)authRecheckOnline(); },60000);
 
 async function initAuth(){
   // Убеждаемся что cfg загружен из localStorage
@@ -4207,7 +4368,7 @@ async function initAuth(){
     authToken=urlToken;
     localStorage.setItem('auth_token',urlToken);
     const ok=await authByToken(urlToken);
-    if(ok){
+    if(ok===true){
       applyRoleFromAuth();
       hideLoginScreen();
       // ВАЖНО: logAction — только ПОСЛЕ установки cfg.url/authToken (строки выше),
@@ -4223,11 +4384,13 @@ async function initAuth(){
       applyRoleFromAuth();
       renderDashboard();
       return;
-    } else {
+    } else if(ok===false){
       showLoginError('Ссылка недействительна или устарела');
       authToken='';
       localStorage.removeItem('auth_token');
     }
+    // ok==='offline': сервер не ответил — токен из ссылки не отвергнут, он уже сохранён;
+    // дальше ветка 2 попробует ещё раз и при необходимости войдёт по кэшу.
   }
 
   // 2. Проверяем сохранённый токен
@@ -4236,11 +4399,22 @@ async function initAuth(){
     authToken=saved;
     // Пробуем дважды — сеть может быть нестабильна
     let ok=await authByToken(saved);
-    if(!ok){
+    if(ok!==true){
       await new Promise(r=>setTimeout(r,1500));
       ok=await authByToken(saved);
     }
-    if(ok){
+    // Нет связи, но этот токен уже входил на устройстве — работаем по кэшу входа (офлайн PWA).
+    // Проверка сервером — при появлении сети (authRecheckOnline).
+    const cached=ok==='offline'?authCacheLoad(saved):null;
+    if(cached){
+      authUser=cached; _authOffline=true;
+      applyRoleFromAuth();
+      hideLoginScreen();
+      showSyncToast('⚠ Нет связи с сервером — работа по сохранённому входу, записи копятся в очереди',8000);
+      console.warn('[AUTH] офлайн-вход по кэшу авторизации ('+authUser.login+')');
+      return;
+    }
+    if(ok===true){
       applyRoleFromAuth();
       hideLoginScreen();
       // Логируем вход по сохранённому токену. Раньше логировался ТОЛЬКО первый вход
@@ -4261,6 +4435,7 @@ async function initAuth(){
       authToken='';
       // НЕ удаляем токен — возможно временная ошибка сети
       // localStorage.removeItem('auth_token');
+      if(ok==='offline')showLoginError('Нет связи с сервером — повторите, когда появится сеть (F5)');
     }
   }
 
@@ -4363,6 +4538,8 @@ function syncApplyActingRole(users){
     msgs.push('Роль вашей учётки изменена: '+was+' → '+role+(was==='viewer'?' — обновите страницу (F5), чтобы включилась синхронизация':''));
   }
   if(actingChanged){ authUser.actingRole=acting; msgs.push(acting?('Вам назначено замещение: '+acting):'Замещение снято'); }
+  // Кэш офлайн-входа — с новой ролью: иначе следующий старт без сети вернул бы прежние права (ревью v0.29)
+  if(authToken&&typeof authCacheSave==='function')authCacheSave(authToken);
   showSyncToast(msgs.join(' · '),8000); // один тост: два подряд затирали друг друга (ревью 25.09)
   switchRole(state.role);          // canEdit-кнопки/панели под новую эффективную роль
   applyRoleFromAuth();             // бейдж «и.о.» в topbar
@@ -4560,7 +4737,8 @@ async function _adminPost(payload){
   if(!url||!authToken)return {ok:false,error:'Нет URL или токена'};
   const res=await syncPost(url,JSON.stringify({...payload,admin_token:authToken}));
   if(res.ok)return {ok:true,unverified:!!res.unverified,data:res.data};
-  const err=String(res.error||'ошибка');
+  // v7.10: отказы новых действий — {error:'<код>', message:'<текст для человека>'}; показываем текст
+  const err=String((res.data&&res.data.message)||res.error||'ошибка');
   if(/^Unknown:/.test(err))return {ok:false,error:'Сервер не знает эту операцию — нужен Backend v7.9 (выпустите новую версию развёртывания)'};
   return {ok:false,error:err};
 }
@@ -4770,7 +4948,7 @@ async function _regenerateTokenImpl(login){
     // список для СВОЕЙ учётки нельзя: старый токен уже недействителен — раньше админ получал
     // «Unauthorized», ссылки не видел и терял вход (ревью 25.09).
     let token=(r.data&&r.data.token)?String(r.data.token):'';
-    if(self&&token){ authToken=token; try{ localStorage.setItem('auth_token',token); }catch(e){} }
+    if(self&&token){ authToken=token; try{ localStorage.setItem('auth_token',token); }catch(e){} if(typeof authCacheSave==='function')authCacheSave(token); } // кэш офлайн-входа привязан к токену (v0.29)
     logAction('user','token','Новая ссылка (смена токена) для '+login);
     if(!token&&!self){
       if(r.unverified)await new Promise(res=>setTimeout(res,2000)); // ответ no-cors непроверяем — ждём обработку
@@ -4942,6 +5120,7 @@ function renderFlightEditRow(x, realIdx){
 // Молчаливый провал недопустим: раньше при устаревшем индексе функция просто выходила,
 // и клик по ✓ выглядел как сохранение (ни очереди, ни записи, после F5 старое значение).
 function saveFlightEdit(key){
+  if(!guardWrite())return; // версия устарела / смешанная загрузка (viewer сюда не доходит — окна правки у него нет)
   const f=_flightByKey(key);
   if(!f){ alert('Запись не найдена — журнал изменился. Обновите страницу (F5) и повторите правку.'); return; }
   if(!canEditFlight(f)){
@@ -5320,13 +5499,11 @@ async function ammoSaveToCloud(){
   const st=document.getElementById('ammo-status');
   st.textContent='Сохраняю...';
   try{
-    const body=JSON.stringify({action:'update_ammo',admin_token:token,items:ammoCatalog});
-    try{
-      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'cors',redirect:'follow'});
-    }catch(e){
-      await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain'},body,mode:'no-cors'});
-    }
-    st.textContent='✓ Сохранено в облако';st.style.color='var(--green2)';
+    // Через syncPost (v0.29): единая точка POST — сборка клиента в теле, отказ сервера виден
+    // (раньше прямой fetch с no-cors-фолбэком показывал «сохранено» и при ошибке сервера).
+    const res=await syncPost(url,JSON.stringify({action:'update_ammo',admin_token:token,items:ammoCatalog}));
+    if(!res.ok)throw new Error(res.error||'ошибка записи');
+    st.textContent=res.unverified?'✓ Отправлено (ответ сервера не прочитан)':'✓ Сохранено в облако';st.style.color='var(--green2)';
   }catch(e){st.textContent='Ошибка: '+e.message;st.style.color='var(--red)';}
 }
 
@@ -5419,7 +5596,7 @@ function logAction(type, action, details){
     time:nowHM(),
     user:authUser.login||'unknown',
     role:authUser.role||'',
-    build:APP_BUILD, // сборка клиента (25.09.2026): Пользователи → «Последний вход» показывает, кому обновиться
+    build:(typeof APP_BUILD==='number'?APP_BUILD:0), // без version.js (смешанная загрузка) — не падать; сборка клиента (25.09.2026): Пользователи → «Последний вход» показывает, кому обновиться
     type,action,details
   };
   actLog.unshift(entry);
@@ -5644,10 +5821,13 @@ async function cfgReencrypt(){
   if(!newKey){setStatus(STAT,'Введите новый ключ','err');return;}
   if(newKey!==newKey2){setStatus(STAT,'Новый ключ и подтверждение не совпадают','err');return;}
   if(newKey===oldKey){setStatus(STAT,'Новый ключ совпадает со старым','err');return;}
-  if(!confirm('Сменить ключ и перешифровать ВСЕ данные в облаке?\nПосле этого все пользователи должны будут ввести новый ключ.'))return;
+  if(!confirm('Сменить ключ и перешифровать ВСЕ данные в облаке?\nПосле этого все пользователи должны будут ввести новый ключ.\n\nЖурнал действий (actlog) в облаке НЕ перешифровывается — сервер принимает его только дозаписью: прежние записи журнала станут нечитаемыми, новые пишутся новым ключом.'))return;
 
-  const sheets=['flights','stock','squads','transfers','actlog'];
+  // actlog исключён (ревью v0.29): writeAll сервера пишет только flights/stock/squads/transfers —
+  // перешифрованный actlog молча отбрасывался, а «перешифровано N» считал и его строки.
+  const sheets=['flights','stock','squads','transfers'];
   if(btn)btn.disabled=true;
+  window._reencryptBusy=true; // автообновление версии (update.js) не перезагружает посреди перешифровки
   try{
     // 1. Читаем сырые строки всех листов
     setStatus(STAT,'Загрузка из облака...','muted');
@@ -5699,6 +5879,7 @@ async function cfgReencrypt(){
     setStatus(STAT,'Ошибка: '+e.message+' — ключ НЕ изменён','err');
   }finally{
     if(btn)btn.disabled=false;
+    window._reencryptBusy=false;
   }
 }
 
@@ -5816,8 +5997,16 @@ renderSettingsStatus();
 ammoLoad();
 actLogLoad();
 document.getElementById('nu-enckey').value=cfg.key||'';
+// Контроль версии (update.js) — ДО initAuth: проверка «все файлы одной сборки» должна
+// успеть заблокировать запись раньше, чем вход/синхронизация что-нибудь отправят.
+if(typeof updInit==='function')try{updInit();}catch(e){console.error('[UPD] init error:',e);}
 // initAuth вызываем последним — он использует cfg.url и cfg.key
 // catch — страховка от вечно скрытого .app (visibility:hidden в index.html):
 // при неожиданной ошибке initAuth показываем интерфейс, а не пустую страницу.
 initAuth().catch(e=>{ console.error('[AUTH] initAuth error:', e); hideLoginScreen(); })
-  .then(()=>{ startPolling(); syncQueueStartupCheck(); });
+  .then(()=>{
+    startPolling(); syncQueueStartupCheck();
+    // Невыгруженное с прошлой сессии (перезагрузка/автообновление посреди выгрузки, работа офлайн):
+    // правки, склад и очередь уходят сразу, а не при следующей операции оператора (ревью v0.29).
+    setTimeout(()=>{ if(typeof syncFlushLocalChanges==='function') syncFlushLocalChanges('start'); },4000);
+  });

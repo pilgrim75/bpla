@@ -1,3 +1,4 @@
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['sync.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
 // sync.js — Sync Module v2 (часть app.js, грузить ПЕРВЫМ)
 // ============================================================
 // SYNC MODULE v2 — переписан с нуля
@@ -38,10 +39,36 @@ function syncGetCfg(){
 // Защита на уровне sync-слоя — все точки записи проходят через эти функции,
 // поэтому работает независимо от скрытия кнопок в UI. Исключение — actlog
 // (appendToCloud): аудит входов наблюдателя должен фиксироваться.
+// С v0.29 (контроль версии) сюда же входят два состояния устройства, при которых писать
+// в облако НЕЛЬЗЯ, даже если роль позволяет (update.js):
+//  • «версия устарела» — сборка ниже min_client_build сервера (сервер v7.10 всё равно отклонит
+//    запись; отказ здесь нужен, чтобы клиент не бился в стену и не строил иллюзию «сохранено»);
+//  • «смешанная загрузка» — файлы разных сборок в одной вкладке (новый index + старый sync.js).
+// Очередь при этом НЕ трогается: отложенные записи доедут после обновления (подтверждение
+// доставки — по id из облака, формат очереди между версиями стабилен). actlog разрешён, как
+// наблюдателю: событие «устарел» должно попасть в журнал (сервер принимает actlog всегда).
 function syncReadOnly(){
+  if(syncWriteBlockedByVersion()) return true;
+  return syncIsViewer();
+}
+// Только роль (без состояний версии): решения о РЕЖИМЕ поллинга — наблюдателю быстрый
+// поллинг не нужен, а устаревшему устройству нужен (узнать, что минимум снят, и читать данные).
+function syncIsViewer(){
   try{
     return ((typeof state!=='undefined'&&state.role)||(window.authUser&&authUser.role)||'')==='viewer';
   }catch(e){ return false; }
+}
+function syncWriteBlockedByVersion(){
+  try{ return typeof updWriteBlocked==='function' && updWriteBlocked(); }catch(e){ return false; }
+}
+// Номер сборки этого клиента (version.js). typeof — для vm-тестов, где version.js не грузят.
+function syncClientBuild(){
+  try{ return typeof APP_BUILD==='number' ? APP_BUILD : 0; }catch(e){ return 0; }
+}
+// min_client_build из ответа read/read_since (Backend v7.10) — основной канал: GET читается
+// всегда, поэтому устройство узнаёт о минимуме ДО попытки записи (ответ no-cors POST нечитаем).
+function syncNoteMinBuild(d){
+  try{ if(d && d.min_client_build!==undefined && typeof updSetMinBuild==='function') updSetMinBuild(d.min_client_build, 'read'); }catch(e){}
 }
 
 // === Защита шифртекста от порчи Google Sheets (#ERROR!) ===
@@ -119,7 +146,18 @@ function syncDedupeById(rows){
   return rows.filter(x=>{ if(!x.id) return true; if(seen.has(x.id)) return false; seen.add(x.id); return true; });
 }
 
+// Сборка клиента в КАЖДОМ POST (v0.29): единственная точка — сервер v7.10 сверяет её с
+// meta.min_client_build и отклоняет write/append_one устаревших клиентов (кроме actlog).
+// Правка строки, а не JSON.parse/stringify: полный write — мегабайты шифртекста, разбирать
+// его ради одного поля незачем. Ключ ставится ПЕРВЫМ — поле тела с тем же именем (если
+// когда-нибудь появится) перекроет его при разборе на сервере, как и положено явному значению.
+function syncWithClientBuild(body){
+  if(typeof body!=='string' || body.charAt(0)!=='{') return body;
+  const cb='"client_build":'+syncClientBuild();
+  return body==='{}' ? '{'+cb+'}' : '{'+cb+','+body.slice(1);
+}
 async function syncPost(url, body){
+  body = syncWithClientBuild(body);
   // Всегда cors+redirect:follow; при сетевой ошибке/таймауте — no-cors
   try{
     const ctrl = new AbortController();
@@ -140,7 +178,12 @@ async function syncPost(url, body){
     }
     // Сервер ОТВЕТИЛ ошибкой — запрос дошёл; повтор через no-cors бессмыслен и раньше
     // МАСКИРОВАЛ ошибку как «unverified успех» (v7.8: конфликт версий склада должен быть виден).
-    if(d.error) return { ok:false, error:d.error, serverError:true, data:d };
+    if(d.error){
+      // Второй канал контроля версии: сервер отклонил запись как устаревшую — включить режим
+      // «только чтение» сразу, не дожидаясь очередного read_since.
+      if(d.error==='client_outdated'){ try{ if(typeof updSetMinBuild==='function') updSetMinBuild(d.min_build, 'post'); }catch(e){} }
+      return { ok:false, error:d.error, serverError:true, data:d };
+    }
     return { ok:true, data:d };
   }catch(e){
     try{
@@ -183,6 +226,45 @@ function syncLogEvent(action, details){
 // синхронизация» означала полный обмен, а не частичный.
 function syncStampLastSync(){
   try{ localStorage.setItem('last_sync', String(Date.now())); }catch(e){}
+}
+
+// Невыгруженные правки (ревью v0.29, 25.09.2026) — метка в localStorage, переживает перезагрузку.
+// Правка СУЩЕСТВУЮЩЕЙ записи (вылет/передача) в очередь не попадает — её выгружает только полная
+// запись syncPushAll (debounce saveLocal 2 с). Если до неё страница перезагрузилась (F5,
+// автообновление версии), пропала сеть, устройство вошло офлайн (PWA) или запись запрещена
+// («версия устарела»), плановая полная загрузка при пустой очереди ЗАМЕНЯЛА локальные записи
+// облачными — правка молча откатывалась (вплоть до осиротевшей потери: loss уже в облаке,
+// а «вернул→потерян» откатился). Теперь saveLocal ставит метку-поколение, успешная полная запись
+// снимает её, ТОЛЬКО если поколение не выросло за время выгрузки; при метке полная загрузка лишь
+// доливает новое из облака (как при непустой очереди), а досыл идёт первым (syncFlushLocalChanges).
+// Ограничение модели прежнее: одновременная правка одной записи на двух устройствах — last-write-wins.
+const SYNC_DIRTY_KEY='sync_full_dirty';
+function syncDirtyGen(){ try{ return +(localStorage.getItem(SYNC_DIRTY_KEY)||0)||0; }catch(e){ return 0; } }
+function syncHasDirty(){ return syncDirtyGen()>0; }
+function syncMarkDirty(){
+  if(syncIsViewer()) return; // наблюдатель не правит — у него метка не снималась бы никогда
+  try{ localStorage.setItem(SYNC_DIRTY_KEY, String(Math.max(syncDirtyGen()+1, Date.now()))); }catch(e){}
+}
+function syncClearDirty(gen){ try{ if(gen===undefined||syncDirtyGen()===gen) localStorage.removeItem(SYNC_DIRTY_KEY); }catch(e){} }
+
+// Досыл ВСЕГО невыгруженного: очередь, полные правки (метка), склад (неподтверждённый пуш или
+// дельта «локаль − база»). Точки: старт после входа, появление сети, снятие блокировки версии,
+// подтверждение офлайн-входа. Раньше склад и правки ждали следующей операции оператора.
+async function syncFlushLocalChanges(reason){
+  const {url,token}=syncGetCfg();
+  if(!url||!token||!navigator.onLine) return;
+  // Очередь — ДО проверки «только чтение»: у наблюдателя и «устаревшего» устройства в ней actlog,
+  // который досылается всегда (фильтр — в самой очереди; ревью v0.29, раунд 2).
+  try{ syncFlushQueue(); }catch(e){}
+  if(syncReadOnly()) return;
+  if(syncHasDirty()){
+    console.log('[SYNC] досыл невыгруженных правок ('+(reason||'')+')');
+    try{ await syncPushAll(true); }catch(e){}
+  }
+  try{
+    const delta=!!_stockBase&&syncStockHash(state.stock,state.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads);
+    if(syncStockHasPending()||delta) syncPushStockSquads();
+  }catch(e){}
 }
 
 function syncIndicator(state){
@@ -272,6 +354,14 @@ async function trySendQueueItem(item, url, key, token){
       row: enc
     });
     const res = await syncPost(url, body);
+    // Backend v7.10: id уже в листе tombstones (запись удалена) — сервер её не примет НИКОГДА
+    // и не вернёт в read, т.е. подтверждения доставки не будет. Снимаем из очереди, иначе
+    // элемент ретраился бы вечно (удалённое отправлять незачем — удаление уже в облаке).
+    if(res.ok && res.data && res.data.status==='skipped'){
+      pendingQueue.remove(_qid(item));
+      console.log('[SYNC] append_one пропущен сервером (запись удалена):', _qid(item));
+      return;
+    }
     if(res.ok||res.serverError) pendingQueue.markTried(_qid(item)); // ответ сервера (в т.ч. ошибка) = попытка была
     if(res.serverError) console.warn('[SYNC] append_one отклонён сервером:', res.error);
   }catch(e){ console.warn('[SYNC] send error:', e.message); }
@@ -308,7 +398,27 @@ class _TombSet extends Set{
   add(v){ return super.add(String(v)); }
   has(v){ return super.has(String(v)); }
   delete(v){ return super.delete(String(v)); }
+  // Удалена ли запись ЭТОГО листа ('flights'|'transfers'). Для всех id — как has(), кроме
+  // неоднозначных легаси-id (TOMB_AMBIGUOUS): там действует только удаление со своим листом.
+  hasIn(sheet,v){
+    const s=String(v);
+    if(super.has(sheet+':'+s)) return true;
+    if(!super.has(s)) return false;
+    if(TOMB_AMBIGUOUS.has(s)) return TOMB_LEGACY_SCOPE[s]===sheet;
+    return true;
+  }
 }
+// Неоднозначные легаси-id (ревью v0.29, 25.09.2026). 13 майских id выдавались одной пачкой и
+// существуют И в flights, И в transfers (1779879431152…164). Набор удалённых id общий для
+// обоих листов, поэтому tombstone одной записи скрывал и стирал вторую: 25.09, когда id стали
+// сравниваться строкой (_TombSet), пропал вылет …160 (Поп, ПВХ1, 26.05 08:14) — tombstone плана Б
+// 21.08 предназначался ДУБЛЮ ПЕРЕДАЧИ с тем же id. Для этих id удаление действует только на свой
+// лист: новое публикуется с префиксом ('flights:'/'transfers:'+id, syncPublishTombstones), старый
+// беспрефиксный tombstone …160 относится к transfers. Новые id (<ts>_<тип>_<случайное>)
+// пересечься не могут — для них всё как раньше. Те же константы — в backend.gs (v7.10).
+const TOMB_AMBIGUOUS=new Set(['1779879431152','1779879431153','1779879431154','1779879431155','1779879431156',
+  '1779879431157','1779879431158','1779879431159','1779879431160','1779879431161','1779879431162','1779879431163','1779879431164']);
+const TOMB_LEGACY_SCOPE={'1779879431160':'transfers'};
 // --- Tombstones (удалённые вылеты/loss-передачи) ---
 // Хранение: [{id,ts}] — ts нужен для чистки старых записей (раньше — массив id,
 // рос бесконечно; старый формат мигрируется на лету с ts=сейчас).
@@ -364,11 +474,23 @@ tombstones.prune(); // при каждом запуске
 // ВАЖНО: слияние ВХОДЯЩИХ облачных tombstones (syncMergeCloudTombstones) пишет в
 // набор через tombstones.addMany НАПРЯМУЮ, без публикации — иначе полученные с
 // другого устройства удаления уходили бы обратно в облако по кругу.
-function syncPublishTombstones(ids){
-  const arr=(Array.isArray(ids)?ids:[ids]).filter(x=>x!=null&&x!=='');
+// scope — лист удаляемых записей ('flights'|'transfers'). Обязателен для неоднозначных легаси-id
+// (TOMB_AMBIGUOUS): им публикуется 'лист:id', без листа такой id НЕ публикуется — иначе удаление
+// задело бы одноимённую запись другого листа (так пропал вылет …160, см. TOMB_AMBIGUOUS).
+function syncPublishTombstones(ids, scope){
+  const arr=(Array.isArray(ids)?ids:[ids]).filter(x=>x!=null&&x!=='').map(id=>{
+    const s=String(id);
+    if(!TOMB_AMBIGUOUS.has(s)) return id;
+    if(scope==='flights'||scope==='transfers') return scope+':'+s;
+    console.warn('[TOMB] неоднозначный легаси-id '+s+' без указания листа — удаление не публикуется');
+    return null;
+  }).filter(x=>x!=null);
   if(!arr.length) return;
   tombstones.addMany(arr);                  // локальная страховка (как было раньше)
-  if(syncReadOnly()) return;                // наблюдатель в облако не пишет
+  // По РОЛИ: наблюдатель не публикует. Устаревшая версия (update.js) — в очередь можно, её
+  // отправку держит syncFlushQueue до обновления; иначе удаление, сделанное за миг до перехода
+  // в «только чтение», не дошло бы до облака никогда.
+  if(syncIsViewer()) return;
   const {url,token}=syncGetCfg();
   if(!url||!token) return;                   // локальный режим — публиковать некуда
   // id строки-tombstone = id удаляемой записи → серверный appendOne идемпотентен
@@ -387,6 +509,41 @@ function syncMergeCloudTombstones(rows){
   return ids;
 }
 
+// Разовая публикация ЛОКАЛЬНЫХ tombstone'ов устройства в облачный лист (v0.29, из консоли).
+// С Backend v7.10 лист tombstones — источник истины «что удалено» и для сервера: append_one/
+// write не принимают такие id, read их не отдаёт. Удаление, сделанное до Пути Б (17.06) или
+// не доехавшее до облака, живёт только в localStorage этого устройства — сервер о нём не знает,
+// и стейл-устройство может вернуть запись. Сухой прогон по умолчанию; только учётка admin.
+// Опасный случай — локальный tombstone на запись, ЖИВУЮ в облаке: публикация скроет её на
+// всех устройствах. Такие id только перечисляются; публикуются лишь с {includeLive:true}.
+// id публикуются в ИСХОДНОМ типе (число у легаси-записей) — как чистка 25.09.
+async function syncPublishLocalTombstones(confirm_=false, opts={}){
+  if(typeof isAdminAccount==='function' && !isAdminAccount()){ console.warn('[TOMB] только учётка admin'); return null; }
+  const {url,token}=syncGetCfg();
+  if(!url||!token){ console.warn('[TOMB] облако не настроено'); return null; }
+  const d=await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
+  if(d.error){ console.warn('[TOMB]', d.error); return null; }
+  const cloud=new _TombSet((d.tombstones||[]).map(r=>r&&r.id).filter(x=>x!=null&&x!==''));
+  const ids=rows=>new _TombSet((rows||[]).map(r=>r&&r.id).filter(x=>x!=null&&x!==''));
+  const liveF=ids(d.flights), liveT=ids(d.transfers);
+  // Tombstone с префиксом листа ('flights:id'/'transfers:id', неоднозначные легаси-id) живым считаем
+  // только по своему листу (раунд 2 ревью v0.29)
+  const isLive=id=>{ const m=/^(flights|transfers):(.+)$/.exec(String(id)); if(m) return (m[1]==='flights'?liveF:liveT).has(m[2]); return liveF.has(id)||liveT.has(id); };
+  const seen=new _TombSet(), missing=[];
+  tombstones._load().forEach(x=>{ const id=x.id; if(id==null||id===''||seen.has(id)||cloud.has(id)) return; seen.add(id); missing.push(id); });
+  const liveIds=missing.filter(isLive);
+  const toPublish=opts.includeLive ? missing : missing.filter(id=>!isLive(id));
+  const plan={local:tombstones._load().length, cloud:cloud.size, missing:missing.length, liveInCloud:liveIds, toPublish:toPublish.length};
+  console.log('[TOMB] план:', plan);
+  if(liveIds.length) console.warn('[TOMB] '+liveIds.length+' локальных tombstone на ЖИВЫЕ записи облака — публикуются только с {includeLive:true}:', liveIds);
+  if(!confirm_ || !toPublish.length) return plan;
+  if(syncReadOnly()){ console.warn('[TOMB] запись сейчас запрещена (наблюдатель / версия устарела)'); return plan; }
+  toPublish.forEach(id=>pendingQueue.add({type:'tombstone', data:{id}}));
+  if(navigator.onLine) syncFlushQueue();
+  syncLogEvent('tomb_publish_local', 'Разовая публикация локальных tombstone: '+toPublish.length+(opts.includeLive?' (в т.ч. живых: '+liveIds.length+')':''));
+  return {...plan, published:toPublish.length};
+}
+
 // Убрать из state записи, попавшие в tombstones. Существующие фильтры чтения гейтят
 // только ДОБАВЛЕНИЕ из облака — этот проход чистит уже присутствующие записи (удалённые
 // на другом устройстве могли отрендериться до прихода tombstone). Порядок прихода не
@@ -396,7 +553,7 @@ function syncPruneStateByTombstones(){
   let removed=false;
   if(Array.isArray(state.flights)){
     const n=state.flights.length;
-    state.flights=state.flights.filter(f=>!f.id||!tb.has(f.id));
+    state.flights=state.flights.filter(f=>!f.id||!tb.hasIn('flights',f.id));
     if(state.flights.length!==n) removed=true;
   }
   if(Array.isArray(state.transfers)){
@@ -405,8 +562,8 @@ function syncPruneStateByTombstones(){
     // снимок склада устройства, сделавшего удаление (syncDeleteFlight → _compensateRemovedLosses
     // → push); локальная компенсация задвоила бы её тем же merge (форензика 06.09, §7).
     // Только считаем — pollCloud после приёма запускает самопроверку qty vs ledger.
-    syncPruneStateByTombstones.lastLoss=state.transfers.filter(t=>t.id&&tb.has(t.id)&&t.type==='loss').length;
-    state.transfers=state.transfers.filter(t=>!t.id||!tb.has(t.id));
+    syncPruneStateByTombstones.lastLoss=state.transfers.filter(t=>t.id&&tb.hasIn('transfers',t.id)&&t.type==='loss').length;
+    state.transfers=state.transfers.filter(t=>!t.id||!tb.hasIn('transfers',t.id));
     if(state.transfers.length!==n) removed=true;
   }
   return removed;
@@ -744,14 +901,17 @@ let _lastStockTs = 0;
 
 // Добавить вылет — кэшируем в очередь, сразу пробуем отправить (если есть сеть)
 async function syncAddFlight(flight){
-  if(syncReadOnly()) return; // viewer не добавляет вылеты
+  // По РОЛИ, а не syncReadOnly(): вызывающий уже прошёл guardWrite, но между ним и этой строкой
+  // бывает await (диалог дубля) — устройство могло стать «устаревшим» (update.js). Тихий return
+  // здесь потерял бы вылет; вместо этого он сохраняется и ждёт в очереди обновления.
+  if(syncIsViewer()) return; // viewer не добавляет вылеты
   if(!flight.id) flight.id = genId('f');
   state.flights.unshift(flight);
   saveLocal();
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;                          // локальный режим — облака нет, очередь не нужна
   pendingQueue.add({type:'flight', data:flight});   // кэш до подтверждения доставки
-  if(!navigator.onLine) return;                     // нет сети — лежит в очереди до восстановления
+  if(!navigator.onLine||syncWriteBlockedByVersion()) return; // нет сети / версия устарела — ждёт в очереди
   await trySendQueueItem({type:'flight', data:flight}, url, key, token);
 }
 
@@ -832,7 +992,8 @@ async function syncDeleteFlight(idx){
   // merge в syncPushAll/pollCloud/syncPullAll не вернул их из облака обратно.
   // Путь Б: пометить локально + опубликовать удаление в облачный лист tombstones
   // (доставка с ретраем) — чтобы удаление дошло до других устройств.
-  syncPublishTombstones([f.id, ...removedTransfers.map(t=>t.id)]);
+  syncPublishTombstones([f.id],'flights'); // лист — для неоднозначных легаси-id (TOMB_AMBIGUOUS)
+  syncPublishTombstones(removedTransfers.map(t=>t.id),'transfers');
   state.flights.splice(idx,1);
   // Risk 3: НЕ делаем syncPushAll (полный write затирает чужие, ещё не сполленные
   // вылеты/передачи). Удаление держится локально на tombstone; склад/расчёты
@@ -856,13 +1017,13 @@ function syncEditFlight(idx, field, val){
 
 // Добавить transfer/arrival/loss — кэшируем в очередь, сразу пробуем отправить
 async function syncAddTransfer(op){
-  if(syncReadOnly()) return; // viewer не пишет передачи
+  if(syncIsViewer()) return; // viewer не пишет передачи (по роли — см. syncAddFlight)
   if(!op.id) op.id = genId('t');
   if(op && (op.geo_points_db||op.geo||op.color_key)) return; // ГЕО не синхронизируется
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;                       // локальный режим — облака нет, очередь не нужна
   pendingQueue.add({type:'transfer', data:op});  // кэш до подтверждения доставки
-  if(!navigator.onLine) return;
+  if(!navigator.onLine||syncWriteBlockedByVersion()) return; // версия устарела — ждёт в очереди
   await trySendQueueItem({type:'transfer', data:op}, url, key, token);
 }
 
@@ -871,12 +1032,19 @@ async function syncAddTransfer(op){
 // разных функций) раньше могли перегонять друг друга; теперь — по одному, повторный вызов
 // во время пуша планирует ровно один дополнительный прогон.
 let _stockPushChain = Promise.resolve(), _stockPushQueued = false;
+// Пуш склада в полёте (запланирован или идёт). Читает update.js: автоперезагрузка в этот
+// момент оборвала бы merge/подтверждение (неподтверждённый пуш переживает перезагрузку
+// через _stockPending, но пре-чек и слияние лучше не рвать без нужды).
+let _stockPushPending = 0;
+function syncStockPushBusy(){ return _stockPushPending>0; }
 function syncPushStockSquads(){
   if(_stockPushQueued) return _stockPushChain;
   _stockPushQueued = true;
+  _stockPushPending++;
   _stockPushChain = _stockPushChain
     .then(()=>{ _stockPushQueued=false; return _syncPushStockSquadsNow(); })
-    .catch(e=>console.warn('[SYNC] stock push error:', e&&e.message));
+    .catch(e=>console.warn('[SYNC] stock push error:', e&&e.message))
+    .finally(()=>{ _stockPushPending--; });
   return _stockPushChain;
 }
 async function _syncPushStockSquadsNow(){
@@ -1009,7 +1177,34 @@ async function syncStockResolveConflict(info, pushed){
 // локально (merge по id, исключая tombstones) — чтобы полный write не стёр чужие
 // записи, ещё не полученные поллингом. Локальные данные при этом не теряются:
 // итоговый снимок = (локальное) ∪ (облачное) − (удалённое локально).
-async function syncPushAll(silent=false){
+// Обёртка: счётчик «полная выгрузка в полёте» (автообновление версии не перезагружает посреди неё)
+// и снятие метки невыгруженных правок — только при подтверждённой записи (ответ сервера прочитан)
+// и если за время выгрузки не было новой правки (поколение то же).
+let _fullPushBusy=0;
+function syncFullPushBusy(){ return _fullPushBusy>0; }
+// Однопоточная (раунд 2): при появлении связи после офлайн-входа досыл звали сразу несколько
+// точек — шли 2–3 параллельные полные выгрузки (каждая = полный read + полный write). Вызов во
+// время выгрузки ставит ОДИН повтор после неё (правка могла появиться) и ждёт его.
+let _pushAllRun=null, _pushAllAgain=false;
+function syncPushAll(silent=false){
+  if(_pushAllRun){ _pushAllAgain=true; return _pushAllRun; }
+  _pushAllRun=(async()=>{
+    let ok;
+    try{ do{ _pushAllAgain=false; ok=await _syncPushAllOnce(silent); }while(_pushAllAgain); return ok; }
+    finally{ _pushAllRun=null; }
+  })();
+  return _pushAllRun;
+}
+async function _syncPushAllOnce(silent){
+  const gen=syncDirtyGen();
+  _fullPushBusy++;
+  try{
+    const ok=await _syncPushAllNow(silent);
+    if(ok===true&&gen) syncClearDirty(gen);
+    return ok;
+  }finally{ _fullPushBusy--; }
+}
+async function _syncPushAllNow(silent=false){
   if(syncReadOnly()) return; // viewer не пишет в облако (ambient-write в т.ч.)
   const {url,key,token} = syncGetCfg();
   if(!url) return;
@@ -1032,9 +1227,9 @@ async function syncPushAll(silent=false){
       // Дедуп дубль-строк облака — иначе обе копии одного id пройдут фильтр !localFIds
       const cloudF=syncDedupeById(cloudFRaw), cloudT=syncDedupeById(cloudTRaw);
       const localFIds = new Set(state.flights.map(f=>f.id).filter(Boolean));
-      const addF = cloudF.filter(f=>f.id && !localFIds.has(f.id) && !tb.has(f.id));
+      const addF = cloudF.filter(f=>f.id && !localFIds.has(f.id) && !tb.hasIn('flights',f.id));
       const localTIds = new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
-      const addT = cloudT.filter(t=>t.id && !localTIds.has(t.id) && !tb.has(t.id));
+      const addT = cloudT.filter(t=>t.id && !localTIds.has(t.id) && !tb.hasIn('transfers',t.id));
       if(addF.length){
         state.flights = [...state.flights, ...addF]
           .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
@@ -1099,7 +1294,8 @@ async function syncPushAll(silent=false){
     console.warn('[SYNC] pushAll failed:', res.error);
     if(!silent){ syncIndicator('error'); }
   }
-  return res.ok;
+  // 'unverified' (no-cors: ответ не прочитан) — истинно для вызывающих, но метку правок не снимает
+  return res.ok ? (res.unverified ? 'unverified' : true) : false;
 }
 
 // Точечная выгрузка ТОЛЬКО листа flights (action:'write' с data={flights}).
@@ -1147,12 +1343,26 @@ function syncFlushQueue(){
   return _flushRun;
 }
 async function _syncFlushQueueOnce(){
-  const q = pendingQueue.all();
+  let q = pendingQueue.all();
   if(!q.length) return;
   const {url,key,token} = syncGetCfg();
   if(!url||!token||!navigator.onLine) return;
+  // Удалённая запись, так и не доехавшая до облака (удалили раньше, чем подтвердилась
+  // доставка): с Backend v7.10 сервер её отвергнет, а read не вернёт — подтверждения не будет
+  // никогда. Снимаем из очереди сами; её tombstone уходит отдельным элементом и остаётся.
+  const tb = tombstones.load();
+  const dead = q.filter(x=>(x.type==='flight'||x.type==='transfer'||!x.type) && x.data && x.data.id!=null && tb.hasIn(x.type==='flight'?'flights':'transfers', x.data.id));
+  if(dead.length){
+    dead.forEach(x=>pendingQueue.remove(_qid(x)));
+    console.log('[QUEUE] снято удалённых до доставки:', dead.length);
+    q = pendingQueue.all();
+  }
+  // Версия устарела / смешанная загрузка: данные НЕ шлём (сервер отклонит, а клиент изобразил
+  // бы «отправку»), элементы остаются в очереди до обновления. actlog — можно (как наблюдателю).
+  const blocked = syncWriteBlockedByVersion();
   const now = Date.now();
   for(const item of q){
+    if(blocked && item.type!=='actlog') continue;
     if(item.lastTryTs && now-item.lastTryTs < QUEUE_RETRY_MS) continue; // ждём подтверждения
     await trySendQueueItem(item, url, key, token);
   }
@@ -1171,6 +1381,7 @@ async function syncPullAll(confirm_=false){
   try{
     const d = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
     if(d.error) throw new Error(d.error);
+    syncNoteMinBuild(d); // контроль версии (v7.10): минимальная сборка клиента
     const loaded = {
       // flights/transfers — дедуп по id: дубль-строки облака иначе попадут в журнал
       // парой при полной замене (pollCloud дедупит сам, полная загрузка — нет)
@@ -1192,8 +1403,8 @@ async function syncPullAll(confirm_=false){
     if(typeof syncApplyActingRole==='function') syncApplyActingRole(loaded.users);
     // Фильтруем tombstones (и удалённые вылеты, и удалённые loss-передачи)
     const tb = tombstones.load();
-    loaded.flights   = loaded.flights.filter(f=>!tb.has(f.id));
-    loaded.transfers = loaded.transfers.filter(t=>!tb.has(t.id));
+    loaded.flights   = loaded.flights.filter(f=>!tb.hasIn('flights',f.id));
+    loaded.transfers = loaded.transfers.filter(t=>!tb.hasIn('transfers',t.id));
     // Актлог
     if(d.actlog&&d.actlog.length){
       const entries = await syncDecryptRows(d.actlog, key, 'actlog');
@@ -1223,6 +1434,12 @@ async function syncPullAll(confirm_=false){
 
 // Тихая загрузка при входе — не перезаписывает если есть pending
 async function syncPullOnLogin(){
+  // Наблюдатель выгрузить правку не может — метка у него бессмысленна и навсегда отрезала бы
+  // правки существующих записей из облака (устройство, пониженное до viewer; ревью v0.29, раунд 2).
+  if(syncIsViewer()) syncClearDirty();
+  // Метку фиксируем ДО чтения облака: выгрузка, закончившаяся, пока читаем, снимет её, а снимок
+  // облака при этом сделан ДО выгрузки — заменить им локальное значит откатить правку (раунд 2).
+  const dirtyAtStart = syncHasDirty(), genAtStart = syncDirtyGen();
   const loaded = await syncPullAll(false);
   if(!loaded){ syncIndicator('error'); return; }
   // Путь Б: убрать из state записи, удалённые на других устройствах (облачные tombstones
@@ -1236,6 +1453,9 @@ async function syncPullOnLogin(){
     ...(loaded.tombstoneIds||[]).map(id=>'tomb:'+id)
   ].filter(Boolean)));
   const hasPending = pendingQueue.all().length > 0;
+  // Невыгруженные правки существующих записей (метка SYNC_DIRTY_KEY) — как непустая очередь:
+  // заменять локальное облачным нельзя, иначе правка откатится (ревью v0.29).
+  const dirty = dirtyAtStart || syncHasDirty() || syncDirtyGen()!==genAtStart || syncFullPushBusy();
   // Склад/расчёты — last-write-wins по _sv. Берём из облака ТОЛЬКО если версия
   // облака новее локальной — иначе затрём несохранённые локальные правки
   // (stock/squads НЕ кэшируются в pendingQueue, поэтому "нет pending" ещё не значит
@@ -1244,7 +1464,7 @@ async function syncPullOnLogin(){
   // Гейт приёма: версия новее ИЛИ равная с иным содержимым, чем база (см. блок LWW выше).
   const stockNewer = syncStockRemoteIsNewer(remoteStock);
   let stockDelta = false;
-  if(!hasPending){
+  if(!hasPending && !dirty){
     // Защита от потери только что добавленных вылетов/передач: полная замена
     // допустима ТОЛЬКО если локальный массив является подмножеством облачного
     // (все локальные id есть в облаке). Иначе локально есть запись, ещё не
@@ -1270,7 +1490,7 @@ async function syncPullOnLogin(){
     if(stockNewer) stockDelta = syncAcceptRemoteStock(remoteStock); // замена либо merge локальной дельты
   } else {
     // Есть несинхронизированное — сливаем только новое из облака
-    console.log('[SYNC] pending queue not empty, merging only new records');
+    console.log('[SYNC] '+(hasPending?'pending queue not empty':'невыгруженные правки')+', merging only new records');
     const localFIds = new Set(state.flights.map(f=>f.id).filter(Boolean));
     const newF = loaded.flights.filter(f=>f.id&&!localFIds.has(f.id));
     state.flights = [...state.flights,...newF].sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
@@ -1286,7 +1506,7 @@ async function syncPullOnLogin(){
   // выше их сохранила бы и saveLocal → syncPushAll вернул бы их в облако). Снимаем здесь.
   if(loaded.cloudIds) syncDropStaleLocal(loaded.cloudIds.f, loaded.cloudIds.t, 'полная синхронизация');
   if(stockDelta){ syncStockSelfCheck('merge при полной синхронизации'); setTimeout(()=>syncPushStockSquads(), 800); } // объединённый снимок — в облако
-  saveLocal();
+  saveLocal({noDirty:true}); // сохранение загруженного — не правка оператора (метку не ставит; выгрузка по-прежнему следом)
   syncIndicator('ok');
   syncRenderAll();
   renderSettingsStatus();
@@ -1313,7 +1533,8 @@ async function syncFromCloud(){
   _stockVersion = syncStockMaxSv(loaded.stock,loaded.squads); syncPersistStockVersion();
   syncStockSetBase(loaded.stock, loaded.squads, _stockVersion);
   pendingQueue.clear();
-  saveLocal();
+  syncClearDirty(); // принудительная загрузка: облако авторитетно, локальные правки отброшены осознанно
+  saveLocal({noDirty:true});
   syncIndicator('ok');
   syncRenderAll();
   if(st){ st.textContent='✓ Загружено — '+new Date().toLocaleTimeString('ru'); st.style.color='var(--green2)'; }
@@ -1340,6 +1561,7 @@ async function pollCloud(){
     const since = _lastPollTs;
     const d = await syncFetchJson(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now(), SYNC_GET_TIMEOUT_MS);
     if(d.error){ console.warn('[POLL]', d.error); return; }
+    syncNoteMinBuild(d); // контроль версии (v7.10): узнаём о минимуме ДО попытки записи
     _lastPollTs = Date.now();
 
     let changed = false;
@@ -1359,7 +1581,7 @@ async function pollCloud(){
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
       deliveredIds.add(obj.id);
-      if(tb.has(obj.id)) continue; // Удалён локально
+      if(tb.hasIn('flights',obj.id)) continue; // Удалён локально
       if(!state.flights.some(f=>f.id===obj.id)){
         state.flights.unshift(obj);
         changed = true;
@@ -1383,7 +1605,7 @@ async function pollCloud(){
       const obj = await syncDecrypt(row, key);
       if(!obj) continue;
       deliveredIds.add(obj.id);
-      if(tb.has(obj.id)) continue; // удалена локально (напр. loss-передача удалённого вылета)
+      if(tb.hasIn('transfers',obj.id)) continue; // удалена локально (напр. loss-передача удалённого вылета)
       if(!(state.transfers||[]).some(t=>t.id===obj.id)){
         if(!state.transfers) state.transfers=[];
         state.transfers.unshift(obj);
@@ -1451,7 +1673,7 @@ async function pollCloud(){
     syncFlushQueue();
 
     if(changed){
-      saveLocal();
+      saveLocal({noDirty:true}); // принято из облака — не правка оператора
       renderDashboard(); renderFlights(); renderInventory(); rebuildRoleSelector();
       if(newFlights>0) showSyncToast('↓ '+newFlights+' '+ruPlural(newFlights,'новый вылет','новых вылета','новых вылетов'));
     }
@@ -1477,11 +1699,13 @@ function startPolling(){
   // синхронизации раз в 5 минут (первое полное обновление уже сделал syncPullOnLogin
   // при входе). Снижает нагрузку на Apps Script: ~10 запросов за 5 мин → 1.
   // Остальные роли — без изменений: дельта 30с + полная 5 мин.
-  const viewer = syncReadOnly();
+  // По РОЛИ, а не по syncReadOnly(): устройство с устаревшей версией (update.js) тоже
+  // «только чтение», но поллинг ему нужен — узнать, что минимум снят, и видеть свежие данные.
+  const viewer = syncIsViewer();
   if(!viewer){
     window._pollInterval = setInterval(()=>{
       const {url,token} = syncGetCfg();
-      if(url&&token&&navigator.onLine&&!syncReadOnly()) pollCloud();
+      if(url&&token&&navigator.onLine&&!syncIsViewer()) pollCloud();
     }, 30000);
   }
   window._fullSyncInterval = setInterval(()=>{

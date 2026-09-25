@@ -1,3 +1,4 @@
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['parser.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
 // parser.js — импорт и AI-парсер сообщений (часть app.js, грузить ПЕРЕД reports.js/app.js)
 
 // ============ AI-КОНСТАНТЫ (единая точка, 02.07.2026) ============
@@ -52,6 +53,9 @@ async function parseMessages(){
   // Словарь моделей для нормализации — динамический (каталог ∪ склад ∪ расчёты),
   // иначе AI схлопывает новые борта к ближайшему старому (напр. «ПВХ 2» → «ПВХ1»).
   const droneVocab=(typeof getDroneVocab==='function')?getDroneVocab():DRONE_CATALOG;
+  // Идёт платный AI-разбор: автообновление версии (update.js) в этот момент не перезагружает
+  // страницу — результат пропал бы, а запрос пришлось бы оплатить повторно.
+  window._parseBusy=true;
   try{
     // Раньше был единственный AI-вызов БЕЗ таймаута — оборванная сеть вешала импорт навечно.
     const resp=await aiFetchWithTimeout('https://api.anthropic.com/v1/messages',{
@@ -107,6 +111,8 @@ async function parseMessages(){
       setStatus(st,'Ошибка: сервер не ответил за '+(AI_PARSE_TIMEOUT_MS/1000)+' сек (сеть или API недоступны). Проверьте соединение и повторите.','err');
     else
       setStatus(st,'Ошибка: '+e.message,'err');
+  }finally{
+    window._parseBusy=false;
   }
 }
 

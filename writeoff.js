@@ -1,3 +1,4 @@
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['writeoff.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
 // writeoff.js — формирование документа Word (.docx) на списание потерянных бортов.
 // ТОЛЬКО ЛОКАЛЬНО, доступно роли 'cmd'. Библиотека docx.js локальная — docx.umd.js (window.docx; до 02.07.2026 CDN).
 // Подсказки/последние значения хранятся в localStorage (ключи writeoff_*) и НИКОГДА не уходят

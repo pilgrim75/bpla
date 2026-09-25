@@ -1,3 +1,4 @@
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['marshrut.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
 // ===== МАРШРУТ — Event Sourcing учёта (ADR-001) =====
 // ЭТАПЫ 1–3: getBalance(model, location) РЯДОМ со старой системой + самосверка + ЧЕРТА.
 // ТОЛЬКО ЧТЕНИЕ. Ничего не мутирует, не пишет, не синкает. qty/stock/squads

@@ -1,3 +1,4 @@
+:root{--app-build:2026092502} /* сборка файла — ставит tools/bump-version.js, руками не править */
 *{box-sizing:border-box;margin:0;padding:0}
 
 /* ============ ШРИФТЫ (общие, вне тем) ============ */
@@ -1054,3 +1055,20 @@ body.theme-field{
   margin-top:16px;font-size:12px;color:var(--muted);
   letter-spacing:2px;text-align:center;padding:0 16px;
 }
+
+/* ===== Контроль версии (update.js, v0.29) ===== */
+/* Красная несгораемая полоса: «версия устарела» / «файлы разных сборок» — запись отключена.
+   Сверху, как #lsQuotaBar (если та есть — update.js сдвигает эту под неё). */
+.upd-bar{
+  position:fixed;top:0;left:0;right:0;z-index:10000;
+  background:#b91c1c;color:#fff;font:600 13px/1.4 var(--font-sans,sans-serif);
+  padding:7px 14px;text-align:center;box-shadow:0 2px 8px #0006;
+}
+.upd-bar .btn{margin-left:8px;background:#fff;color:#b91c1c;border-color:#fff}
+/* «Доступна новая версия» — не мешает работе: плашка в правом нижнем углу, над гео-полосой */
+.upd-pill{
+  position:fixed;right:16px;bottom:16px;z-index:10000;max-width:min(460px,calc(100vw - 32px));
+  background:var(--surface,var(--card));color:var(--text);border:1px solid var(--accent);
+  border-radius:9px;padding:9px 12px;font-size:12px;line-height:1.4;box-shadow:0 4px 16px #0008;
+}
+.upd-pill .btn{margin-left:6px;margin-top:4px}

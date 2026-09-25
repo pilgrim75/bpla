@@ -2,12 +2,17 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<meta name="app-build" content="2026092502">
 <meta name="referrer" content="no-referrer"><!-- URL с ?u=&t=&k= не должен утекать в Referer (аудит 02.07.2026); первым тегом — до любых загрузок -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>БПЛА Учёт</title>
 <link rel="icon" href="favicon.ico" type="image/x-icon">
-<link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="./icons/tabler-icons.min.css">
+<!-- PWA (v0.29): установка на компьютер + офлайн-открытие; manifest/иконки — белый список деплоя (ARCHITECTURE §6) -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#050a05">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css?v=2026092502">
+<link rel="stylesheet" href="./icons/tabler-icons.min.css?v=2026092502">
 <style id="themeStyle"></style>
 </head>
 <body>
@@ -39,7 +44,7 @@
 <div class="app" style="visibility:hidden">
 <div class="topbar">
   <div class="logo">АСУ БПЛА <span>// Журнал вылетов</span></div>
-  <div class="version">v0.28</div>
+  <div class="version">v0.29</div>
   <select id="roleSwitch" class="tb-select" onchange="switchRole(this.value)">
     <option value="admin">АДМИНИСТРАТОР</option>
     <option value="cmd">КОМАНДИР</option>
@@ -695,6 +700,20 @@
       </div>
       <div id="saveStatus" style="font-size:12px;color:var(--muted)">Данные хранятся в localStorage. Для переноса на другое устройство — экспортируйте в файл.</div>
     </div>
+    <!-- Контроль версии (v0.29, Backend v7.10): только учётка admin (update.js → updRenderMinBuildCard) -->
+    <div class="card" style="margin-bottom:12px;display:none" id="minBuildCard">
+      <div class="card-title">Минимальная версия клиента</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Устройства со сборкой ниже минимума не пишут в облако (красная полоса «Версия устарела», записи ждут в очереди) — пока их не обновят. Поднимать после выкладки НЕСОВМЕСТИМЫХ изменений, когда это устройство уже на новой версии. Кто не обновился — Администратор → Пользователи, «Последний вход · сборка»; отказы — в журнале действий (sync / outdated).</div>
+      <div style="font-size:12px;margin-bottom:4px">Эта сборка: <span id="mbSelf" style="font-family:var(--font-mono)"></span></div>
+      <div id="mbServer" style="font-size:12px;margin-bottom:8px;color:var(--muted)"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-sm btn-primary" data-mb="1" onclick="updSetMinBuildServer('current')">Установить текущую сборку</button>
+        <input id="mbInput" placeholder="ГГГГММДДNN" inputmode="numeric" autocomplete="off" style="width:130px">
+        <button class="btn btn-sm" data-mb="1" onclick="updSetMinBuildServer('manual')">Установить</button>
+        <button class="btn btn-sm" data-mb="1" style="color:var(--amber);border-color:var(--amber)" onclick="updSetMinBuildServer('off')">Выключить</button>
+      </div>
+      <div id="mbStatus" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+    </div>
     <div class="card" style="margin-bottom:12px">
       <div class="card-title">Переименование модели БПЛА</div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Каноническое переименование во ВСЕХ записях (склад, расчёты, вылеты, журнал передач) одной операцией — аудит целостности остаётся сведённым. Если новое имя уже есть как модель — записи СОЛЬЮТСЯ в одну. Только администратор.</div>
@@ -774,6 +793,16 @@
 <div class="page" id="page-settings">
   <div class="section-head"><div class="section-title">⚙ Настройки</div></div>
 
+  <!-- ПРИЛОЖЕНИЕ: версия + установка PWA (update.js → updRenderAppCard), видно всем ролям -->
+  <div class="card" style="margin-bottom:10px" id="appCard">
+    <div class="card-title">Приложение</div>
+    <div id="appVerInfo" style="font-size:12px;color:var(--muted);font-family:var(--font-mono);margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" id="pwaInstallBtn" style="display:none" onclick="updInstall()">🖥 Установить на компьютер</button>
+      <span id="pwaInstallStatus" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+  </div>
+
   <!-- СИНХРОНИЗАЦИЯ (только admin — applySettingsVisibility) -->
   <div class="card" style="margin-bottom:10px" id="cfg-sync-card">
     <div class="card-title">Синхронизация с Google Sheets</div>
@@ -841,15 +870,19 @@
 </div><!-- main -->
 </div><!-- app -->
 
-<script src="sync.js"></script>
-<script src="geo.js"></script>
-<script src="parser.js"></script>
-<script src="html2canvas.min.js"></script> <!-- локально (офлайн/file://): рендер «доски почёта» репортажа в PNG -->
-<script src="reports.js"></script>
-<script src="docx.umd.js"></script> <!-- docx@8.5.0 (build/index.umd.js) локально, был jsDelivr CDN — офлайн/file:// и без внешних запросов (аудит 02.07.2026) -->
-<script src="writeoff.js"></script>
-<script src="marshrut.js"></script> <!-- МАРШРУТ Этап 1: getBalance() рядом со старой системой (только чтение) -->
-<script src="vtx.js"></script> <!-- VTX: генератор Betaflight vtx-команд (автономный, учёта не трогает) -->
-<script src="app.js"></script>
+<!-- version.js — ПЕРВЫМ: номер сборки нужен всем файлам. ?v= у всех подключений ставит tools/bump-version.js
+     (новый URL = новая загрузка без Ctrl+F5; сервис-воркер держит файлы одной сборки в одном кэше) -->
+<script src="version.js?v=2026092502"></script>
+<script src="sync.js?v=2026092502"></script>
+<script src="geo.js?v=2026092502"></script>
+<script src="parser.js?v=2026092502"></script>
+<script src="html2canvas.min.js?v=2026092502"></script> <!-- локально (офлайн/file://): рендер «доски почёта» репортажа в PNG -->
+<script src="reports.js?v=2026092502"></script>
+<script src="docx.umd.js?v=2026092502"></script> <!-- docx@8.5.0 (build/index.umd.js) локально, был jsDelivr CDN — офлайн/file:// и без внешних запросов (аудит 02.07.2026) -->
+<script src="writeoff.js?v=2026092502"></script>
+<script src="marshrut.js?v=2026092502"></script> <!-- МАРШРУТ Этап 1: getBalance() рядом со старой системой (только чтение) -->
+<script src="vtx.js?v=2026092502"></script> <!-- VTX: генератор Betaflight vtx-команд (автономный, учёта не трогает) -->
+<script src="update.js?v=2026092502"></script> <!-- контроль версии: version.json, безопасное автообновление, «устарел — только чтение», SW, установка PWA -->
+<script src="app.js?v=2026092502"></script>
 </body>
 </html>

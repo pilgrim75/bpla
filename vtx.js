@@ -1,3 +1,4 @@
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['vtx.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
 // ===== VTX — генератор Betaflight vtx-команд =====
 // Автономный инструмент. Данные учёта/синхронизации НЕ трогает (по духу как LDK-конвертер):
 // читает Betaflight VTX Config JSON, рисует таблицу частот и собирает строки `vtx ...`.
