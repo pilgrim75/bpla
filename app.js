@@ -1,4 +1,13 @@
 
+// ============ ВЕРСИЯ КЛИЕНТА (25.09.2026, минимум проекта «контроль версии») ============
+// APP_BUILD — целое, СТРОГО растёт при каждой выкладке (формат ГГГГММДДNN). Пишется в каждую
+// запись журнала действий (logAction → поле build): в Администратор → Пользователи видно,
+// на какой сборке каждое устройство входило последний раз, и кому нужно обновиться.
+// ?v=, version.json и автообновление — отдельно (_НЕ_ПУБЛИКОВАТЬ/ПРОЕКТ_контроль_версии_2026-09-25.md).
+// ПРИ ВЫКЛАДКЕ: поднять APP_BUILD (и APP_VERSION — вместе с `.version` в index.html при релизе).
+const APP_VERSION='0.28';
+const APP_BUILD=2026092501;
+
 // ============ STATE ============
 // Базовый каталог моделей (страховочный список). Реальный парк может опережать его —
 // для словарей/автодополнения/AI-парсера используется getDroneVocab() (каталог ∪ склад ∪ расчёты).
@@ -88,7 +97,10 @@ function guardWrite(){
 // cmd/tech/pilot, см. AR_OPTS). Предикат (без alert) — для видимости элементов;
 // для действий — guardAdmin() ниже, он же с сообщением.
 function isAdminAccount(){
-  return authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin';
+  // Только по РОЛИ учётки. Раньше логины 'admin'/'local' считались админскими при любой роли —
+  // после смены роли через Пользователи (25.09) такая учётка сохраняла бы перешифровку облака.
+  // Локальный режим ставит authUser.role='admin' сам (initAuth), логин 'local' Backend v7.9 не создаёт.
+  return authUser.role==='admin';
 }
 // Guard операций администратора (создание пользователей, смена токенов и т.п.).
 // Проверка по УЧЁТКЕ (authUser), а не по переключателю — admin в роли cmd сохраняет права.
@@ -474,7 +486,7 @@ function showPage(id,btn){
 function switchRole(r){
   // Не-админская учётка не может переключить роль (защита от вызова из консоли) —
   // принудительно возвращаем роль учётки. Пустой login = до авторизации/локальный режим.
-  const _adminAcc=!authUser.login||authUser.login==='local'||authUser.login==='admin'||authUser.role==='admin';
+  const _adminAcc=!authUser.login||authUser.login==='local'||authUser.role==='admin'; // логин 'admin' без роли admin — НЕ админ (25.09)
   if(!_adminAcc){const fixed=accountRole();if(fixed&&r!==fixed)r=fixed;}
   state.role=r;
   let label='';
@@ -4144,7 +4156,10 @@ async function authByToken(token){
       authToken=token;
       // actingRole (замещение, Backend v7.6) приходит при каждой авторизации —
       // и по ссылке, и по сохранённому токену; отдельно не персистится
-      authUser={login:d.login,role:d.role,actingRole:String(d.acting_role||'').toLowerCase().trim()};
+      // Нормализация (ревью 25.09): Sheets хранит логин из цифр ЧИСЛОМ (accountRole сравнивает
+      // строго со строкой имени расчёта — пилот получал бы cmd), а роль в листе может быть
+      // 'Admin '/'ADMIN' (раньше это маскировал особый случай логина 'admin').
+      authUser={login:String(d.login==null?'':d.login),role:String(d.role||'').toLowerCase().trim(),actingRole:_sanitizeActing(d.role,d.acting_role)}; // легаси-замещение правами не считается (как на сервере v7.9)
       localStorage.setItem('auth_token',token);
       return true;
     }
@@ -4199,7 +4214,7 @@ async function initAuth(){
       // иначе appendToCloud не увидит облако. Штамп даты — чтобы F5 в тот же день
       // не дал дубль login-записи из ветки 2 (сохранённый токен).
       logAction('auth','login','Вход по ссылке: '+(urlUser||''));
-      try{ localStorage.setItem('login_logged_date',todayISO()); }catch(e){}
+      try{ localStorage.setItem('login_logged_date',todayISO()); localStorage.setItem('login_logged_build',String(APP_BUILD)); }catch(e){}
       if(cfg.url)await syncPullOnLogin();
       // Повторное применение роли ПОСЛЕ загрузки данных: accountRole() для учётки
       // pilot ищет позывной в state.squads, которые на чистом устройстве пусты до
@@ -4232,10 +4247,13 @@ async function initAuth(){
       // по ссылке (ветка 1) — отсюда «все login-записи одной датой»: ежедневные входы
       // не записывались вовсе. Дата/время — из todayISO()/nowHM() в момент вызова.
       // Не чаще раза в сутки на устройство: эта ветка срабатывает на каждый F5.
+      // ИСКЛЮЧЕНИЕ (25.09): сменилась сборка клиента — вход пишется снова, иначе в день выкладки
+      // «Последний вход · сборка» (Пользователи) показывал бы старую сборку обновлённого устройства.
       try{
-        if(localStorage.getItem('login_logged_date')!==todayISO()){
+        if(localStorage.getItem('login_logged_date')!==todayISO()||localStorage.getItem('login_logged_build')!==String(APP_BUILD)){
           logAction('auth','login','Вход: '+(authUser.login||'')+' (сохранённый токен)');
           localStorage.setItem('login_logged_date',todayISO());
+          localStorage.setItem('login_logged_build',String(APP_BUILD));
         }
       }catch(e){}
       return;
@@ -4276,7 +4294,7 @@ function applyRoleFromAuth(){
   const lb=document.getElementById('logoutBtn');
   if(lb)lb.style.display='';
 
-  const isAdminUser=authUser.role==='admin'||authUser.login==='local'||authUser.login==='admin';
+  const isAdminUser=authUser.role==='admin'||authUser.login==='local'; // логин 'admin' без роли admin — НЕ админ (25.09)
   const roleSwitch=document.getElementById('roleSwitch');
 
   if(isAdminUser){
@@ -4329,12 +4347,23 @@ function logout(){
 // устройства без перелогина; при изменении — перерисовка прав (switchRole идемпотентен).
 function syncApplyActingRole(users){
   if(!authUser.login||authUser.login==='local')return;
-  const u=(users||[]).find(x=>x.login===authUser.login);
+  const u=(users||[]).find(x=>String(x.login)===String(authUser.login));
   if(!u)return;
-  const acting=String(u.acting_role||'').toLowerCase().trim();
-  if(acting===(authUser.actingRole||''))return;
-  authUser.actingRole=acting;
-  showSyncToast(acting?('Вам назначено замещение: '+acting):'Замещение снято');
+  // Базовая роль тоже освежается (25.09): смена роли в Администратор → Пользователи раньше
+  // доходила до уже открытого устройства только при перезагрузке — понижение до viewer
+  // оставляло сессию «пишущей», записи молча отвергались сервером и копились в очереди.
+  const role=String(u.role||'').toLowerCase().trim();
+  const acting=_sanitizeActing(u.role,u.acting_role); // только допустимое по v7.9 (как на сервере)
+  const roleChanged=!!role&&role!==String(authUser.role||'').toLowerCase().trim();
+  const actingChanged=acting!==(authUser.actingRole||'');
+  if(!roleChanged&&!actingChanged)return;
+  const msgs=[];
+  if(roleChanged){
+    const was=authUser.role; authUser.role=role;
+    msgs.push('Роль вашей учётки изменена: '+was+' → '+role+(was==='viewer'?' — обновите страницу (F5), чтобы включилась синхронизация':''));
+  }
+  if(actingChanged){ authUser.actingRole=acting; msgs.push(acting?('Вам назначено замещение: '+acting):'Замещение снято'); }
+  showSyncToast(msgs.join(' · '),8000); // один тост: два подряд затирали друг друга (ревью 25.09)
   switchRole(state.role);          // canEdit-кнопки/панели под новую эффективную роль
   applyRoleFromAuth();             // бейдж «и.о.» в topbar
   if(typeof fillDataLists==='function')fillDataLists(); // опции «не бг»/«списан» в передаче
@@ -4355,7 +4384,10 @@ function nuRoleChange(){
   }
 }
 
-async function createUser(){
+// Защита от двойного нажатия (ревью 25.09): до POST идёт полное чтение облака — двойной клик
+// на Backend v7.8 создавал две строки с одним логином / менял токен дважды (первая ссылка мертва)
+async function createUser(){ return _userOnce('create',_createUserImpl); }
+async function _createUserImpl(){
   if(!guardAdmin())return; // клиентский guard; сервер (Backend v7) проверяет роль admin сам
   const {url}=syncGetCfg();
   if(!url){alert('URL не настроен');return;}
@@ -4367,21 +4399,46 @@ async function createUser(){
   const callsign=role==='pilot'?(document.getElementById('nu-callsign')?.value||''):'';
   if(!login||!pass){alert('Введите логин и пароль');return;}
   if(role==='pilot'&&!callsign){alert('Выберите позывной пилота из расчётов');return;}
+  // Google Sheets приводит похожее на число/дату/время/логическое значение ('1.5', '01.02', '12:30',
+  // 'TRUE', '1e3') — логин перестал бы совпадать строкой (Backend v7.9 ещё и сверяет записанное)
+  if(/^[\d\s.,:%\/+\-]+$/.test(login)||/^(true|false)$/i.test(login)||/^\d+(\.\d+)?e\d+$/i.test(login)){alert('Логин похож на число, дату или время — Google Sheets сохранит его в другом виде. Используйте буквы.');return;}
+  if(/^[=+@\-']/.test(login)){alert('Логин не может начинаться с = + - @ \'.');return;}
+  if(login.toLowerCase()==='local'){alert('Логин «local» зарезервирован (локальный режим).');return;}
+  // Свежий список — правила ниже не должны держаться на устаревшем кэше (с Backend v7.8
+  // сервер «admin один» не проверяет, клиентская проверка — единственная). Не прочитали —
+  // не создаём: продолжать на устаревшем кэше значит рисковать вторым admin (ревью 25.09).
+  try{ _usersCache=await _readUsers(); }
+  catch(e){ alert('Не удалось прочитать список пользователей — проверьте связь и повторите.\n('+e.message+')'); return; }
+  // Учётка admin — ровно одна (Backend v7.9 проверяет то же; здесь — понятное сообщение сразу)
+  if(role==='admin'){
+    const admins=_adminsIn(_usersCache);
+    if(admins.length){alert('Учётка администратора уже есть ('+admins.map(a=>a.login).join(', ')+').\n\nАдминистратор — только один.');return;}
+  }
+  if(_usersCache.some(u=>_sameLogin(u.login,login))){alert('Логин «'+login+'» уже занят.');return;}
 
   try{
-    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({action:'create_user',admin_token:authToken,login,password:pass,role})});
-    await new Promise(r=>setTimeout(r,2500));
-    const rList=await fetch(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now());
-    const dList=await rList.json();
-    const newUser=(dList.users||[]).find(u=>u.login===login);
-    if(!newUser||!newUser.token){
-      alert('Пользователь создан, но не удалось получить токен автоматически.\nОткройте лист users в Google Sheets и скопируйте токен вручную.');
+    // Читаемый ответ (syncPost): отказ сервера — «логин занят», «admin уже есть» — виден,
+    // а не маскируется под успех, как было при no-cors
+    _hideUserLink(); // старая ссылка не должна висеть после неудачи — прячем прямо перед запросом (не до проверок)
+    const cr=await _adminPost({action:'create_user',login,password:pass,role});
+    if(!cr.ok){alert('Пользователь не создан: '+cr.error);return;}
+    // Токен — из ответа (create_user отдаёт его); перечитка списка — только если ответ
+    // непроверяем (no-cors) или токена в нём нет. Запись в журнал — как только создание
+    // ПОДТВЕРЖДЕНО (ответом сервера или перечиткой), а не до проверки (ревью 25.09).
+    let token=(cr.data&&cr.data.token)?String(cr.data.token):'';
+    let confirmed=!cr.unverified;
+    if(!token){
+      if(cr.unverified)await new Promise(r=>setTimeout(r,2500));
+      try{ const nu=(await _readUsers()).find(u=>_sameLogin(u.login,login)); if(nu){ confirmed=true; token=nu.token?String(nu.token):''; } }catch(e){}
+    }
+    if(!confirmed){
+      alert('Сервер не подтвердил создание пользователя — проверьте лист users в Google Sheets.'+(role==='pilot'&&callsign&&callsign!==login?'\n\nЕсли учётка появилась: переименуйте расчёт «'+callsign+'» в «'+login+'» (Администратор → Расчёты) и выдайте ссылку кнопкой «Новая ссылка».':''));
       loadUsersList();
       return;
     }
-    const token=newUser.token;
     logAction('user','create','Создан пользователь '+login+' ('+role+(callsign?', позывной '+callsign:'')+')');
+    // Переименование позывного — при ПОДТВЕРЖДЁННОМ создании, даже если токен не получен:
+    // иначе пилот работал бы с правами командира (привязка по имени расчёта) — ревью 25.09.
 
     // Если пилот — переименовываем позывной в расчётах и вылетах на логин
     if(role==='pilot'&&callsign&&callsign!==login){
@@ -4413,11 +4470,15 @@ async function createUser(){
       }
     }
 
+    if(!token){
+      alert('Пользователь создан, но не удалось получить токен автоматически.\nОткройте лист users в Google Sheets и скопируйте токен вручную.');
+      loadUsersList();
+      return;
+    }
     // Генерируем ссылку
     const base=window.location.origin+window.location.pathname;
     const link=base+'?u='+encodeURIComponent(login)+'&t='+token+'&k='+encodeURIComponent(encKey)+'&s='+encodeURIComponent(url);
-    document.getElementById('nu-link-text').textContent=link;
-    document.getElementById('nu-link-result').style.display='block';
+    _showUserLink(login,link,false);
     document.getElementById('nu-login').value='';
     document.getElementById('nu-password').value='';
     loadUsersList();
@@ -4435,9 +4496,104 @@ function copyUserLink(){
 
 // Последний вход пользователя — по login-записям журнала действий (type='auth').
 // actLog может отставать от облака: showAdminTab('users') освежает его loadActLogFromCloud.
+// Сборка клиента (build) пишется в каждую запись с 25.09.2026 (APP_BUILD); у записей
+// раньше её нет — «до учёта сборок». Сборка ниже текущей = устройству нужно обновиться.
 function _userLastLogin(login){
-  const e=actLog.find(x=>x.type==='auth'&&x.action==='login'&&x.user===login); // actLog отсортирован по ts убыв.
-  return e?(e.date+' '+e.time):'—';
+  const e=actLog.find(x=>x.type==='auth'&&x.action==='login'&&_sameLogin(x.user,login)); // actLog отсортирован по ts убыв.
+  if(!e)return {when:'—',build:null};
+  return {when:(e.date||'')+' '+(e.time||''),build:(e.build!=null&&e.build!=='')?(+e.build||null):null};
+}
+// Ячейка «Последний вход»: время + сборка (устаревшая — предупреждение)
+function _userLastLoginCell(login){
+  const ll=_userLastLogin(login);
+  if(ll.when==='—')return '<span style="color:var(--muted)">—</span>';
+  // Вход с 25.09.2026 БЕЗ сборки — это клиент старше учёта сборок, т.е. ровно тот, кому нужно
+  // обновиться (раньше показывался как нейтральное «сборка —» — ревью 25.09)
+  const oldClient=ll.build==null&&String(ll.when)>='2026-09-25';
+  const b=ll.build==null
+    ?(oldClient
+      ?'<span class="tag tag-warn" title="Вход без номера сборки — клиент старше 25.09.2026, устройству нужно обновить страницу">старая сборка ⚠</span>'
+      :'<span style="color:var(--muted)" title="Запись входа сделана до учёта сборок (до 25.09.2026)">сборка —</span>')
+    :(ll.build<APP_BUILD
+      ?'<span class="tag tag-warn" title="Сборка ниже текущей ('+APP_BUILD+') — устройству нужно обновить страницу">сборка '+esc(ll.build)+' ⚠</span>'
+      :'<span style="color:var(--muted)">сборка '+esc(ll.build)+'</span>');
+  return '<span style="color:var(--muted)">'+esc(ll.when)+'</span><br>'+b;
+}
+
+// Привязка пилота к расчёту: вид пилота и «свои вылеты» работают по ТОЧНОМУ совпадению
+// логина и имени расчёта (accountRole: q.pilot===authUser.login). Без расчёта учётка pilot
+// получает фолбэк 'cmd' (accountRole). Регистр отличается — привязки НЕТ, это надо видеть.
+function _userSquad(login){
+  const exact=(state.squads||[]).find(q=>_sameLogin(q.pilot,login));
+  if(exact)return {kind:'exact',name:exact.pilot};
+  const ci=(state.squads||[]).find(q=>_rowN(q.pilot)===_rowN(login));
+  if(ci)return {kind:'case',name:ci.pilot};
+  return {kind:'none',name:''};
+}
+function _userSquadCell(u){
+  if(_roleOf(u)!=='pilot')return '<span style="color:var(--muted)">—</span>';
+  const sq=_userSquad(u.login);
+  if(sq.kind==='exact')return '✓ '+esc(sq.name);
+  if(sq.kind==='case')return '<span class="tag tag-warn" title="Регистр отличается — привязки нет (нужно точное совпадение)">⚠ '+esc(sq.name)+'</span>';
+  return '<span class="tag tag-warn" title="Расчёта с таким именем нет — учётка работает с правами командира">⚠ нет расчёта</span>';
+}
+
+// Последний загруженный список пользователей — для клиентских проверок перед действием
+// (сервер Backend v7.9 проверяет то же самое сам; клиентская проверка — понятное сообщение сразу).
+let _usersCache=[];
+let _usersLoadSeq=0; // поколение loadUsersList
+const USER_ROLES=[['admin','Администратор'],['cmd','Командир'],['tech','Техник'],['pilot','Пилот'],['viewer','Наблюдатель']];
+const _roleOf=u=>String((u&&u.role)||'').toLowerCase().trim();
+// Логины сравниваются СТРОКОЙ: Sheets хранит логин из цифр числом, а из onclick приходит строка
+const _sameLogin=(a,b)=>String(a==null?'':a)===String(b==null?'':b);
+function _adminsIn(list){ return (list||[]).filter(u=>_roleOf(u)==='admin'); }
+// «Последний admin» — по АКТИВНЫМ (заблокированный управлять не может). Пока выложен Backend v7.8,
+// эта клиентская проверка — единственная защита (ревью 25.09: легаси-лист с заблокированным
+// вторым admin позволял понизить единственного рабочего).
+function _otherActiveAdmin(list,login){ return (list||[]).some(u=>_roleOf(u)==='admin'&&u.active===true&&!_sameLogin(u.login,login)); }
+
+// Админский POST с ЧИТАЕМЫМ ответом (syncPost: cors → JSON; раньше тут был no-cors, и отказ
+// сервера — «последний admin», «такой логин есть» — выглядел как успех). Возвращает
+// {ok,error,unverified}. Ответ «Unknown: <action>» — сервер старее нужной версии.
+async function _adminPost(payload){
+  const {url}=syncGetCfg();
+  if(!url||!authToken)return {ok:false,error:'Нет URL или токена'};
+  const res=await syncPost(url,JSON.stringify({...payload,admin_token:authToken}));
+  if(res.ok)return {ok:true,unverified:!!res.unverified,data:res.data};
+  const err=String(res.error||'ошибка');
+  if(/^Unknown:/.test(err))return {ok:false,error:'Сервер не знает эту операцию — нужен Backend v7.9 (выпустите новую версию развёртывания)'};
+  return {ok:false,error:err};
+}
+// Блок «Ссылка для пользователя»: подписан логином и скрывается в начале каждой операции —
+// после неудачи не должна висеть старая/чужая ссылка, в т.ч. собственная ссылка админа (ревью 25.09).
+function _hideUserLink(){
+  const r=document.getElementById('nu-link-result'); if(r)r.style.display='none';
+  const t=document.getElementById('nu-link-text'); if(t)t.textContent='';
+}
+function _showUserLink(login,link,self){
+  const h=document.getElementById('nu-link-title');
+  if(h)h.textContent=self?('✓ ВАША новая ссылка («'+login+'») — старая больше не действует:'):('✓ Ссылка для «'+login+'»:');
+  document.getElementById('nu-link-text').textContent=link;
+  document.getElementById('nu-link-result').style.display='block';
+}
+// Одна операция данного вида за раз (защита от двойного нажатия)
+const _userOpBusy=new Set();
+async function _userOnce(key,fn){
+  if(_userOpBusy.has(key)){showSyncToast('Операция уже выполняется…');return;}
+  _userOpBusy.add(key);
+  try{ return await fn(); } finally{ _userOpBusy.delete(key); }
+}
+// Замещение, допустимое по правилам v7.9 (как effectiveActing_ на сервере): только cmd/tech/pilot,
+// не у viewer/admin и не равное базовой роли. Легаси-значения из листа users правами не считаются.
+function _sanitizeActing(role,acting){
+  const b=String(role||'').toLowerCase().trim(), a=String(acting||'').toLowerCase().trim();
+  return (!a||!['cmd','tech','pilot'].includes(a)||b==='viewer'||b==='admin'||a===b)?'':a;
+}
+async function _readUsers(){
+  const {url}=syncGetCfg();
+  const d=await syncFetchJson(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
+  if(d&&d.error)throw new Error(d.error);
+  return (d&&d.users)||[];
 }
 
 async function loadUsersList(){
@@ -4445,10 +4601,11 @@ async function loadUsersList(){
   if(!isAdminAccount())return;
   const {url}=syncGetCfg();
   if(!url||!authToken)return;
+  const seq=++_usersLoadSeq; // до try: поколение проверяется и в catch (ревью 5)
   try{
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now());
-    const d=await r.json();
-    const users=d.users||[];
+    const users=await _readUsers();
+    if(seq!==_usersLoadSeq)return; // пришёл ответ более раннего вызова — не затираем свежий (ревью 4)
+    _usersCache=users;
     const el=document.getElementById('usersList');
     if(!el)return;
     // Селект замещения: '' = нет; значение из листа users (acting_role, Backend v7.6).
@@ -4462,85 +4619,216 @@ async function loadUsersList(){
     //    замещающему админ-операций (ADMIN_ACTIONS по БАЗОВОЙ роли), но клиент по
     //    hasRole('admin') открывал ему опасное: перешифровку облака, URL Apps Script.
     //    Опасные операции теперь строго по УЧЁТКЕ — isAdminAccount(), см. ниже.
+    //    С Backend v7.9 то же проверяет и сервер (ACTING_ROLES).
     const AR_OPTS=['','cmd','tech','pilot'];
     el.innerHTML=users.length?`
       <table style="width:100%;font-size:12px">
-        <thead><tr><th>Логин</th><th>Роль</th><th>Замещение</th><th>Статус</th><th>Последний вход</th><th>Действие</th></tr></thead>
-        <tbody>${users.map((u,i)=>{const lj=esc(u.login).replace(/'/g,"\\'");const ar=String(u.acting_role||'').toLowerCase().trim();return `<tr>
-          <td style="padding:6px 8px">${esc(u.login)}</td>
-          <td style="padding:6px 8px">${esc(u.role)}</td>
+        <thead><tr><th>Логин</th><th>Роль</th><th>Расчёт</th><th>Замещение</th><th>Статус</th><th>Последний вход</th><th>Действие</th></tr></thead>
+        <tbody>${users.map((u,i)=>{
+          const lj=_attrJs(u.login);
+          const role=_roleOf(u);
+          const ar=String(u.acting_role||'').toLowerCase().trim();
+          const isAdm=role==='admin';
+          const noActing=isAdm||role==='viewer'; // admin и viewer замещение не получают (Backend v7.9 тоже)
+          const knownRole=USER_ROLES.some(([v])=>v===role);
+          return `<tr>
+          <td style="padding:6px 8px">${esc(u.login)}${_sameLogin(u.login,authUser.login)?' <span style="color:var(--muted)">(вы)</span>':''}</td>
+          <td style="padding:6px 8px;white-space:nowrap">
+            <select id="role-sel-${i}" style="width:118px;font-size:11px;padding:2px 4px">
+              ${knownRole?'':`<option value="${esc(role)}" selected>⚠ ${esc(role||'нет роли')}</option>`}${USER_ROLES.map(([v,t])=>`<option value="${v}"${v===role?' selected':''}>${t}</option>`).join('')}
+            </select>
+            <button class="btn btn-sm" onclick="adminSetUserRole('${lj}',document.getElementById('role-sel-${i}').value)">Роль</button>
+          </td>
+          <td style="padding:6px 8px;white-space:nowrap">${_userSquadCell(u)}</td>
           <td style="padding:6px 8px">${ar?`<span class="tag tag-warn">и.о. ${esc(ar)}</span>`:'<span style="color:var(--muted)">—</span>'}</td>
           <td style="padding:6px 8px"><span class="tag ${u.active?'tag-ok':'tag-danger'}">${u.active?'активен':'заблокирован'}</span></td>
-          <td style="padding:6px 8px;white-space:nowrap;color:var(--muted)">${esc(_userLastLogin(u.login))}</td>
+          <td style="padding:6px 8px;white-space:nowrap">${_userLastLoginCell(u.login)}</td>
           <td style="padding:6px 8px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-            <select id="ar-sel-${i}" style="width:110px;font-size:11px;padding:2px 4px">
-              ${AR_OPTS.map(o=>`<option value="${o}"${o===ar?' selected':''}>${o?('и.о. '+o):'— нет —'}</option>`).join('')}
+            ${noActing
+              ?(ar?`<button class="btn btn-sm" onclick="setActingRole('${lj}','')" title="Легаси-замещение у ${isAdm?'администратора':'наблюдателя'} — снять">Снять замещение</button>`:'')
+              :`<select id="ar-sel-${i}" style="width:110px;font-size:11px;padding:2px 4px">
+              ${ar&&(!AR_OPTS.includes(ar)||ar===role)?`<option value="${esc(ar)}" selected>⚠ и.о. ${esc(ar)} (недопустимо)</option>`:''}${AR_OPTS.map(o=>`<option value="${o}"${o===ar&&ar!==role?' selected':''}>${o?('и.о. '+o):'— нет —'}</option>`).join('')}
             </select>
-            <button class="btn btn-sm" onclick="setActingRole('${lj}',document.getElementById('ar-sel-${i}').value)">Замещение</button>
+            <button class="btn btn-sm" onclick="setActingRole('${lj}',document.getElementById('ar-sel-${i}').value)">Замещение</button>`}
             <button class="btn btn-sm btn-primary" onclick="regenerateToken('${lj}')">Новая ссылка</button>
-            <button class="btn btn-sm btn-danger" onclick="toggleUser('${lj}',${!u.active})">${u.active?'Блок':'Разблок'}</button>
+            ${isAdm?'':`<button class="btn btn-sm btn-danger" onclick="toggleUser('${lj}',${!u.active})">${u.active?'Блок':'Разблок'}</button>
+            <button class="btn btn-sm btn-danger" onclick="adminDeleteUser('${lj}')" title="Удалить учётку (данные не трогаются)">Удалить</button>`}
           </td>
         </tr>`;}).join('')}</tbody>
       </table>`:'<div style="color:var(--muted);font-size:12px">Нет пользователей</div>';
-  }catch(e){}
+  }catch(e){
+    if(seq!==_usersLoadSeq)return; // отказ более раннего вызова не затирает свежую таблицу
+    const el=document.getElementById('usersList');
+    if(el)el.innerHTML='<div style="color:var(--danger);font-size:12px">Не удалось загрузить список пользователей: '+esc(e.message)+'</div>';
+  }
+}
+
+// Смена БАЗОВОЙ роли. Меняется ТОЛЬКО роль (update_user с одним полем role) — блок,
+// токен, замещение не трогаются. Правила (те же проверяет Backend v7.9):
+// admin — ровно одна учётка: второго не назначить, у последнего не снять.
+async function adminSetUserRole(login,newRole){
+  if(!guardAdmin())return;
+  const nr=String(newRole||'').toLowerCase().trim();
+  if(!USER_ROLES.some(([v])=>v===nr)){alert('Неизвестная роль: '+nr);return;}
+  const u=_usersCache.find(x=>_sameLogin(x.login,login));
+  if(!u){_rowGone('учётка «'+login+'»',loadUsersList);return;}
+  const cur=_roleOf(u);
+  if(nr===cur){showSyncToast('Роль не изменилась');return;}
+  const admins=_adminsIn(_usersCache);
+  if(nr==='admin'&&admins.length>=1){
+    alert('Учётка администратора уже есть ('+admins.map(a=>a.login).join(', ')+').\n\nАдминистратор — только один.');
+    loadUsersList();return;
+  }
+  if(cur==='admin'&&!_otherActiveAdmin(_usersCache,login)){
+    alert('Нельзя снять роль admin с последнего администратора — управлять пользователями станет некому.');
+    loadUsersList();return;
+  }
+  const label=r=>(USER_ROLES.find(([v])=>v===r)||[r,r])[1];
+  let warn='';
+  if(nr==='pilot'){
+    const sq=_userSquad(login);
+    warn=sq.kind==='exact'
+      ?'\n\nПривязка: расчёт «'+sq.name+'» найден — вид пилота и «свои вылеты» будут работать по нему.'
+      :sq.kind==='case'
+        ?'\n\n⚠ Есть расчёт «'+sq.name+'», но регистр отличается от логина «'+login+'» — привязки НЕ будет\n(нужно точное совпадение логина и имени расчёта). Пока её нет, учётка работает с правами командира.'
+        :'\n\n⚠ Расчёта «'+login+'» нет — пилот привязывается к расчёту по имени = логину.\nПока расчёта нет, учётка работает с правами командира.';
+  } else if(cur==='pilot'){
+    const sq=_userSquad(login);
+    warn='\n\nПривязка к расчёту'+(sq.kind!=='none'?' «'+sq.name+'»':'')+' перестанет действовать: вид пилота и ограничение\n«только свои вылеты» снимаются. Сам расчёт, его борта и вылеты НЕ меняются.';
+  }
+  if(nr==='viewer')warn+='\n\nНаблюдатель — только просмотр: запись в облако с этой учётки будет невозможна.';
+  // Сервер v7.9 снимает замещение, если новая роль — admin/viewer или совпадает с ним
+  const curAR=String(u.acting_role||'').toLowerCase().trim();
+  // То же правило, что и снятие ниже (ревью 5): недопустимое для новой роли — в т.ч. легаси «и.о. admin/viewer»
+  const clearsAR=!!curAR&&_sanitizeActing(nr,curAR)==='';
+  if(clearsAR)warn+='\n\nЗамещение «и.о. '+curAR+'» будет снято.';
+  if(_sameLogin(login,authUser.login))warn+='\n\n⚠ Это ВАША учётка — после перезагрузки права изменятся.';
+  if(!confirm('Сменить роль «'+login+'»: '+label(cur)+' → '+label(nr)+'?'+warn))return;
+  try{
+    const r=await _adminPost({action:'update_user',login,role:nr});
+    if(!r.ok){alert('Роль не изменена: '+r.error);loadUsersList();return;}
+    if(r.unverified)await new Promise(res=>setTimeout(res,1500));
+    const users=await _readUsers();
+    _usersCache=users; // факт сразу в кэш — повторная правка не должна сверяться с устаревшим
+    const after=users.find(x=>_sameLogin(x.login,login));
+    if(!after||_roleOf(after)!==nr){alert('Сервер не подтвердил смену роли — проверьте лист users.');loadUsersList();return;}
+    // Снятие замещения — по ФАКТУ (перечитанный список), а не по прогнозу из кэша (ревью 25.09)
+    let arAfter=String(after.acting_role||'').toLowerCase().trim();
+    // Backend v7.8 замещение при смене роли не снимает — досниманием отдельной операцией
+    // (set_acting_role '' работает и на v7.8); не вышло — сказать оператору, а не молчать
+    // По ФАКТУ: после смены роли замещение, недопустимое для новой роли (admin/viewer/совпадает/легаси),
+    // должно исчезнуть — на v7.8 сервер его сам не снимает
+    let clearedVal=(curAR&&!arAfter)?curAR:''; // сервер (v7.9) снял сам
+    if(arAfter&&_sanitizeActing(nr,arAfter)===''){
+      const was=arAfter;
+      const c2=await _adminPost({action:'set_acting_role',login,acting_role:''});
+      if(c2.ok){ arAfter=''; clearedVal=was; const ca=_usersCache.find(x=>_sameLogin(x.login,login)); if(ca)ca.acting_role=''; }
+      else alert('Роль изменена, но замещение «и.о. '+arAfter+'» осталось — снимите его вручную ('+c2.error+').');
+    }
+    // В журнал — фактически снятое значение (а не прогноз из кэша)
+    logAction('user','role','Роль '+login+': '+cur+' → '+nr+(clearedVal?' (замещение «'+clearedVal+'» снято)':''));
+    showSyncToast('✓ Роль '+login+': '+label(nr));
+    loadUsersList();
+  }catch(e){alert('Ошибка: '+e.message);}
 }
 
 // Назначить/снять замещение (acting_role, Backend v7.6). Пустое значение = снять.
 // Только admin (клиентский guard; сервер гейтит по БАЗОВОЙ роли admin_token).
 async function setActingRole(login,acting){
   if(!guardAdmin())return;
-  const {url}=syncGetCfg();
-  if(!url||!authToken)return;
   const val=String(acting||'').toLowerCase().trim();
+  // Перерисовка списка сбрасывает селекты — нажатие «Замещение» без реального изменения не должно
+  // слать запрос и писать в журнал ложное «Снято замещение» (ревью 25.09)
+  const cu=_usersCache.find(x=>_sameLogin(x.login,login));
+  if(cu&&String(cu.acting_role||'').toLowerCase().trim()===val){showSyncToast('Замещение не изменилось');return;}
   try{
-    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({action:'set_acting_role',admin_token:authToken,login,acting_role:val})});
-    await new Promise(r=>setTimeout(r,1500));
+    const r=await _adminPost({action:'set_acting_role',login,acting_role:val});
+    if(!r.ok){alert('Замещение не изменено: '+r.error);loadUsersList();return;}
+    if(r.unverified)await new Promise(res=>setTimeout(res,1500));
     logAction('user','acting',val?('Назначено замещение «'+val+'» пользователю '+login):('Снято замещение у '+login));
+    if(cu)cu.acting_role=val; // кэш := факт (иначе отмена только что назначенного упиралась бы в «не изменилось»)
     showSyncToast(val?('✓ Замещение «'+val+'» — '+login):('✓ Замещение снято — '+login));
     // Правка самого себя — применяем сразу, не дожидаясь 5-минутного sync
-    if(login===authUser.login){authUser.actingRole=val;switchRole(state.role);applyRoleFromAuth();}
+    if(_sameLogin(login,authUser.login)){authUser.actingRole=val;switchRole(state.role);applyRoleFromAuth();}
     loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
 }
 
-async function regenerateToken(login){
+async function regenerateToken(login){ return _userOnce('token:'+login,()=>_regenerateTokenImpl(login)); }
+async function _regenerateTokenImpl(login){
   if(!guardAdmin())return;
   const {url,key}=syncGetCfg();
   if(!url||!authToken)return;
+  const self=_sameLogin(login,authUser.login);
+  if(self&&!confirm('Сменить токен СВОЕЙ учётки?\n\nСтарая ссылка перестанет работать на всех ваших устройствах. На этом устройстве новый токен подставится сразу, на остальных — войдите по новой ссылке.'))return;
   try{
-    // Отправляем запрос на смену токена
-    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({action:'update_user',admin_token:authToken,login,new_token:true})});
-    // Ждём пока Apps Script обработает
-    await new Promise(r=>setTimeout(r,2000));
-    // Читаем обновлённый список пользователей
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(authToken)+'&_='+Date.now());
-    const d=await r.json();
-    const updUser=(d.users||[]).find(u=>u.login===login);
-    if(!updUser||!updUser.token){
-      alert('Токен сменён. Откройте лист users в Google Sheets и скопируйте новый токен вручную.');
+    // Меняется ТОЛЬКО токен (update_user с одним полем new_token)
+    _hideUserLink(); // прямо перед запросом: отмена confirm не стирает показанную ссылку
+    const r=await _adminPost({action:'update_user',login,new_token:true});
+    if(!r.ok){alert('Токен не сменён: '+r.error);return;}
+    // Новый токен — из ОТВЕТА сервера (update_user отдаёт его и в v7.8, и в v7.9). Перечитывать
+    // список для СВОЕЙ учётки нельзя: старый токен уже недействителен — раньше админ получал
+    // «Unauthorized», ссылки не видел и терял вход (ревью 25.09).
+    let token=(r.data&&r.data.token)?String(r.data.token):'';
+    if(self&&token){ authToken=token; try{ localStorage.setItem('auth_token',token); }catch(e){} }
+    logAction('user','token','Новая ссылка (смена токена) для '+login);
+    if(!token&&!self){
+      if(r.unverified)await new Promise(res=>setTimeout(res,2000)); // ответ no-cors непроверяем — ждём обработку
+      try{ const u2=(await _readUsers()).find(u=>_sameLogin(u.login,login)); token=(u2&&u2.token)?String(u2.token):''; }catch(e){}
+    }
+    if(!token){
+      alert('Токен сменён, но получить новый не удалось.\nОткройте лист users в Google Sheets и скопируйте токен вручную'+(self?' — и войдите по новой ссылке на этом устройстве.':'.'));
       return;
     }
     const base=window.location.origin+window.location.pathname;
-    const link=base+'?u='+encodeURIComponent(login)+'&t='+updUser.token+'&k='+encodeURIComponent(key)+'&s='+encodeURIComponent(url);
-    document.getElementById('nu-link-text').textContent=link;
-    document.getElementById('nu-link-result').style.display='block';
-    logAction('user','token','Новая ссылка (смена токена) для '+login);
-    showSyncToast('✓ Новая ссылка сгенерирована');
+    const link=base+'?u='+encodeURIComponent(login)+'&t='+token+'&k='+encodeURIComponent(key)+'&s='+encodeURIComponent(url);
+    _showUserLink(login,link,self);
+    showSyncToast(self?'✓ Новая ссылка — токен этого устройства обновлён':'✓ Новая ссылка сгенерирована');
     loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
 }
 
 async function toggleUser(login,active){
   if(!guardAdmin())return;
-  const {url}=syncGetCfg();
-  if(!url||!authToken)return;
+  const u=_usersCache.find(x=>_sameLogin(x.login,login));
+  if(!active){
+    if(_sameLogin(login,authUser.login)){alert('Нельзя заблокировать собственную учётку.');return;}
+    if(u&&_roleOf(u)==='admin'&&!_otherActiveAdmin(_usersCache,login)){alert('Нельзя заблокировать последнего администратора.');return;}
+  } else if(u&&_roleOf(u)==='admin'&&_otherActiveAdmin(_usersCache,login)){
+    alert('Активный администратор уже есть — второго admin не разблокировать (администратор — только один).');return;
+  }
   try{
-    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({action:'update_user',admin_token:authToken,login,active})});
-    await new Promise(r=>setTimeout(r,1000));
+    // Меняется ТОЛЬКО статус (update_user с одним полем active)
+    const r=await _adminPost({action:'update_user',login,active});
+    if(!r.ok){alert((active?'Разблокировка':'Блокировка')+' не выполнена: '+r.error);loadUsersList();return;}
+    if(r.unverified)await new Promise(res=>setTimeout(res,1000));
     logAction('user',active?'unblock':'block',(active?'Разблокирован':'Заблокирован')+' пользователь '+login);
+    loadUsersList();
+  }catch(e){alert('Ошибка: '+e.message);}
+}
+
+// Удаление учётки (Backend v7.9, delete_user). Удаляется только строка листа users —
+// токен перестаёт действовать. Вылеты, склад, расчёт, журнал движений и actlog НЕ трогаются.
+// Нельзя: себя, последнего администратора (то же проверяет сервер).
+async function adminDeleteUser(login){
+  if(!guardAdmin())return;
+  const u=_usersCache.find(x=>_sameLogin(x.login,login));
+  if(!u){_rowGone('учётка «'+login+'»',loadUsersList);return;}
+  if(_sameLogin(login,authUser.login)){alert('Нельзя удалить собственную учётку.');return;}
+  if(_roleOf(u)==='admin'&&!_otherActiveAdmin(_usersCache,login)){alert('Нельзя удалить последнего администратора.');return;}
+  const sq=_roleOf(u)==='pilot'?_userSquad(login):null;
+  if(!confirm('Удалить учётку «'+login+'» (роль '+_roleOf(u)+')?\n\n'
+    +'• Вход по её ссылке перестанет работать сразу.\n'
+    +'• Данные НЕ удаляются: вылеты, склад'+(sq&&sq.kind!=='none'?', расчёт «'+sq.name+'»':'')+', журнал движений и журнал действий остаются.\n'
+    +'• Отменить нельзя — при необходимости учётку создают заново (новая ссылка).'))return;
+  try{
+    const r=await _adminPost({action:'delete_user',login});
+    if(!r.ok){alert('Учётка не удалена: '+r.error);loadUsersList();return;}
+    if(r.unverified)await new Promise(res=>setTimeout(res,1500));
+    const still=(await _readUsers()).some(x=>_sameLogin(x.login,login));
+    if(still){alert('Сервер не подтвердил удаление — проверьте лист users (нужен Backend v7.9).');loadUsersList();return;}
+    logAction('user','delete','Удалена учётка '+login+' (роль '+_roleOf(u)+'); данные не тронуты');
+    showSyncToast('✓ Учётка '+login+' удалена');
     loadUsersList();
   }catch(e){alert('Ошибка: '+e.message);}
 }
@@ -5052,14 +5340,14 @@ function initQuickForm(){
     // Для локальной/админской учётки — имя из ВЫБРАННОГО в переключателе расчёта
     // (04.09.2026: было state.squads[0] — во «взгляде пилота» форма подставляла первого
     //  по списку, а не того, кого выбрали; теперь имя берётся из ключа в значении роли)
-    const pilotName=authUser.login&&authUser.login!=='local'&&authUser.login!=='admin'
+    const pilotName=authUser.login&&authUser.login!=='local'&&!isAdminAccount()
       ?authUser.login
       :pilotRoleName(currentRole()); // не резолвится — оставляем пусто: подставить
                                      // «первого по списку» хуже, чем пустое поле
     qp.value=pilotName;
   } else {
     if(qpWrap)qpWrap.style.display='';
-    if(authUser.login&&authUser.login!=='local'&&authUser.login!=='admin')
+    if(authUser.login&&authUser.login!=='local'&&!isAdminAccount())
       qp.value=authUser.login;
   }
 }
@@ -5131,6 +5419,7 @@ function logAction(type, action, details){
     time:nowHM(),
     user:authUser.login||'unknown',
     role:authUser.role||'',
+    build:APP_BUILD, // сборка клиента (25.09.2026): Пользователи → «Последний вход» показывает, кому обновиться
     type,action,details
   };
   actLog.unshift(entry);
