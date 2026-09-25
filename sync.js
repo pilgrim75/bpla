@@ -302,6 +302,13 @@ function syncQueueStartupCheck(){
   updateQueueIndicator();
 }
 
+// Set с нормализацией ключа к строке: has(1779899523574) === has('1779899523574')
+class _TombSet extends Set{
+  constructor(it){ super(); if(it) for(const v of it) this.add(v); }
+  add(v){ return super.add(String(v)); }
+  has(v){ return super.has(String(v)); }
+  delete(v){ return super.delete(String(v)); }
+}
 // --- Tombstones (удалённые вылеты/loss-передачи) ---
 // Хранение: [{id,ts}] — ts нужен для чистки старых записей (раньше — массив id,
 // рос бесконечно; старый формат мигрируется на лету с ts=сейчас).
@@ -316,15 +323,19 @@ const tombstones = {
     }catch(e){ return []; }
   },
   _save(list){ try{ localStorage.setItem(this._key, JSON.stringify(list)); }catch(e){ if(typeof lsQuotaWarn==='function') lsQuotaWarn(e); else console.error('[STORAGE] tombstones write failed', e&&e.name); } },
-  load(){ return new Set(this._load().map(x=>x.id)); },
+  // Набор сравнивает id КАК СТРОКИ (25.09.2026). Облачные tombstones сливаются строками
+  // (syncMergeCloudTombstones → String), а у легаси-записей id — ЧИСЛО (1779899523574):
+  // tb.has(число) по набору строк давал false → удаление с другого устройства по легаси-id
+  // НИКОГДА не применялось (форензика «207 дублей»: стейл-устройство не узнавало об удалениях).
+  load(){ return new _TombSet(this._load().map(x=>x.id)); },
   add(id){ this.addMany([id]); },
   // Массовое добавление одним чтением/записью localStorage (adminClearFlights и т.п.)
   addMany(ids){
     const list=this._load();
-    const have=new Set(list.map(x=>x.id));
+    const have=new Set(list.map(x=>String(x.id)));
     const now=Date.now();
     let changed=false;
-    ids.forEach(id=>{ if(id!=null&&id!==''&&!have.has(id)){ list.push({id,ts:now}); have.add(id); changed=true; } });
+    ids.forEach(id=>{ if(id!=null&&id!==''&&!have.has(String(id))){ list.push({id,ts:now}); have.add(String(id)); changed=true; } });
     if(changed) this._save(list);
   },
   has(id){ return this.load().has(id); },
@@ -399,6 +410,58 @@ function syncPruneStateByTombstones(){
     if(state.transfers.length!==n) removed=true;
   }
   return removed;
+}
+
+// ============================================================
+// ЗАЩИТА ОТ ВОСКРЕШЕНИЯ ДО-ЧЕРТОВЫХ ЗАПИСЕЙ (25.09.2026, форензика «207 дублей»)
+// ============================================================
+// Устройство с устаревшим localStorage держит удалённые записи как «локальные вне
+// облака» (ветка localOnly syncPullOnLogin) и возвращает их в облако полной выгрузкой
+// (syncPushAll = облако ∪ локаль). Пока удаливший держал локальный tombstone, его
+// выгрузка их вычищала; tombstones.prune (90 дней) снял защиту — 207 дублей потерь
+// 27.05 и 19 старых версий вылетов вернулись навсегда.
+// Правило: ПОСЛЕ ЧЕРТЫ до-чертовая история в облаке полна (черта требует пустой
+// очереди), поэтому до-чертовая запись, которой НЕТ в облаке и НЕТ в очереди этого
+// устройства, — воскрешение. Её не выгружаем: снимаем локально + предупреждение в actlog.
+// Черты нет → ничего не делаем (поведение прежнее).
+let _syncStaleChecked=false; // была ли в этой сессии проверка на свежем полном чтении облака
+// Момент ЗАПИСИ для проверки. id вида '<ts>_x_…' выдан при выгрузке безыдной записи —
+// это время выгрузки, а не записи (старая запись «помолодела» бы), поэтому такой id
+// не используем; последний фолбэк — дата+время события.
+function _syncStaleRecTs(r,kind){
+  const own=kind==='f'?+r._savedTs:+r._cut;
+  if(Number.isFinite(own)&&own>0) return own;
+  const sid=String(r.id==null?'':r.id);
+  if(sid.indexOf('_x_')<0){ const n=parseInt(sid,10); if(Number.isFinite(n)&&n>1e12) return n; }
+  const d=Date.parse((r.date||'')+'T'+(r.time||'00:00'));
+  return Number.isFinite(d)?d:0;
+}
+// cloudF/cloudT — Set открытых id строк облака (сырые строки, в т.ч. нерасшифрованные:
+// запись с затёртой #ERROR! ячейкой в облаке ЕСТЬ, её локальную копию снимать нельзя).
+// Возвращает число снятых записей.
+function syncDropStaleLocal(cloudF,cloudT,where){
+  const cut=(typeof marshrutCutTs==='function')?marshrutCutTs():0;
+  if(!cut||!cloudF||!cloudT) return 0;
+  _syncStaleChecked=true;
+  const queued=new Set(pendingQueue.all().map(x=>(x.data&&x.data.id)||x.id).filter(x=>x!=null).map(String));
+  const stale=(r,kind,cloud)=>!!r&&r.id!=null&&r.id!==''&&!cloud.has(String(r.id))&&!queued.has(String(r.id))&&_syncStaleRecTs(r,kind)<cut;
+  const dropF=(state.flights||[]).filter(f=>stale(f,'f',cloudF));
+  const dropT=(state.transfers||[]).filter(t=>stale(t,'t',cloudT));
+  if(!dropF.length&&!dropT.length) return 0;
+  const dF=new Set(dropF), dT=new Set(dropT);
+  state.flights=state.flights.filter(f=>!dF.has(f));
+  state.transfers=(state.transfers||[]).filter(t=>!dT.has(t));
+  const who=(typeof authUser!=='undefined'&&authUser&&authUser.login)||'?';
+  const role=(typeof authUser!=='undefined'&&authUser&&authUser.role)||'';
+  const ua=(typeof navigator!=='undefined'&&navigator.userAgent)?navigator.userAgent.slice(0,60):'';
+  const ids=[...dropF.map(f=>'F:'+f.id),...dropT.map(t=>'T:'+t.id)];
+  const msg='Воскрешение до-чертовых записей остановлено ('+where+'): устройство '+who+(role?'/'+role:'')+
+    ' — вылетов '+dropF.length+', движений '+dropT.length+' нет в облаке, в облако НЕ выгружены и сняты локально. id: '+
+    ids.slice(0,40).join(', ')+(ids.length>40?' … (+'+(ids.length-40)+')':'')+(ua?' | '+ua:'');
+  console.warn('[SYNC] '+msg);
+  syncLogEvent('stale_drop', msg);
+  if(typeof showSyncToast==='function') showSyncToast('⚠ Устаревшие записи ('+ids.length+') не выгружены — см. журнал действий', 8000);
+  return dropF.length+dropT.length;
 }
 
 // --- Версия склада ---
@@ -953,7 +1016,9 @@ async function syncPushAll(silent=false){
   if(!silent) syncIndicator('syncing');
 
   // Merge с облаком. Если чтение не удалось — пишем как есть (деградация к прежнему
-  // поведению), append-записи всё равно дублируются через pendingQueue.
+  // поведению), append-записи всё равно дублируются через pendingQueue. После черты —
+  // не пишем вовсе (см. ниже, защита от воскрешения).
+  let mergedOk = false;
   if(token){
     try{
       const d = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
@@ -986,9 +1051,21 @@ async function syncPushAll(silent=false){
       // Путь Б: не выгружать обратно записи, помеченные удалёнными (свои/чужие).
       // Бонус: полный write листа flights ниже физически уберёт их из облака (GC).
       if(syncPruneStateByTombstones()){ try{ saveLocalQuiet(); }catch(e){} }
+      // После черты: до-чертовые записи, которых нет в облаке, — воскрешение; не выгружаем
+      const rawIds=rows=>new Set((rows||[]).map(r=>r&&r.id).filter(x=>x!=null&&x!=='').map(String));
+      if(syncDropStaleLocal(rawIds(d.flights), rawIds(d.transfers), 'полная выгрузка')){ try{ saveLocalQuiet(); }catch(e){} }
+      mergedOk = true;
     }catch(e){
       console.warn('[SYNC] pushAll merge пропущен (чтение не удалось):', e.message);
     }
+  }
+  // После черты полная выгрузка БЕЗ сверки с облаком запрещена: без облачного списка id
+  // воскрешённую до-чертовую запись не отличить, а writeAll заменяет лист целиком.
+  // Новые записи всё равно доезжают очередью (append_one), правки — следующей выгрузкой.
+  if(!mergedOk && typeof marshrutCutTs==='function' && marshrutCutTs()){
+    console.warn('[SYNC] pushAll пропущен: облако не прочитано, а черта проведена');
+    if(!silent) syncIndicator('error');
+    return false;
   }
 
   // Склад/расчёты (stock/squads) НЕ пишем здесь — только flights/transfers.
@@ -1034,6 +1111,13 @@ async function syncPushFlightsOnly(){
   if(syncReadOnly()) return; // viewer не пишет в облако
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;
+  // После черты — только если в этой сессии state уже сверен с облаком (иначе в полном
+  // write листа flights мог бы уйти воскрешённый до-чертовый вылет). Флаг вернётся
+  // ближайшей полной выгрузкой.
+  if(!_syncStaleChecked && typeof marshrutCutTs==='function' && marshrutCutTs()){
+    console.warn('[SYNC] flights-only push отложен: state ещё не сверен с облаком после черты');
+    return;
+  }
   // id безыдных вылетов пишем обратно в state (см. комментарий в syncPushAll)
   const flights = await Promise.all(state.flights.map(f=>{ if(!f.id) f.id=genId('x'); return syncEncrypt(f, key); }));
   const data = geoStripFromSync({flights});
@@ -1047,7 +1131,22 @@ async function syncPushFlightsOnly(){
 // Повторно шлёт лишь те, что давно не пробовали (или ещё ни разу), чтобы
 // не плодить дубли между отправкой и подтверждением.
 const QUEUE_RETRY_MS = 25000;
-async function syncFlushQueue(){
+// Отправка СЕРИАЛИЗОВАНА (25.09.2026): вызовы идут из публикации, поллинга (30 с),
+// полной выгрузки, события online — раньше их циклы шли параллельно, а lastTryTs
+// ставится только ПОСЛЕ ответа сервера, поэтому ещё не отправленный элемент уходил
+// из каждого цикла. На очереди 226 tombstone'ов (~3 с на append) это дало 44 лишние
+// строки в облачном листе (сервер без LockService — v7.8 не выложен — дубль не ловит).
+// Вызов во время прогона ставит ОДИН повторный прогон после него (новые элементы не ждут поллинга).
+let _flushRun=null, _flushAgain=false;
+function syncFlushQueue(){
+  if(_flushRun){ _flushAgain=true; return _flushRun; }
+  _flushRun=(async()=>{
+    try{ do{ _flushAgain=false; await _syncFlushQueueOnce(); }while(_flushAgain); }
+    finally{ _flushRun=null; }
+  })();
+  return _flushRun;
+}
+async function _syncFlushQueueOnce(){
   const q = pendingQueue.all();
   if(!q.length) return;
   const {url,key,token} = syncGetCfg();
@@ -1081,6 +1180,10 @@ async function syncPullAll(confirm_=false){
       transfers: syncDedupeById(await syncDecryptRows(d.transfers||[], key, 'transfers')),
       users: d.users||[]
     };
+    // Открытые id ВСЕХ строк облака (в т.ч. нерасшифрованных) — для защиты от воскрешения
+    // до-чертовых записей (syncDropStaleLocal): «нет в облаке» решается по ним, а не по расшифрованным
+    const rawIds=rows=>new Set((rows||[]).map(r=>r&&r.id).filter(x=>x!=null&&x!=='').map(String));
+    loaded.cloudIds={f:rawIds(d.flights), t:rawIds(d.transfers)};
     // Путь Б: подтянуть облачные tombstones (чужие удаления) в локальный набор ДО
     // фильтрации — иначе удалённое на другом устройстве здесь бы не скрылось.
     loaded.tombstoneIds = syncMergeCloudTombstones(d.tombstones);
@@ -1179,6 +1282,9 @@ async function syncPullOnLogin(){
     // Отправляем накопленное
     setTimeout(()=>syncFlushQueue(), 1000);
   }
+  // После черты: до-чертовые записи вне облака и вне очереди — воскрешение (ветка localOnly
+  // выше их сохранила бы и saveLocal → syncPushAll вернул бы их в облако). Снимаем здесь.
+  if(loaded.cloudIds) syncDropStaleLocal(loaded.cloudIds.f, loaded.cloudIds.t, 'полная синхронизация');
   if(stockDelta){ syncStockSelfCheck('merge при полной синхронизации'); setTimeout(()=>syncPushStockSquads(), 800); } // объединённый снимок — в облако
   saveLocal();
   syncIndicator('ok');
