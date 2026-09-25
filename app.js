@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['app.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['app.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
 
 // ============ ВЕРСИЯ КЛИЕНТА ============
 // APP_VERSION/APP_BUILD с v0.29 живут в version.js (первый <script>, единый источник; правит
@@ -193,6 +193,14 @@ function _isCorrectionUnit(unit){ return /коррекц/i.test(String(unit||'')
 // у _flightByKey); после merge она не адресуется, но merge её и так схлопывает.
 // Дубль-ключи (две строки одной пары модель|статус) разрешаются в первую — как в merge.
 function _rowN(s){ return String(s==null?'':s).trim().toLowerCase(); }
+// Поиск расчёта по имени (R0/D5, 25.09.2026): сначала точное совпадение, иначе — без учёта регистра
+// и пробелов по краям, как журнал движений (локация = _rowN) и _trSquadAdd. Строгое s.pilot===X в
+// путях учёта при расчёте «Толстый» и вводе «толстый» заводило ДУБЛЬ-расчёт: наличие уходило в новый,
+// а ledger считал обоих одной локацией. Привязка учётки пилота (accountRole) — намеренно строгая, не тут.
+function _findSquad(name){
+  const L=state.squads||[];
+  return L.find(s=>s.pilot===name)||L.find(s=>_rowN(s.pilot)===_rowN(name))||null;
+}
 // Строка-ключ в inline-обработчик: экранируем для JS-литерала И для HTML-атрибута.
 // Перевод строки внутри имени тоже экранируем — иначе он рвёт JS-литерал в атрибуте
 // и обработчик молча не компилируется (строка становится нередактируемой).
@@ -728,7 +736,15 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
   let f=state.flights[idx];
   if(!f) return;
   const pilot=f.pilot;
-  const apply=await confirmLossDroneChange(oldDrone,newDrone,pilot);
+  // Диалог — о ФАКТИЧЕСКОМ движении (третий раунд ревью R0): возвращается борт ЗАПИСИ о потере её
+  // расчёту; нет записи / заморожена / уже на этом борту — склад не изменится, так и сказано
+  const pre=_findLossRecordFor(f, oldDrone);
+  let preMsg;
+  if(!pre) preMsg='Запись о потере для этого вылета не найдена — склад <b>не изменится</b>, поменяется только борт в вылете.';
+  else if(pre.frozen) preMsg='Запись о потере сделана до черты (история заморожена) — склад <b>не изменится</b>, поменяется только борт в вылете.';
+  else if(_rowN(pre.rec.drone)===_rowN(newDrone)) preMsg='Запись о потере уже на борту <b>'+esc(newDrone)+'</b> — склад <b>не изменится</b>.';
+  else { const q=parseInt(pre.rec.qty,10)||1; preMsg='<b>'+esc(pre.rec.drone)+'</b> ×'+q+' возвращается расчёту '+esc(pre.rec.pilot||pilot||'')+', <b>'+esc(newDrone)+'</b> ×'+q+' списывается как потеря.<br>Применить изменения к складу?'; }
+  const apply=await confirmLossDroneChange(oldDrone,newDrone,pilot,preMsg);
 
   // Перерезолв после модалки — см. подробный комментарий в adminEditReturned:
   // Promise-оверлей не блокирует цикл, полная синхронизация могла заменить объекты.
@@ -739,29 +755,45 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
   // Текст вылета меняем в любом случае
   f.drone=newDrone;
 
-  let applied=false;
+  let applied=false, why=apply?'':'оператор ответил «Нет»', moved='';
   if(apply){
     // 1) СНАЧАЛА запись о потере в журнале: без неё наличие двигать нельзя — дельта qty обязана
     //    равняться дельте ledger (раньше qty менялся и при отсутствующей записи — форензика 06.09 §7)
-    if(!updateLossTransferDrone(f, oldDrone, newDrone)){
-      const msg='Запись о потере для этого вылета не найдена — наличие не изменено (изменён только борт в вылете).';
+    const found=updateLossTransferDrone(f, oldDrone, newDrone);
+    if(!found||found.frozen){
+      why=found&&found.frozen?'запись о потере до черты':'запись о потере не найдена';
+      const msg=found&&found.frozen
+        ?'Запись о потере сделана до черты (история заморожена) — склад не пересчитан, изменён только борт в вылете.'
+        :'Запись о потере для этого вылета не найдена — наличие не изменено (изменён только борт в вылете).';
       console.warn('[учёт] '+msg);
       if(typeof showSyncToast==='function')showSyncToast('⚠ '+msg,8000);
     } else {
-      let sq=state.squads.find(s=>s.pilot===pilot);
-      if(!sq){ sq={pilot,drones:[]}; state.squads.push(sq); }
-      // 2) вернуть старый борт пилоту
-      const od=sq.drones.find(d=>d.name.toLowerCase()===oldDrone.toLowerCase());
-      if(od) od.qty++; else sq.drones.push({name:oldDrone,qty:1});
-      // 3) списать новый борт у пилота — в минус, если его нет (ADR-001 §4: минус = сигнал,
-      //    как в writeDroneLoss; строка снимается только при точном нуле)
-      let nd=sq.drones.find(d=>d.name.toLowerCase()===newDrone.toLowerCase());
-      if(!nd){ nd={name:newDrone,qty:0}; sq.drones.push(nd); }
-      nd.qty--;
-      if(nd.qty===0) sq.drones=sq.drones.filter(d=>d!==nd);
-      if(nd.qty<0) lossDeficitWarn({deficit:true,pilot,drone:newDrone,qty:nd.qty});
-      syncBumpStockVersion();
-      applied=true;
+      // Наличие двигается ПО ЗАПИСИ о потере — ровно на её движение в журнале (ревью R0):
+      //  • расчёт — из записи (локация loss в журнале — squadKeyOf(t.pilot)): пилот вылета мог быть
+      //    исправлен после потери, а запись осталась за прежним расчётом;
+      //  • возвращается борт, который был В ЗАПИСИ (found.prev), а не в вылете: они расходятся, если
+      //    борт вылета меняли без пересчёта («Нет» в диалоге, полоса правки);
+      //  • количество — qty записи (по умолчанию 1, как в writeDroneLoss).
+      const rec=found.rec, prev=found.prev;
+      const lossPilot=rec.pilot||pilot;
+      const q=parseInt(rec.qty,10)||1;
+      if(_rowN(prev)!==_rowN(newDrone)){
+        let sq=_findSquad(lossPilot); // D5
+        if(!sq){ sq={pilot:lossPilot,drones:[]}; state.squads.push(sq); }
+        // 2) вернуть борт записи расчёту записи
+        _restoreSquadQty(lossPilot, prev, q);
+        // 3) списать новый борт — в минус, если его нет (ADR-001 §4: минус = сигнал, как в
+        //    writeDroneLoss; строка снимается только при точном нуле)
+        sq=_findSquad(lossPilot);
+        let nd=sq.drones.find(d=>_rowN(d.name)===_rowN(newDrone));
+        if(!nd){ nd={name:newDrone,qty:0}; sq.drones.push(nd); }
+        nd.qty-=q;
+        if(nd.qty===0) sq.drones=sq.drones.filter(d=>d!==nd);
+        if(nd.qty<0) lossDeficitWarn({deficit:true,pilot:lossPilot,drone:newDrone,qty:nd.qty});
+        syncBumpStockVersion();
+        applied=true;
+        moved=lossPilot+': '+prev+' +'+q+', '+newDrone+' −'+q;
+      } else why='запись о потере уже на этом борту';
     }
   }
 
@@ -770,30 +802,80 @@ async function adminEditLossDrone(idx, oldDrone, newDrone){
   // syncPullOnLogin (5 мин) успевал откатить их облачной версией. Склад — точечно.
   saveLocal();
   if(applied) syncPushStockSquads();
-  logAction('flight','edit','Адм: смена борта в потере '+oldDrone+' → '+newDrone+' у '+(pilot||'')+(applied?'':(apply?' — без пересчёта склада (запись о потере не найдена)':' — без пересчёта склада')));
+  logAction('flight','edit','Адм: смена борта в потере '+oldDrone+' → '+newDrone+' у '+(pilot||'')+(applied?' — склад: '+moved:' — без пересчёта склада ('+why+')'));
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
+// Запись о потере принадлежит ДРУГОМУ живому вылету (R0/D1, 25.09.2026 — тот же гейт, что
+// notOthers в syncDeleteFlight с 04.09). Нестрогие проходы поиска (пилот+борт+дата[+время])
+// иначе забирали чужую запись: два вылета с одинаковыми пилот+борт+дата, у A записи нет
+// (легаси), у B — с flightId=B → возврат/смена борта у A снимали/переписывали запись B:
+// минус у расчёта и потеря B «без записи». id сравниваются строкой (легаси-id бывают числом).
+function _lossOwnedByOther(t,f){
+  if(t.flightId==null||t.flightId==='')return false;
+  const fid=String(t.flightId);
+  if(f&&f.id!=null&&String(f.id)===fid)return false;
+  return (state.flights||[]).some(x=>x&&x.id!=null&&String(x.id)===fid);
+}
+// Нестрогий проход (пилот+борт+дата[+время]) может взять только «свободную» запись: не чужого
+// живого вылета (D1) и — для вылета ПОСЛЕ черты — не замороженную до-чертовую (ревью R0): его
+// собственная потеря записана после черты, а до-чертовая запись с тем же пилотом/бортом/датой —
+// чужая легаси-история. Иначе смена борта переписала бы замороженную запись и сдвинула наличие
+// без журнала, а возврат снял бы её. Черты нет — второе условие всегда ложно.
+function _lossFreeFor(t,f){
+  if(_lossOwnedByOther(t,f)) return false;
+  const foreign=t.flightId!=null&&t.flightId!==''&&!(f&&f.id!=null&&String(f.id)===String(t.flightId));
+  // Запись ПОСЛЕ черты всегда несёт id своего вылета — с чужим flightId она не берётся и вылетом ДО
+  // черты (третий раунд ревью R0: удаление легаси-вылета снимало потерю ещё не пришедшего вылета)
+  if(foreign && !_isPreCutTransfer(t)) return false;
+  if(!_isPreCutFlight(f)){
+    if(_isPreCutTransfer(t)) return false;
+    // Вылет после черты: у всех его записей о потере flightId проставлен (writeDroneLoss всегда
+    // передаёт id вылета). Запись с ДРУГИМ flightId — чужая, даже если того вылета на устройстве
+    // ещё нет (запись о потере приходит раньше своего вылета: очередь шлёт её первой) — второе ревью R0.
+    if(t.flightId!=null&&t.flightId!==''&&!(f&&f.id!=null&&String(f.id)===String(t.flightId))) return false;
+  }
+  return true;
+}
+
+// Поиск записи о потере для вылета БЕЗ изменений (для диалога до правки): те же проходы, что в
+// updateLossTransferDrone. {rec, frozen} | null.
+function _findLossRecordFor(f, drone){
+  const ts=state.transfers||[];
+  const pLow=(f.pilot||'').toLowerCase(), dLow=String(drone||'').toLowerCase();
+  let rec=null;
+  if(f.id) rec=ts.find(t=>t.type==='loss'&&t.flightId===f.id);
+  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&t.time===f.time&&_lossFreeFor(t,f));
+  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&_lossFreeFor(t,f));
+  return rec?{rec, frozen:_isPreCutTransfer(rec)}:null;
+}
 // Находит запись о потере для вылета (по flightId → пилот+борт+дата+время → +дата)
 // и меняет в ней борт. Запись уйдёт в облако полным снимком (syncPushAll).
+// Возвращает {rec, prev} (prev — борт записи до правки), {frozen:true} для записи до черты, null — нет записи.
 function updateLossTransferDrone(f, oldDrone, newDrone){
   const ts=state.transfers||[];
   const pLow=(f.pilot||'').toLowerCase();
   const dLow=oldDrone.toLowerCase();
   let rec=null;
   if(f.id) rec=ts.find(t=>t.type==='loss'&&t.flightId===f.id);
-  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&t.time===f.time);
-  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date);
-  if(rec){ rec.drone=newDrone; return true; }
-  return false; // записи нет — вызывающий наличие не трогает
+  // Нестрогие проходы — только «свободные» записи (D1 + замороженные до черты, _lossFreeFor)
+  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&t.time===f.time&&_lossFreeFor(t,f));
+  if(!rec) rec=ts.find(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&_lossFreeFor(t,f));
+  if(!rec) return null; // записи нет — вызывающий наличие не трогает
+  // Запись до черты заморожена (в журнал движений не входит): не переписывать и наличие не двигать —
+  // иначе qty сдвинется без журнала (ревью R0; проход 1 по flightId идёт мимо _lossFreeFor)
+  if(_isPreCutTransfer(rec)) return {frozen:true, rec};
+  const prev=rec.drone;
+  rec.drone=newDrone;
+  return {rec, prev}; // rec.pilot — локация в журнале, prev — борт, который запись списывала
 }
 
 // Диалог подтверждения смены борта в потере. Возвращает Promise<bool>.
-function confirmLossDroneChange(oldDrone,newDrone,pilot){
+function confirmLossDroneChange(oldDrone,newDrone,pilot,msgHtml){
   return new Promise(resolve=>{
     const ov=modalOverlay(`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:400px;width:92%;box-shadow:0 8px 32px #0008">
       <div style="font-size:13px;font-weight:700;color:var(--amber,#f59e0b);margin-bottom:10px">Борт изменён</div>
-      <div style="font-size:12px;color:var(--text);margin-bottom:16px;line-height:1.5"><b>${esc(oldDrone)}</b> возвращён пилоту${pilot?' '+esc(pilot):''}, <b>${esc(newDrone)}</b> списан как потеря.<br>Применить изменения к складу?</div>
+      <div style="font-size:12px;color:var(--text);margin-bottom:16px;line-height:1.5">${msgHtml||('<b>'+esc(oldDrone)+'</b> возвращён пилоту'+esc(pilot?' '+pilot:'')+', <b>'+esc(newDrone)+'</b> списан как потеря.<br>Применить изменения к складу?')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-success btn-sm" id="lds-yes">Да</button>
         <button class="btn btn-sm" id="lds-no">Нет</button>
@@ -816,9 +898,12 @@ async function adminEditReturned(idx, newReturned){
   // Без борта списывать/возвращать нечего — просто меняем статус
   if(!drone){ syncEditFlight(idx,'returned',newReturned); return; }
 
+  // Возврат — о ФАКТИЧЕСКОМ движении: наличие возвращается по записям о потере (их расчёт/борт/qty),
+  // а не по вылету; нет записи или она до черты — склад не изменится (четвёртый раунд ревью R0)
+  const ret = loss ? null : _describeReturn(f);
   const msg = loss
-    ? `Борт <b>${esc(drone)}</b> будет списан как потеря у пилота${pilot?' '+esc(pilot):''}. Применить?`
-    : `Борт <b>${esc(drone)}</b> будет возвращён пилоту${pilot?' '+esc(pilot):''}. Применить?`;
+    ? `Борт <b>${esc(drone)}</b> будет списан как потеря у пилота${esc(pilot?' '+pilot:'')}. Применить?`
+    : (ret.moved ? `В наличие вернётся: <b>${esc(ret.moved)}</b>. Применить?` : `Склад <b>не изменится</b> (${esc(ret.reason)}) — поменяется только статус вылета. Применить?`);
   const apply = await confirmReturnedChange(msg);
 
   // ПЕРЕРЕЗОЛВ ПОСЛЕ МОДАЛКИ (04.09.2026). Это НЕ window.confirm: confirmReturnedChange —
@@ -831,6 +916,8 @@ async function adminEditReturned(idx, newReturned){
   const live=(f.id!=null&&_flightByKey(String(f.id)))||(state.flights.includes(f)?f:null);
   if(!live){ _rowGone('вылет',renderAdminFlights); return; }
   f=live;
+  // Фактическое движение возврата — по записям ПОСЛЕ перерезолва (для журнала)
+  const retAct=(!loss&&apply)?_describeReturn(f):null;
 
   // Статус вылета меняем в любом случае
   f.returned=newReturned;
@@ -853,7 +940,7 @@ async function adminEditReturned(idx, newReturned){
   // Склад точечно: для потери — здесь (writeDroneLoss не пушит сам), для возврата — returnLossDrone.
   saveLocal();
   if(apply && loss) syncPushStockSquads(); // syncPushStockSquads сам бампит версию
-  logAction('flight','edit','Адм: '+(loss?'вернул → потерян':'потерян → вернул')+' '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||'')+' ('+drone+')'+(apply?'':' — без пересчёта склада'));
+  logAction('flight','edit','Адм: '+(loss?'вернул → потерян':'потерян → вернул')+' '+(f.pilot||'')+' '+(f.date||'')+' '+(f.time||'')+' ('+drone+')'+(!apply?' — без пересчёта склада':(!loss&&retAct?(retAct.moved?' — в наличие: '+retAct.moved:' — без пересчёта склада ('+retAct.reason+')'):'')));
   renderAdminFlights(); renderDashboard(); renderInventory();
 }
 
@@ -868,7 +955,7 @@ async function adminEditReturned(idx, newReturned){
 function _restoreSquadQty(pilot,drone,qty){
   if(!pilot||!drone||!qty)return;
   const dl=String(drone).toLowerCase();
-  let sq=(state.squads||[]).find(s=>s.pilot===pilot);
+  let sq=_findSquad(pilot); // D5
   if(!sq){sq={pilot,drones:[]};(state.squads=state.squads||[]).push(sq);}
   sq.drones=sq.drones||[];
   const d=sq.drones.find(x=>String(x.name||'').toLowerCase()===dl);
@@ -900,6 +987,25 @@ function _describeRestored(list){
   return Object.keys(acc).map(k=>{const p=k.split('|');return p[0]+': '+p[1]+' ×'+acc[k];}).join('; ');
 }
 
+// Записи о потере, которые снимет returnLossDrone (те же проходы), — БЕЗ изменений: для диалога
+// «потерян → вернул» до применения (четвёртый раунд ревью R0).
+function _findLossRecordsForReturn(f){
+  const ts=state.transfers||[];
+  const pLow=(f.pilot||'').toLowerCase(), dLow=(f.drone||'').toLowerCase();
+  let list=f.id?ts.filter(t=>t.type==='loss'&&t.flightId===f.id):[];
+  if(!list.length) list=ts.filter(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&t.time===f.time&&_lossFreeFor(t,f));
+  if(!list.length) list=ts.filter(t=>t.type==='loss'&&(t.pilot||'').toLowerCase()===pLow&&(t.drone||'').toLowerCase()===dLow&&t.date===f.date&&_lossFreeFor(t,f));
+  return list;
+}
+// Что вернёт returnLossDrone в наличие: {moved:'Поп: ПВХ1 ×1'|'' , reason:'' | причина «склад не изменится»}
+function _describeReturn(f){
+  const list=_findLossRecordsForReturn(f);
+  const live=list.filter(t=>!_isPreCutTransfer(t));
+  const cutOn=typeof marshrutCutTs==='function'&&marshrutCutTs()>0;
+  if(live.length) return {moved:_describeRestored(live.map(t=>({...t,pilot:t.pilot||f.pilot,drone:t.drone||f.drone}))),reason:''};
+  if(!cutOn) return {moved:(f.pilot||'?')+': '+(f.drone||'?')+' ×1',reason:''};
+  return {moved:'',reason:list.length?'запись о потере до черты — история заморожена':'записи о потере нет'};
+}
 function returnLossDrone(f){
   const pLow=(f.pilot||'').toLowerCase();
   const dLow=(f.drone||'').toLowerCase();
@@ -913,12 +1019,14 @@ function returnLossDrone(f){
   if(f.id){
     removedTransfers=removeLoss(t=>t.type==='loss'&&t.flightId===f.id);
   }
+  // Нестрогие проходы 2–3 — только «свободные» записи (_lossFreeFor: D1 + замороженные до черты)
   if((state.transfers||[]).length===before){
     removedTransfers=removeLoss(t=>
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
-      t.date===f.date && t.time===f.time
+      t.date===f.date && t.time===f.time &&
+      _lossFreeFor(t,f)
     );
   }
   if((state.transfers||[]).length===before){
@@ -926,7 +1034,8 @@ function returnLossDrone(f){
       t.type==='loss' &&
       (t.pilot||'').toLowerCase()===pLow &&
       (t.drone||'').toLowerCase()===dLow &&
-      t.date===f.date
+      t.date===f.date &&
+      _lossFreeFor(t,f)
     );
   }
   // Возврат борта — ПОСЛЕ снятия записей (04.09.2026): при действующей черте снятие
@@ -1534,6 +1643,24 @@ function adminResetAll(){
   location.reload();
 }
 
+// Единые правила «сирота» и «дубль» записи о потере — кнопки чистки и аудит (syncAuditStock) считают
+// ОДИНАКОВО (второе ревью R0: аудит показывал сироту/дубль, которых кнопка не находила).
+//  • Сирота — нет живого вылета-потери ни по flightId, ни по ключу пилот+борт+дата.
+//  • Дубль — одинаковые дата+время+пилот+борт И тот же вылет (flightId; пусто у эпохи двойной записи).
+function _lossOrphanTester(flights){
+  const n=v=>String(v||'').toLowerCase().trim();
+  const lost=(flights||[]).filter(f=>f&&f.returned==='no');
+  const keys=new Set(lost.map(f=>n(f.pilot)+'|'+n(f.drone)+'|'+(f.date||'')));
+  const byId=new Set(lost.filter(f=>f.id!=null&&f.id!=='').map(f=>String(f.id)));
+  return t=>!!t&&t.type==='loss'
+    && !(t.flightId!=null&&t.flightId!==''&&byId.has(String(t.flightId)))
+    && !keys.has(n(t.pilot)+'|'+n(t.drone)+'|'+(t.date||''));
+}
+function _lossDupeKey(t){
+  const n=v=>String(v||'').toLowerCase().trim();
+  const fid=(t.flightId!=null&&t.flightId!=='')?String(t.flightId):'';
+  return (t.date||'')+'|'+(t.time||'')+'|'+n(t.pilot)+'|'+n(t.drone)+'|'+fid;
+}
 // Удаляет записи о потерях, у которых нет соответствующего вылета
 // (остаются когда вылет удаляют или меняют returned: no → yes без очистки)
 function adminCleanOrphanLosses(){
@@ -1543,19 +1670,13 @@ function adminCleanOrphanLosses(){
     setStatus('saveStatus','Записей о потерях в журнале нет','muted');
     return;
   }
-  // Строим ключи вылетов с потерей: pilot+drone+date (без времени — допуск на редактирование)
-  const lostFlightKeys=new Set(
-    state.flights
-      .filter(f=>f.returned==='no')
-      .map(f=>(f.pilot||'').toLowerCase()+'|'+(f.drone||'').toLowerCase()+'|'+(f.date||''))
-  );
+  // Сирота — по единому правилу _lossOrphanTester: запись живого вылета-потери по flightId НЕ сирота,
+  // даже если пилот/борт/дата вылета с тех пор исправлены (ревью R0, класс D1); ключ пилот+борт+дата
+  // (без времени — допуск на редактирование) — для записей без связи.
+  const isOrphan=_lossOrphanTester(state.flights);
   // Сначала считаем без мутации — снятие записи возвращает наличие, это надо подтвердить
   const keep=[], drop=[];
-  (state.transfers||[]).forEach(t=>{
-    if(t.type!=='loss'){keep.push(t);return;}
-    const key=(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase()+'|'+(t.date||'');
-    (lostFlightKeys.has(key)?keep:drop).push(t);
-  });
+  (state.transfers||[]).forEach(t=>{ (isOrphan(t)?drop:keep).push(t); });
   const removed=drop.length;
   if(!removed){
     setStatus('saveStatus','✓ Осиротевших записей не найдено — журнал чистый','muted');
@@ -1607,7 +1728,10 @@ function adminDedupeLossTransfers(){
   const kept=[];
   (state.transfers||[]).forEach(t=>{
     if(t.type!=='loss'){kept.push(t);return;}
-    const key=(t.date||'')+'|'+(t.time||'')+'|'+(t.pilot||'').toLowerCase()+'|'+(t.drone||'').toLowerCase();
+    // _lossDupeKey — flightId в ключе (ревью R0, класс D1): записи ДВУХ РАЗНЫХ вылетов одной минуты
+    // (две потери одной модели подряд) — не дубли. Дубли — записи без flightId (эпоха двойной
+    // записи) и записи с одинаковым flightId.
+    const key=_lossDupeKey(t);
     if(seen.has(key)){drop.push(t);return;}
     seen.add(key);kept.push(t);
   });
@@ -1621,7 +1745,7 @@ function adminDedupeLossTransfers(){
   const frozenN=drop.length-dropLive.length;
   const back=(dropLive.length?_describeRestored(dropLive):'— (нечего возвращать)')
     +(frozenN?'\n(ещё '+frozenN+' записей — до черты: снимутся, но наличие не изменят)':'');
-  if(!confirm('Найдено '+removed+' дублей записей о потерях (одинаковые дата+время+пилот+борт).\n\n'
+  if(!confirm('Найдено '+removed+' дублей записей о потерях (одинаковые дата+время+пилот+борт и тот же вылет).\n\n'
     +'Оставить по одной записи в каждой группе, остальные удалить?'))return;
   // Компенсация — ОТДЕЛЬНЫЙ вопрос, и ответ на него знает только оператор.
   // Снятое движение −qty обязано вернуть остаток (симметрия ledger↔qty, §2а 04.09.2026),
@@ -1850,21 +1974,15 @@ function _stockAuditCompute(){
   (state.stock||[]).forEach(d=>{ if((d.qty||0)<0)negatives.push({where:'склад ('+(d.status||'?')+')',model:d.name,qty:d.qty}); });
   (state.squads||[]).forEach(sq=>(sq.drones||[]).forEach(d=>{ if((d.qty||0)<0)negatives.push({where:'расчёт '+sq.pilot,model:d.name,qty:d.qty}); }));
 
-  // Осиротевшие loss-записи — ключ pilot|drone|date, как в adminCleanOrphanLosses (только счёт)
-  const lostFlightKeys=new Set(
-    (state.flights||[]).filter(f=>f.returned==='no')
-      .map(f=>norm(f.pilot)+'|'+norm(f.drone)+'|'+(f.date||''))
-  );
-  const orphans=(state.transfers||[]).filter(t=>
-    t.type==='loss'&&!lostFlightKeys.has(norm(t.pilot)+'|'+norm(t.drone)+'|'+(t.date||''))
-  ).length;
-
-  // Дубли loss — ключ date|time|pilot|drone, как в adminDedupeLossTransfers (только счёт)
+  // Осиротевшие и дубли loss — ТЕ ЖЕ правила, что у кнопок чистки (_lossOrphanTester/_lossDupeKey;
+  // только счёт). Ревью R0: раньше ключи расходились, и аудит показывал то, чего кнопка не находила.
+  const isOrphan=_lossOrphanTester(state.flights);
+  const orphans=(state.transfers||[]).filter(isOrphan).length;
   const seen=new Set();
   let dupes=0;
   (state.transfers||[]).forEach(t=>{
     if(t.type!=='loss')return;
-    const k=(t.date||'')+'|'+(t.time||'')+'|'+norm(t.pilot)+'|'+norm(t.drone);
+    const k=_lossDupeKey(t);
     if(seen.has(k))dupes++; else seen.add(k);
   });
 
@@ -1878,7 +1996,7 @@ function syncAuditStock(){
   if(negatives.length){ console.log('[AUDIT] ⚠ Отрицательные количества ('+negatives.length+'):'); console.table(negatives); }
   else console.log('[AUDIT] Отрицательных количеств нет');
   console.log('[AUDIT] Осиротевших loss-записей (без вылета-потери): '+orphans);
-  console.log('[AUDIT] Дублей loss-записей (date|time|pilot|drone): '+dupes);
+  console.log('[AUDIT] Дублей loss-записей (date|time|pilot|drone|вылет): '+dupes);
   const okA=summary.filter(s=>s.diff_A===0).length;
   const okB=summary.filter(s=>s.diff_B===0).length;
   console.log('[AUDIT] Сходится моделей: гипотеза A (lost = наличие) — '+okA+' из '+summary.length+', гипотеза B (lost = дубль loss) — '+okB+' из '+summary.length);
@@ -2741,7 +2859,7 @@ function saveTransfer(){
         if(nbgSrc.qty===0)state.stock=state.stock.filter(d=>d!==nbgSrc);
       }
     } else { // from = конкретный пилот: списываем У ПИЛОТА (а не со склада)
-      let sq=state.squads.find(s=>s.pilot===from);
+      let sq=_findSquad(from); // D5
       const di=sq&&sq.drones.find(d=>d.name.toLowerCase()===dl);
       if(!di||di.qty<qty){
         if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
@@ -2808,7 +2926,7 @@ function saveTransfer(){
       if(item.qty===0)state.stock=state.stock.filter(d=>d!==item);
     }
   } else {
-    let sq=state.squads.find(s=>s.pilot===from);
+    let sq=_findSquad(from); // D5
     const di=sq&&sq.drones.find(d=>d.name.toLowerCase()===drone.toLowerCase());
     if(!di||di.qty<qty){
       if(!confirm(`У пилота ${from} недостаточно "${drone}". Всё равно оформить?`))return;
@@ -2829,7 +2947,7 @@ function saveTransfer(){
     if(item){item.qty+=qty;}
     else{state.stock.push({name:drone,qty,status:'bg'});}
   } else {
-    let sq=state.squads.find(s=>s.pilot===to);
+    let sq=_findSquad(to); // D5
     if(!sq){sq={pilot:to,drones:[]};state.squads.push(sq);}
     const di=sq.drones.find(d=>d.name.toLowerCase()===drone.toLowerCase());
     if(di){di.qty+=qty; if(di.qty===0)sq.drones=sq.drones.filter(d=>d!==di);} // минус закрыт передачей → строку снимаем
@@ -2947,7 +3065,7 @@ function renderTransfersLog(){
     const _tst=op.id!=null?_trEditState.get(String(op.id)):undefined;
     const grey=(_tst==='sent'||_tst==='locked')?' tr-row-sent':'';
     // Свёрнутая полоса (состояние пусто, окно открыто) — кнопка «✏ N мин» справа от времени
-    const kjs=op.id!=null?String(op.id).replace(/\\/g,'\\\\').replace(/'/g,"\\'"):'';
+    const kjs=op.id!=null?_attrJs(op.id):''; // D4 (R0): esc + JS-экранирование, как _flKeyJs у вылетов — облачный id с " рвал атрибут
     const pen=(_tst==null&&canEditTransfer(op))
       ?`<button class="edit-pen-btn" onclick="trEditOpen('${kjs}')" title="Править (окно ${_trMinsLeft(op)} мин)">✏ ${_trMinsLeft(op)} мин</button>`:'';
     let row;
@@ -3161,7 +3279,7 @@ function renderTransferEditRow(t){
   if(st==null)return ''; // свёрнуто — кнопка «✏ N мин» в строке (renderTransfersLog), полоса по клику
   const minsLeft=_trMinsLeft(t);
   const fid=esc(key);
-  const kjs=key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const kjs=_attrJs(key); // D4 (R0): как _flKeyJs — id из облака (внешние данные) в inline-onclick
   if(st==='sent'){
     return '<div class="tr-edit-row" style="display:flex;gap:8px;align-items:center;padding:3px 10px 3px 12px;background:var(--inset);border-left:2px solid var(--muted);flex-wrap:wrap">'
       +'<span style="font-size:10px;color:var(--muted);letter-spacing:1px;white-space:nowrap">✓ отправлено</span>'
@@ -3981,7 +4099,7 @@ function writeDroneLoss(pilot, drone, date, time, flightId){
   if(!drone)return null;
   const dn=drone.toLowerCase();
 
-  let sq=state.squads.find(s=>s.pilot===pilot);
+  let sq=_findSquad(pilot); // D5
   if(!sq){
     sq={pilot,drones:[]};
     state.squads.push(sq);
@@ -4683,7 +4801,13 @@ function _userLastLogin(login){
 // Ячейка «Последний вход»: время + сборка (устаревшая — предупреждение)
 function _userLastLoginCell(login){
   const ll=_userLastLogin(login);
-  if(ll.when==='—')return '<span style="color:var(--muted)">—</span>';
+  // Устройство учётки на ЧУЖОМ ключе (sync/key_mismatch по открытому id — ревью R0). Его входы
+  // зашифрованы неверным ключом и здесь не видны, поэтому признак показывается отдельно.
+  // Снимается следующим читаемым входом этой учётки (устройство уже на верном ключе).
+  const km=actLog.find(x=>x.type==='sync'&&x.action==='key_mismatch'&&_sameLogin(x.user,login));
+  const lastIn=actLog.find(x=>x.type==='auth'&&x.action==='login'&&_sameLogin(x.user,login));
+  const kmTag=km&&!(lastIn&&(+lastIn.ts||0)>(+km.ts||0))?'<br><span class="tag tag-warn" title="Устройство этой учётки не расшифровывает облако своим ключом (неверный ключ) — запись с него отключена. Нужна ссылка с верным ключом.">неверный ключ ⚠ '+esc((km.date||'')+' '+(km.time||''))+'</span>':'';
+  if(ll.when==='—')return '<span style="color:var(--muted)">—</span>'+kmTag;
   // Вход с 25.09.2026 БЕЗ сборки — это клиент старше учёта сборок, т.е. ровно тот, кому нужно
   // обновиться (раньше показывался как нейтральное «сборка —» — ревью 25.09)
   const oldClient=ll.build==null&&String(ll.when)>='2026-09-25';
@@ -4694,7 +4818,7 @@ function _userLastLoginCell(login){
     :(ll.build<APP_BUILD
       ?'<span class="tag tag-warn" title="Сборка ниже текущей ('+APP_BUILD+') — устройству нужно обновить страницу">сборка '+esc(ll.build)+' ⚠</span>'
       :'<span style="color:var(--muted)">сборка '+esc(ll.build)+'</span>');
-  return '<span style="color:var(--muted)">'+esc(ll.when)+'</span><br>'+b;
+  return '<span style="color:var(--muted)">'+esc(ll.when)+'</span><br>'+b+kmTag;
 }
 
 // Привязка пилота к расчёту: вид пилота и «свои вылеты» работают по ТОЧНОМУ совпадению
@@ -5256,7 +5380,7 @@ function getSmartAmmo(pilot){
 function getSmartDrones(pilot){
   if(pilot==null)pilot=document.getElementById('qf-pilot')?.value||'';
   pilot=(pilot||'').trim();
-  const sq=pilot?state.squads.find(s=>s.pilot===pilot):null;
+  const sq=pilot?_findSquad(pilot):null; // D5
   if(sq){
     const own=[...new Set(sq.drones.filter(d=>d.qty>0).map(d=>d.name))].sort((a,b)=>a.localeCompare(b,'ru'));
     if(own.length)return own;
@@ -5280,7 +5404,7 @@ function getTransferDrones(){
   } else if(from==='не бг'){
     names=state.stock.filter(d=>d.qty>0&&d.status==='nbg').map(d=>d.name);
   } else {
-    const sq=state.squads.find(s=>s.pilot===from);
+    const sq=_findSquad(from); // D5
     names=sq?sq.drones.filter(d=>d.qty>0).map(d=>d.name):[];
   }
   return [...new Set(names)].sort((a,b)=>a.localeCompare(b,'ru'));
@@ -5622,7 +5746,9 @@ async function loadActLogFromCloud(){
     const d=await r.json();
     if(d.error||!d.actlog)return;
     const entries=await Promise.all(d.actlog.map(async row=>{
-      try{const data=syncUnmarkData(row.data);return JSON.parse(key?await aesDecrypt(data,key):data);}catch(e){return null;}
+      try{const data=syncUnmarkData(row.data);return JSON.parse(key?await aesDecrypt(data,key):data);}
+      // Не расшифровалась: признак «устройство на чужом ключе» читается по открытому id (ревью R0)
+      catch(e){return typeof syncKeyMismatchEntry==='function'?syncKeyMismatchEntry(row):null;}
     })).then(a=>a.filter(Boolean));
     // Сливаем с локальным
     entries.forEach(e=>{if(e&&e.id&&!actLog.some(x=>x.id===e.id))actLog.unshift(e);});
@@ -5763,8 +5889,10 @@ function cfgSaveSettings(){
   cfg.url=(document.getElementById('cfg-url').value||'').trim();
   const keyField=(document.getElementById('cfg-key').value||'').trim();
   // Не затираем ключ если поле пустое — берём текущий из памяти
-  if(keyField&&keyField!==cfg.key) getKeyCacheClear(); // ключ реально сменился — сбросить кэш деривации
+  const keyChanged=!!keyField&&keyField!==cfg.key;
+  if(keyChanged) getKeyCacheClear(); // ключ реально сменился — сбросить кэш деривации
   if(keyField) cfg.key=keyField;
+  if(keyChanged) _cfgKeyRecheck();
   try{
     localStorage.setItem('cfg_url',cfg.url);
     if(cfg.key)localStorage.setItem('cfg_key',cfg.key);
@@ -5785,12 +5913,29 @@ function cfgSaveSettings(){
 function cfgSaveKeyOnly(){
   const keyField=(document.getElementById('cfg-key').value||'').trim();
   if(!keyField){ showSyncToast('⚠ Введите ключ шифрования'); return; }
-  if(keyField!==cfg.key) getKeyCacheClear(); // смена ключа — сбросить кэш деривации
+  const keyChanged=keyField!==cfg.key;
+  if(keyChanged) getKeyCacheClear(); // смена ключа — сбросить кэш деривации
   cfg.key=keyField;
   try{ localStorage.setItem('cfg_key',cfg.key); }catch(e){}
   updateEncryptBadge();
   showSyncToast('✓ Ключ сохранён');
   renderSettingsStatus();
+  if(keyChanged) _cfgKeyRecheck();
+}
+// Ключ сменился: счётчики нерасшифрованных строк и «ключ проверен» относились к старому ключу —
+// сбросить и сразу перечитать облако новым (ревью R0: иначе полоса «неверный ключ» висела до
+// 5 минут, пока плановая синхронизация не пересчитает листы). Очередь ждёт этой проверки.
+function _cfgKeyRecheck(){
+  try{
+    if(typeof syncKeyStateReset==='function') syncKeyStateReset();
+    const {url,token}=syncGetCfg();
+    if(url&&token&&navigator.onLine&&typeof syncKeyRecheck==='function'){
+      syncKeyRecheck().then(ok=>{
+        if(typeof syncKeyBlocked==='function'&&syncKeyBlocked())showSyncToast('⛔ Этим ключом облако не расшифровывается — проверьте ключ',8000);
+        else if(ok){ showSyncToast('✓ Ключ подходит — данные облака расшифрованы',4000); if(typeof syncFlushLocalChanges==='function')syncFlushLocalChanges('key-ok'); }
+      });
+    }
+  }catch(e){}
 }
 
 function updateEncryptBadge(){
@@ -5801,6 +5946,10 @@ function updateEncryptBadge(){
   if(rb)rb.style.display=(cfg.key&&isAdminAccount())?'block':'none';
 }
 
+// Первая сборка с защитой K2 (R0): клиенты НИЖЕ не знают блока по ключу и после перешифровки
+// переписали бы flights/transfers целиком СТАРЫМ ключом (третий раунд ревью R0). Перешифровка
+// требует, чтобы минимум версии клиента на сервере был не ниже этой сборки.
+const REENCRYPT_MIN_CLIENT_BUILD=2026092504;
 // Смена ключа шифрования: читает все зашифрованные листы старым ключом,
 // перешифровывает новым и перезаписывает облако. Шифруются только листы данных
 // (flights/stock/squads/transfers/actlog); users и ammo_catalog ключом не шифруются.
@@ -5821,18 +5970,42 @@ async function cfgReencrypt(){
   if(!newKey){setStatus(STAT,'Введите новый ключ','err');return;}
   if(newKey!==newKey2){setStatus(STAT,'Новый ключ и подтверждение не совпадают','err');return;}
   if(newKey===oldKey){setStatus(STAT,'Новый ключ совпадает со старым','err');return;}
-  if(!confirm('Сменить ключ и перешифровать ВСЕ данные в облаке?\nПосле этого все пользователи должны будут ввести новый ключ.\n\nЖурнал действий (actlog) в облаке НЕ перешифровывается — сервер принимает его только дозаписью: прежние записи журнала станут нечитаемыми, новые пишутся новым ключом.'))return;
+  if(!confirm('Сменить ключ и перешифровать ВСЕ данные в облаке?\nПосле этого все пользователи должны будут ввести новый ключ.\n\nЖурнал действий (actlog) в облаке НЕ перешифровывается — сервер принимает его только дозаписью: прежние записи журнала станут нечитаемыми, новые пишутся новым ключом.\n\nПЕРЕД перешифровкой: все устройства обновлены, минимальная версия поднята (Администратор → Данные → «Установить текущую сборку»), остальные устройства ЗАКРЫТЫ — выгрузка, начатая ими до перешифровки, вернула бы облако к старому ключу.'))return;
 
   // actlog исключён (ревью v0.29): writeAll сервера пишет только flights/stock/squads/transfers —
   // перешифрованный actlog молча отбрасывался, а «перешифровано N» считал и его строки.
   const sheets=['flights','stock','squads','transfers'];
+  // Предпроверки «облако в блоке по ключу» НЕТ намеренно (третий раунд ревью R0): после сбоя записи
+  // облако наполовину под новым ключом, блок ставится, и предпроверка запрещала бы ровно тот повтор,
+  // который лечит облако. От потери защищает построчная проверка ниже: строка, которую не читает ни
+  // старый, ни новый ключ, — отказ ДО записи.
   if(btn)btn.disabled=true;
-  window._reencryptBusy=true; // автообновление версии (update.js) не перезагружает посреди перешифровки
+  // Флаг — это и пауза ВСЕЙ отправки в облако (sync.js, syncWritesPaused): элемент очереди,
+  // отправленный между чтением и записью, лёг бы в облако старым ключом и стал бы нечитаемой
+  // для всех строкой (ревью R0). Плюс автообновление версии (update.js) не перезагружает посреди.
+  window._reencryptBusy=true;
+  let done=false, writeAttempted=false;
   try{
+    // 0. Дождаться уже идущих отправок этого устройства (очередь, полная выгрузка, склад)
+    if(typeof syncWaitIdle==='function'){ setStatus(STAT,'Жду завершения текущих отправок...','muted'); await syncWaitIdle(); }
+    // Сервер не ниже v7.11 (второе ревью R0): v7.10 падает посреди полной записи (Range.clearContents)
+    // — облако оставалось частью под новым ключом, частью под старым, а устройство думало, что
+    // «ключ НЕ изменён». Ответ версии не прочитан — тоже отказ: без него риск не оценить.
+    const ver=await syncFetchJson(url+'?action=version&_='+Date.now(), SYNC_GET_TIMEOUT_MS).catch(()=>null);
+    const bv=String((ver&&ver.backend)||'');
+    const bm=/^(\d+)\.(\d+)/.exec(bv);
+    if(!bm||(+bm[1]<7)||(+bm[1]===7&&+bm[2]<11))throw new Error('перешифровка требует сервер (Backend) v7.11 или новее, сейчас '+(bv||'версия не получена')+' — облако не изменено');
+    const minB=+((ver&&ver.min_client_build)||0)||0;
+    if(minB<REENCRYPT_MIN_CLIENT_BUILD)throw new Error('сначала поднимите минимальную версию клиента (Администратор → Данные → «Установить текущую сборку»; сейчас '+(minB||'выключена')+'): устройства ниже сборки '+REENCRYPT_MIN_CLIENT_BUILD+' не знают блока по ключу и переписали бы облако старым ключом — облако не изменено');
+    // Версию склада перешифровка НЕ трогает (четвёртый раунд ревью R0): новая версия и перештамповка
+    // _sv строк (раунд 3 — против пуша склада другого устройства, проверенного до перешифровки) ломали
+    // собственную синхронизацию склада: база оставалась на старой версии → бесконечный stock_conflict,
+    // а «свой неподтверждённый снимок» переставал узнаваться → дельта накладывалась второй раз (класс
+    // 05.09). Гонку с устройством, пишущим во время перешифровки, закрывает только серверная эпоха
+    // ключа — известный предел (CLAUDE §6): остальные устройства на время перешифровки закрыты.
     // 1. Читаем сырые строки всех листов
     setStatus(STAT,'Загрузка из облака...','muted');
-    const r=await fetch(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(),{redirect:'follow'});
-    const d=await r.json();
+    const d=await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
     if(d.error)throw new Error(d.error);
 
     // 2. Расшифровываем каждый лист старым ключом + 3. перешифровываем новым
@@ -5841,11 +6014,17 @@ async function cfgReencrypt(){
     for(const sheet of sheets){
       const rows=d[sheet]||[];
       totalRaw+=rows.length;
-      const objs=await syncDecryptRows(rows,oldKey);
-      // Защита от затирания: если строки есть, но ни одна не расшифровалась —
-      // старый ключ неверный, прерываем (иначе перезапишем лист пустым).
-      if(rows.length&&!objs.length){
-        throw new Error(`Лист «${sheet}»: не удалось расшифровать ни одной записи — проверьте текущий ключ`);
+      // Строка, уже перешифрованная НОВЫМ ключом (повтор после сбоя записи), — читается новым:
+      // без этого повтор перешифровки отказывал бы навсегда (второе ревью R0)
+      const results=await Promise.all(rows.map(async r=>(await syncDecrypt(r,oldKey))||(await syncDecrypt(r,newKey))));
+      const objs=results.filter(Boolean);
+      // Защита от затирания (ревью R0): запись новым ключом пишет ТОЛЬКО расшифрованное, т.е.
+      // любая строка, не читаемая старым ключом (чужой ключ, битая), была бы стёрта. Раньше
+      // прерывались, лишь когда не расшифровалось НИ ОДНОЙ — частичная расшифровка молча
+      // удаляла записи. '#ERROR!' и пустые — невосстановимы, их отбрасывание нормально.
+      const bad=rows.filter((r,i)=>!results[i]&&r&&r.data&&r.data!=='#ERROR!').length;
+      if(bad){
+        throw new Error(`Лист «${sheet}»: ${bad} из ${rows.length} записей не расшифровываются ни текущим, ни новым ключом — перешифровка их бы стёрла. Облако не изменено. Разберитесь с ними (syncAuditEncryption в консоли)`);
       }
       totalOk+=objs.length;
       data[sheet]=await Promise.all(objs.map(o=>syncEncrypt(o,newKey)));
@@ -5854,14 +6033,33 @@ async function cfgReencrypt(){
 
     // 4. Записываем всё обратно в облако
     setStatus(STAT,'Отправка в облако...','muted');
+    writeAttempted=true;
     const res=await syncPost(url,JSON.stringify({action:'write',token,data}));
-    if(!res.ok)throw new Error(res.error||'ошибка записи');
+    if(!res.ok){
+      // Сервер отказал ДО записи (блокировка, версия, права, CAS) — облако не менялось
+      const PRE=['busy','client_outdated','Unauthorized','No rights'];
+      if(res.serverError&&PRE.some(x=>String(res.error||'').indexOf(x)===0))writeAttempted=false;
+      throw new Error(res.error||'ошибка записи');
+    }
+    if(res.unverified){
+      // Ответ сервера не прочитан (не JSON / no-cors): «успехом» это не считаем — перечитать облако
+      // и сменить ключ, только если ВСЁ читается новым ключом (третий раунд ревью R0)
+      setStatus(STAT,'Ответ сервера не прочитан — проверяю облако…','muted');
+      const d2=await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS).catch(()=>null);
+      let allNew=!!d2&&!d2.error;
+      if(allNew)for(const sh of sheets){
+        const rows=d2[sh]||[]; const r=await Promise.all(rows.map(x=>syncDecrypt(x,newKey)));
+        if(rows.some((x,i)=>!r[i]&&x&&x.data&&x.data!=='#ERROR!')){ allNew=false; break; }
+      }
+      if(!allNew)throw new Error('ответ сервера не прочитан, а облако не читается новым ключом целиком');
+    }
 
     // 5. Сохраняем новый ключ локально. Кэш деривации чистим ЗДЕСЬ, а не раньше:
     // выше в этой же функции старый ключ ещё нужен (чтение облака старым → запись новым).
     getKeyCacheClear();
     cfg.key=newKey;
     try{localStorage.setItem('cfg_key',newKey);}catch(e){}
+    done=true;
     const kField=document.getElementById('cfg-key');
     if(kField)kField.value=newKey;
     const nuke=document.getElementById('nu-enckey');
@@ -5876,10 +6074,24 @@ async function cfgReencrypt(){
     setStatus(STAT,`✓ Готово: перешифровано ${totalOk} из ${totalRaw} записей${tail}`,'ok');
     showSyncToast('✓ Ключ изменён, данные перешифрованы');
   }catch(e){
-    setStatus(STAT,'Ошибка: '+e.message+' — ключ НЕ изменён','err');
+    // Запись уже уходила: облако могло перешифроваться ЧАСТИЧНО — сказать «ключ не изменён, облако
+    // цело» было бы неправдой. Ключ устройства прежний; повтор тем же новым ключом распознает уже
+    // перешифрованные строки. Поля нового ключа не очищаются (их очищает только успех).
+    setStatus(STAT,'Ошибка: '+e.message+(writeAttempted
+      ?' — ЗАПИСЬ В ОБЛАКО НЕ ПОДТВЕРЖДЕНА: облако может быть перешифровано частично. Ключ этого устройства НЕ изменён. Повторите перешифровку тем же новым ключом (уже перешифрованные строки будут распознаны) и проверьте syncAuditEncryption()'
+      :' — ключ НЕ изменён, облако не изменено'),'err');
   }finally{
     if(btn)btn.disabled=false;
     window._reencryptBusy=false;
+    // Пауза снята. Если запись в облако была (успех или сбой посреди) — прежние счётчики нечитаемых
+    // строк недействительны: сбросить и перечитать облако ТЕКУЩИМ ключом (новым при успехе), потом
+    // досыл отложенного. Записи не было — просто досыл того, что стояло на паузе.
+    try{
+      if(writeAttempted&&typeof syncKeyStateReset==='function'){
+        syncKeyStateReset();
+        if(typeof syncKeyRecheck==='function')syncKeyRecheck().then(ok=>{ if(ok&&typeof syncFlushLocalChanges==='function')syncFlushLocalChanges('reencrypt'); });
+      } else if(typeof syncFlushLocalChanges==='function')syncFlushLocalChanges('reencrypt-cancel');
+    }catch(e){}
   }
 }
 

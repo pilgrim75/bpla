@@ -12,7 +12,7 @@
 // Строку ниже переписывает tools/bump-version.js (регулярка /const SW_BUILD=(\d+);/) —
 // держать её ровно в этом виде и отдельной строкой. Изменение номера меняет байты sw.js,
 // браузер видит новый воркер и ставит его рядом со старым (install → waiting).
-const SW_BUILD=2026092502;
+const SW_BUILD=2026092504;
 
 const CACHE_PREFIX='bpla-';
 const CACHE_NAME=CACHE_PREFIX+SW_BUILD;

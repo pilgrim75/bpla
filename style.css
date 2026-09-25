@@ -1,4 +1,4 @@
-:root{--app-build:2026092502} /* сборка файла — ставит tools/bump-version.js, руками не править */
+:root{--app-build:2026092504} /* сборка файла — ставит tools/bump-version.js, руками не править */
 *{box-sizing:border-box;margin:0;padding:0}
 
 /* ============ ШРИФТЫ (общие, вне тем) ============ */

@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['parser.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['parser.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
 // parser.js — импорт и AI-парсер сообщений (часть app.js, грузить ПЕРЕД reports.js/app.js)
 
 // ============ AI-КОНСТАНТЫ (единая точка, 02.07.2026) ============

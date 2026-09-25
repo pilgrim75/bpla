@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['update.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['update.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
 // update.js — контроль версии клиента и PWA (выпуск v0.29, 25.09.2026). Грузится перед app.js.
 // Проект: _НЕ_ПУБЛИКОВАТЬ/ПРОЕКТ_контроль_версии_2026-09-25.md. Повод — форензика 25.09:
 // давно открытая вкладка со старым кодом переписала облако и вернула удалённое; «Ctrl+F5
@@ -55,8 +55,11 @@ function _updSS(op,k,v){
 }
 
 // ===== Запрет записи (читают sync.js/syncReadOnly и app.js/guardWrite) =====
-function updWriteBlocked(){ return _updOutdated||!!_updMixed; }
+// K2 (R0): ключ не расшифровывает данные облака (sync.js, syncKeyBlocked) — тоже «только чтение»
+function _updKeyBlocked(){ try{ return typeof syncKeyBlocked==='function'&&syncKeyBlocked(); }catch(e){ return false; } }
+function updWriteBlocked(){ return _updOutdated||!!_updMixed||_updKeyBlocked(); }
 function updWriteBlockedText(){
+  if(_updKeyBlocked())return 'Это устройство НЕ МОЖЕТ РАСШИФРОВАТЬ данные облака своим ключом (не читается: '+(typeof syncKeyBlockedInfo==='function'?syncKeyBlockedInfo():'')+') — неверный ключ шифрования или ключ сменили. Запись отключена, чтобы не стереть эти записи и не перешифровать их чужим ключом.\n\nПроверьте ключ: Настройки → Шифрование (ключ — из ссылки администратора). Записи в очереди отправки не потеряются.';
   if(_updMixed)return 'Файлы приложения загрузились из РАЗНЫХ сборок (незавершённая выкладка или кэш браузера) — запись отключена, чтобы не испортить данные.\n\nОбновите страницу (Ctrl+F5). Если не помогает — сообщите администратору.';
   return 'Версия приложения устарела: сборка '+updBuild()+', сервер принимает не ниже '+_updMinBuild+'. Запись отключена.\n\nОбновите страницу — кнопка «Обновить» в красной полосе или F5. Записи в очереди отправки не потеряются.';
 }
@@ -358,15 +361,21 @@ async function updOnSwWaiting(w){
 // ===== Полосы состояния =====
 function updRenderBars(){
   if(typeof document==='undefined'||!document.body)return;
-  const red=_updMixed||_updOutdated;
+  const keyBad=_updKeyBlocked();
+  const red=_updMixed||_updOutdated||keyBad;
   let bar=document.getElementById('updBar');
   if(red){
     if(!bar){ bar=document.createElement('div'); bar.id='updBar'; bar.className='upd-bar'; document.body.appendChild(bar); }
     // Коротко: полный список расходящихся файлов на телефоне занял бы полэкрана — он в подсказке и консоли
     const msg=_updMixed
       ?'⛔ Файлы приложения разных сборок ('+(_updMixed.files.length===1?_updMixed.files[0]:_updMixed.files.length+' шт., первый: '+_updMixed.files[0])+') — запись отключена. Обновите страницу (Ctrl+F5).'
-      :'⛔ Версия устарела: сборка '+updBuild()+', сервер принимает не ниже '+_updMinBuild+' — запись в облако отключена; новые записи ждут в очереди, правки выгрузятся после обновления.';
-    bar.innerHTML='<span class="upd-msg"></span> <button class="btn btn-sm" onclick="updUserUpdate()">Обновить</button>';
+      :_updOutdated
+      ?'⛔ Версия устарела: сборка '+updBuild()+', сервер принимает не ниже '+_updMinBuild+' — запись в облако отключена; новые записи ждут в очереди, правки выгрузятся после обновления.'
+      :'⛔ Данные облака не расшифровываются этим ключом (не читается: '+(typeof syncKeyBlockedInfo==='function'?syncKeyBlockedInfo():'')+') — запись отключена, чтобы их не стереть. Проверьте ключ шифрования.';
+    // При неверном ключе обновление страницы не поможет — ведём в Настройки к полю ключа
+    bar.innerHTML='<span class="upd-msg"></span> '+(!_updMixed&&!_updOutdated&&keyBad
+      ?'<button class="btn btn-sm" onclick="showPage(\'settings\',document.querySelector(\'#nav button[onclick*=settings]\')||document.body)">Ключ — в Настройки</button>'
+      :'<button class="btn btn-sm" onclick="updUserUpdate()">Обновить</button>');
     bar.querySelector('.upd-msg').textContent=msg;
     bar.title=_updMixed?_updMixed.files.join(', '):'';
   }else if(bar)bar.remove();

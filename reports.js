@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['reports.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['reports.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
 // reports.js — отчёты и фильтр БПЛА (часть app.js, грузить ПЕРЕД app.js)
 // ============ REPORT ============
 // Выбранные борты для фильтра отчётов (пусто = все)

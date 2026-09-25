@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['sync.js']=2026092502; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['sync.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
 // sync.js — Sync Module v2 (часть app.js, грузить ПЕРВЫМ)
 // ============================================================
 // SYNC MODULE v2 — переписан с нуля
@@ -113,30 +113,176 @@ const SYNC_VALUABLE_SHEETS=['flights','stock','squads','transfers'];
 // сохранения) — без дедупа одна битая запись залила бы actLog одинаковыми
 // строками (паттерн login_logged_date). Тост дедупа не имеет — показывается всегда.
 const _syncLossLogged=new Set();
-async function syncDecryptRows(rows, key, sheet=''){
-  if(!rows||!rows.length) return [];
+// K2 (R0, 25.09.2026; дважды переделан по ревью R0): облачные строки ценных листов, которые это
+// устройство НЕ смогло расшифровать (кроме невосстановимых '#ERROR!'), — по листам, по ПОСЛЕДНЕМУ
+// чтению листа ТЕКУЩИМ ключом: {bad, total}. Раньше такие строки молча отбрасывались, и полная
+// выгрузка (облако ∪ локаль) стирала их из облака, а выгрузка склада перезаписывала чужой склад
+// снимком под чужим ключом. Правила:
+//  • БЛОК ПО КЛЮЧУ (syncKeyBlocked) — не читается хотя бы ПОЛОВИНА строк flights или transfers:
+//    неверный ключ. Запись в облако запрещена (updWriteBlocked, как «устарел»), красная полоса,
+//    очередь цела. Считается ТОЛЬКО по листам с дозаписью: одна строка, дописанная устройством со
+//    старым ключом, не блокирует (первый вариант запирал запись у всех по одной строке), а склад
+//    пишется целым листом и при чужом ключе не читается ЦЕЛИКОМ — блок по нему запер бы запись и
+//    устройствам с верным ключом, включая admin (второе ревью R0).
+//  • МЕНЬШИНСТВО нечитаемых строк flights/transfers — не блок: полная выгрузка возвращает их в облако
+//    КАК ЕСТЬ (сырые id+data). Устройство, записавшее их старым ключом, после смены ключа выгрузит
+//    свои записи заново — локальная версия того же id вытесняет сырую строку.
+//  • СКЛАД (stock/squads) — любая нечитаемая строка: снимок неполный (syncStockUnreadable), он не
+//    принимается и склад не выгружается. Перед выгрузкой склада снимок облака обязан быть хоть раз
+//    прочитан ЭТИМ ключом в сессии (_stockReadKey), иначе склад читается заново — устройство со
+//    старым ключом не перепишет склад облака вслепую. Выход, если склад в облаке записан чужим
+//    ключом, — syncStockOverwriteCloud() (только учётка admin, с подтверждением).
+//  • Результат чтения относится к КЛЮЧУ, которым оно шло: если ключ сменили, пока чтение было в
+//    полёте, счётчики и данные такого чтения отбрасываются (второе ревью R0: иначе чтение старым
+//    ключом «снимало» блок новому неверному ключу или ставило ложный блок верному).
+//  • Отдельной «проверки ключа за сессию» НЕТ (была в первой переделке): она держала очередь до
+//    полного чтения (~1.5 МБ) — на слабой связи вылеты не уходили вовсе. Дописанная старым ключом
+//    строка — это меньшинство (см. выше), а целые листы без чтения облака не пишутся никогда.
+// 25.09 в облаке 0 нечитаемых строк во всех листах (syncAuditEncryption) — ложной блокировки нет.
+const _syncUndecryptable = {};
+const SYNC_KEYBLOCK_SHEETS=['flights','transfers'];
+let _stockReadKey=null;   // ключ, которым в этой сессии снимок склада прочитан ЦЕЛИКОМ
+let _stockUnreadTs=0;     // stock_updated_ts нечитаемого снимка — поллинг не перечитывает его каждые 30 с
+function _syncSheetKeyBlocked(s){ const c=_syncUndecryptable[s]; return !!c && c.bad>0 && c.bad*2>=c.total; }
+function syncKeyBlocked(){ return SYNC_KEYBLOCK_SHEETS.some(_syncSheetKeyBlocked); }
+function syncStockUnreadable(){ return ['stock','squads'].some(s=>{ const c=_syncUndecryptable[s]; return !!c && c.bad>0; }); }
+function syncKeyBlockedInfo(){
+  return SYNC_VALUABLE_SHEETS.filter(s=>_syncUndecryptable[s]&&_syncUndecryptable[s].bad>0)
+    .map(s=>s+': '+_syncUndecryptable[s].bad+' из '+_syncUndecryptable[s].total).join(', ');
+}
+// Ключ сменился с момента начала чтения — результат чтения не относится к текущему ключу
+function syncKeyChanged(key){ return key!==syncGetCfg().key; }
+// out (необязательно) — массив, куда кладутся СЫРЫЕ нерасшифрованные строки (для выгрузки как есть)
+async function syncDecryptRows(rows, key, sheet='', out){
+  if(!rows||!rows.length){ if(SYNC_VALUABLE_SHEETS.includes(sheet)) syncNoteUndecryptable(sheet,0,0,key); return []; }
   const results = await Promise.all(rows.map(r => syncDecrypt(r, key)));
   const ok = results.filter(Boolean);
-  // Нерасшифрованные записи по-прежнему отбрасываются (приложение не падает),
-  // но для ценных листов — заметная сигнализация вместо тихого console.warn:
-  // пользователь должен узнать о потере данных (битая запись/неверный ключ).
-  // Инвентаризация битых записей — syncAuditEncryption() из консоли.
+  if(SYNC_VALUABLE_SHEETS.includes(sheet)){
+    // '#ERROR!' (затёртая Sheets ячейка) и пустые — невосстановимы, их отбрасывание нормально
+    const real = (r)=>r && r.data && r.data!=='#ERROR!';
+    const badRows = rows.filter((r,i)=>!results[i] && real(r));
+    if(Array.isArray(out)) out.push(...badRows);
+    syncNoteUndecryptable(sheet, badRows.length, rows.filter(real).length, key);
+  }
+  // Нерасшифрованные записи из state отбрасываются (приложение не падает), но для ценных
+  // листов — заметная сигнализация. Инвентаризация — syncAuditEncryption() из консоли.
   const dropped = rows.length - ok.length;
-  if(dropped>0 && SYNC_VALUABLE_SHEETS.includes(sheet)){
-    console.error('[SYNC] ⚠ ПОТЕРЯ ДАННЫХ: отброшено '+dropped+' нерасшифрованных записей из листа '+sheet);
-    try{ showSyncToast('⚠ Потеря данных: не расшифровано '+dropped+' зап. листа «'+sheet+'»', 8000); }catch(e){}
-    // Постоянный след в журнале действий (тост гаснет через 8с): logAction (app.js,
-    // вызов в рантайме) сохраняет локально и шлёт в облако штатной очередью actlog.
-    // Петли нет: сбои расшифровки самого actlog тихие (лист не в SYNC_VALUABLE_SHEETS).
+  if(dropped>0 && SYNC_VALUABLE_SHEETS.includes(sheet) && !syncKeyChanged(key)){
+    console.error('[SYNC] ⚠ не расшифровано '+dropped+' записей листа '+sheet+' (на этом устройстве не видны)');
+    // Дедуп на сессию по сигнатуре «лист|количество» — и для тоста: ambient-выгрузка читает
+    // облако через 2 с после каждой правки, тост на каждое чтение был бы шумом.
     try{
       const sig=sheet+'|'+dropped;
       if(!_syncLossLogged.has(sig)){
         _syncLossLogged.add(sig);
-        logAction('sync','decrypt_loss','⚠ Потеря данных: не удалось расшифровать '+dropped+' записей из листа '+sheet);
+        try{ showSyncToast('⚠ Не расшифровано '+dropped+' зап. листа «'+sheet+'» — на этом устройстве они не видны', 8000); }catch(e){}
+        // Постоянный след в журнале действий (тост гаснет через 8с). Петли нет: сбои
+        // расшифровки самого actlog тихие (лист не в SYNC_VALUABLE_SHEETS).
+        logAction('sync','decrypt_loss','⚠ Не удалось расшифровать '+dropped+' записей из листа '+sheet);
       }
     }catch(e){}
   }
   return ok;
+}
+
+let _syncKeyBlockLogged=false, _syncStockUnreadLogged=false;
+function syncNoteUndecryptable(sheet, bad, total, key){
+  if(key!==undefined && syncKeyChanged(key)) return; // чтение шло прежним ключом — к текущему не относится
+  const was=syncKeyBlocked();
+  _syncUndecryptable[sheet]={bad:bad||0, total:Math.max(total||0, bad||0)};
+  if((sheet==='stock'||sheet==='squads') && bad>0) _stockReadKey=null; // снимок склада этим ключом больше не читается
+  const now=syncKeyBlocked();
+  if(now&&!was){
+    console.error('[SYNC] ⛔ облачные записи не расшифровываются ('+syncKeyBlockedInfo()+') — неверный ключ? Запись в облако запрещена');
+    if(!_syncKeyBlockLogged){ _syncKeyBlockLogged=true; syncLogKeyMismatch(); }
+  }
+  if(!now && (sheet==='stock'||sheet==='squads') && bad>0 && !_syncStockUnreadLogged){
+    _syncStockUnreadLogged=true;
+    const msg='В облачном листе '+sheet+' не расшифровывается '+bad+' строк из '+total+' — приём и выгрузка склада остановлены (снимок неполный). '+
+      (bad>=total?'Весь лист записан другим ключом (устройство со старым ключом). ':'')+
+      'Администратору: проверить syncAuditEncryption(); если склад облака записан чужим ключом — syncStockOverwriteCloud() с устройства с верным ключом и актуальным складом';
+    console.error('[SYNC] ⛔ '+msg);
+    try{ showSyncToast('⛔ Склад не синхронизируется: склад в облаке не расшифровывается', 10000); }catch(e){}
+    syncLogEvent('stock_unreadable', msg);
+  }
+  if(now!==was){
+    try{ if(typeof updRenderBars==='function') updRenderBars(); }catch(e){}
+    // Блок снят (ключ исправлен, облако восстановлено) — дослать то, что стояло: правки и склад
+    if(!now) setTimeout(()=>{ try{ syncFlushLocalChanges('key-ok'); }catch(e){} },0);
+  }
+}
+// Снимок склада прочитан ЦЕЛИКОМ ключом key (все строки stock и squads расшифрованы)
+function syncNoteStockRead(key){
+  if(syncKeyChanged(key)||syncStockUnreadable()) return;
+  _stockReadKey=key; _stockUnreadTs=0;
+}
+// Смена ключа (Настройки, перешифровка): прежние счётчики относятся к старому ключу
+function syncKeyStateReset(){
+  const was=syncKeyBlocked();
+  Object.keys(_syncUndecryptable).forEach(k=>delete _syncUndecryptable[k]);
+  _syncKeyBlockLogged=false; _syncStockUnreadLogged=false; _stockReadKey=null; _stockUnreadTs=0;
+  _keyCheckRun=null; // идущая проверка — старым ключом; новая начнётся заново
+  _syncLossLogged.clear();
+  if(was){ try{ if(typeof updRenderBars==='function') updRenderBars(); }catch(e){} }
+}
+// Перечитать облако текущим ключом (после смены ключа / перешифровки) — однопоточно ДЛЯ ЭТОГО КЛЮЧА:
+// syncKeyStateReset обнуляет _keyCheckRun, поэтому проверка нового ключа не присоединится к чтению
+// старым. Результат: true — ключ подходит (flights/transfers не в блоке), false — блок/не прочиталось.
+let _keyCheckRun=null;
+function syncKeyRecheck(){
+  if(_keyCheckRun) return _keyCheckRun;
+  const key=syncGetCfg().key;
+  const run=(async()=>{
+    try{ await syncPullOnLogin(); return !syncKeyChanged(key) && !syncKeyBlocked() && !!_syncUndecryptable.flights; }
+    catch(e){ return false; }
+    finally{ if(_keyCheckRun===run) _keyCheckRun=null; }
+  })();
+  _keyCheckRun=run;
+  return run;
+}
+// Запись sync/key_mismatch шифруется ключом ЭТОГО устройства — неверным, и администратор её не
+// прочитает (ревью R0). Признак выносим в ОТКРЫТЫЙ id строки actlog: 'km~<время>~<логин в hex>'
+// (safeId_ сервера пропускает только латиницу/цифры/_.:~-, логины бывают кириллицей).
+// Читается без ключа — syncKeyMismatchEntry (журнал и «Последний вход» у администратора).
+function _syncHex(s){ try{ return Array.from(new TextEncoder().encode(String(s))).map(b=>b.toString(16).padStart(2,'0')).join(''); }catch(e){ return ''; } }
+function _syncUnhex(h){ try{ const b=new Uint8Array((h.match(/../g)||[]).map(x=>parseInt(x,16))); return new TextDecoder().decode(b); }catch(e){ return ''; } }
+function syncLogKeyMismatch(){
+  try{
+    if(typeof logAction!=='function'||typeof authUser==='undefined') return;
+    const login=(authUser&&authUser.login)||'unknown';
+    const ts=Date.now();
+    const d=new Date(ts), p=n=>String(n).padStart(2,'0');
+    const entry={
+      // id ≤ 80 символов (safeId_): hex логина режем по ЧЁТНОЙ длине — не посреди байта
+      id:'km~'+ts+'~'+_syncHex(login).slice(0, (80-4-String(ts).length) & ~1), ts,
+      date:d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()), time:p(d.getHours())+':'+p(d.getMinutes()),
+      user:login, role:(authUser&&authUser.role)||'', build:syncClientBuild(),
+      type:'sync', action:'key_mismatch',
+      details:'Не расшифровываются записи облака ('+syncKeyBlockedInfo()+') — запись с этого устройства отключена, чтобы не стереть и не перешифровать чужим ключом'
+    };
+    if(typeof actLog!=='undefined'&&Array.isArray(actLog)){ actLog.unshift(entry); try{ localStorage.setItem('act_log',JSON.stringify(actLog.slice(0,500))); }catch(e){} }
+    appendToCloud('actlog', entry);
+  }catch(e){}
+}
+// Сырая строка actlog с открытым признаком key_mismatch → запись журнала (без расшифровки)
+function syncKeyMismatchEntry(row){
+  const m=row&&typeof row.id==='string'?/^km~(\d{12,14})~([0-9a-f]*)$/.exec(row.id):null;
+  if(!m) return null;
+  const ts=+m[1], d=new Date(ts), p=n=>String(n).padStart(2,'0');
+  return { id:row.id, ts, date:d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()), time:p(d.getHours())+':'+p(d.getMinutes()),
+    user:_syncUnhex(m[2])||'?', role:'', type:'sync', action:'key_mismatch',
+    details:'Устройство не расшифровывает облако своим ключом (неверный ключ) — запись с него отключена; сама запись журнала зашифрована его ключом и недоступна' };
+}
+// Приостановка ВСЕЙ отправки на время перешифровки облака (cfgReencrypt): элемент очереди,
+// отправленный между чтением и записью, лёг бы в облако старым ключом (ревью R0).
+function syncWritesPaused(){ try{ return !!(typeof window!=='undefined'&&window._reencryptBusy); }catch(e){ return false; } }
+// Дождаться уже идущих отправок (очередь, полная выгрузка, склад) — перед перешифровкой
+async function syncWaitIdle(){
+  for(let i=0;i<3;i++){
+    const ps=[_flushRun,_pushAllRun,_stockPushChain].filter(Boolean);
+    if(!ps.length) return;
+    try{ await Promise.all(ps.map(p=>Promise.resolve(p).catch(()=>{}))); }catch(e){}
+  }
 }
 
 // Дедупликация по id: в облаке возможны дубль-строки одного id (повторный append
@@ -186,15 +332,19 @@ async function syncPost(url, body){
     }
     return { ok:true, data:d };
   }catch(e){
+    // Запасной no-cors — тоже с таймаутом (ревью R0, lint fetch-timeout): зависший запрос
+    // держал бы очередь/выгрузку (однопоточные) навсегда
+    const ctrl2 = new AbortController();
+    const tid2 = setTimeout(()=>ctrl2.abort(), 30000);
     try{
       await fetch(url, {
         method:'POST', headers:{'Content-Type':'text/plain'},
-        body, mode:'no-cors'
+        body, mode:'no-cors', signal:ctrl2.signal
       });
       return { ok:true, data:null, unverified:true };
     }catch(e2){
       return { ok:false, error:e2.message };
-    }
+    }finally{ clearTimeout(tid2); }
   }
 }
 
@@ -883,8 +1033,54 @@ async function syncFetchStockSnapshot(){
     const stock=await syncDecryptRows(d.stock||[],key,'stock');
     const squads=(await syncDecryptRows(d.squads||[],key,'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
     const ts=Math.max(0, ...(d.stock||[]).map(r=>+r.ts||0), ...(d.squads||[]).map(r=>+r.ts||0));
+    // K2 (R0): часть строк склада не расшифровалась — снимок ЧАСТИЧНЫЙ. Принять его = затереть
+    // локальный склад, подтвердить им пуш = ложь. Для вызывающих это «прочитать не удалось».
+    // Ключ сменили во время чтения — снимок старым ключом к текущему не относится.
+    if(syncKeyChanged(key)||syncStockUnreadable()) return null;
+    syncNoteStockRead(key);
     return {stock,squads,version:syncStockMaxSv(stock,squads),ts};
   }catch(e){ return null; }
+}
+
+// Выход из «склад облака не читается» (второе ревью R0, K2): лист склада записан ЧУЖИМ ключом
+// (устройство со старым ключом после перешифровки) — устройство с верным ключом его не прочтёт и
+// штатно не перепишет (выгрузка склада без читаемого снимка запрещена). Из консоли, только учётка
+// admin, с устройства с верным ключом и актуальным складом: без аргумента — план (что прочитано,
+// что будет записано), (true) — записать СВОЙ снимок склада поверх облачного. Нечитаемый облачный
+// склад при этом теряется — только осознанно, после syncAuditEncryption().
+async function syncStockOverwriteCloud(confirm_=false){
+  if(typeof isAdminAccount==='function' && !isAdminAccount()){ console.warn('[SYNC] только учётка admin'); return null; }
+  const {url,key,token}=syncGetCfg();
+  if(!url||!token){ console.warn('[SYNC] облако не настроено'); return null; }
+  if(syncReadOnly()){ console.warn('[SYNC] запись сейчас запрещена'+(typeof updWriteBlockedText==='function'?': '+updWriteBlockedText():'')); return null; }
+  // Свежее чтение: склад облака действительно не читается, а flights/transfers — читаются (ключ верен)
+  const d=await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
+  if(!d||d.error){ console.warn('[SYNC] чтение облака не удалось', d&&d.error); return null; }
+  for(const sh of ['flights','transfers','stock','squads']) await syncDecryptRows(d[sh]||[], key, sh);
+  if(syncKeyChanged(key)) return null;
+  const plan={ cloudStockRows:(d.stock||[]).length, cloudSquadRows:(d.squads||[]).length, unreadable:syncKeyBlockedInfo(),
+    keyOk:!syncKeyBlocked(), localStock:(state.stock||[]).length, localSquads:(state.squads||[]).length };
+  console.log('[SYNC] перезапись склада облака — план:', plan);
+  if(syncKeyBlocked()){ console.warn('[SYNC] отказ: flights/transfers не читаются — неверный ключ У ЭТОГО устройства'); return plan; }
+  if(!syncStockUnreadable()){ console.warn('[SYNC] отказ: склад облака читается — перезапись не нужна (штатная синхронизация)'); return plan; }
+  if(!confirm_) return plan;
+  const meta=await syncFetchStockMeta();
+  if(!meta){ console.warn('[SYNC] метаданные склада не получены — повторите'); return plan; }
+  syncBumpStockVersion();
+  const ts=Date.now();
+  const enc=async(obj,i)=>{ if(!obj.id) obj.id=ts+i; obj._sv=_stockVersion; return syncEncrypt(obj,key); };
+  const stock=await Promise.all((state.stock||[]).map(enc)), squads=await Promise.all((state.squads||[]).map(enc));
+  const pushed={stock:JSON.parse(JSON.stringify(state.stock||[])),squads:JSON.parse(JSON.stringify(state.squads||[])),version:_stockVersion};
+  // CAS по текущей версии сервера: параллельная запись склада (кем-то ещё) → отказ, а не затирание
+  const body=JSON.stringify({action:'write',token,data:geoStripFromSync({stock,squads}),stock_version:pushed.version,stock_expect:meta.version||0});
+  const res=await syncPost(url,body);
+  if(!res.ok){ console.warn('[SYNC] перезапись склада не выполнена:', res.error); return {...plan, written:false, error:res.error}; }
+  syncStockSetBase(pushed.stock,pushed.squads,pushed.version); syncStockClearPending(pushed.version);
+  if(res.data&&+res.data.ts>0) _lastStockTs=+res.data.ts;
+  delete _syncUndecryptable.stock; delete _syncUndecryptable.squads; _stockReadKey=key; _stockUnreadTs=0; _syncStockUnreadLogged=false;
+  try{ if(typeof lsWriteState==='function') lsWriteState(); }catch(e){}
+  syncLogEvent('stock_overwrite','Склад облака перезаписан снимком этого устройства (облачный не расшифровывался: '+plan.unreadable+'); версия '+pushed.version+(res.unverified?' (ответ не прочитан)':''));
+  return {...plan, written:true, version:pushed.version, unverified:!!res.unverified};
 }
 
 // --- Время последнего поллинга ---
@@ -912,6 +1108,7 @@ async function syncAddFlight(flight){
   if(!url||!token) return;                          // локальный режим — облака нет, очередь не нужна
   pendingQueue.add({type:'flight', data:flight});   // кэш до подтверждения доставки
   if(!navigator.onLine||syncWriteBlockedByVersion()) return; // нет сети / версия устарела — ждёт в очереди
+  if(syncWritesPaused()) return; // идёт перешифровка облака — ждёт в очереди (уйдёт после неё)
   await trySendQueueItem({type:'flight', data:flight}, url, key, token);
 }
 
@@ -948,7 +1145,10 @@ async function syncDeleteFlight(idx){
 
   // Нестрогие проходы не должны забирать запись, которая принадлежит ДРУГОМУ живому вылету
   // (04.09.2026): раньше это стирало чужое движение, а теперь ещё и вернуло бы борт в наличие.
-  const notOthers = t => !(t.flightId && t.flightId!==f.id && state.flights.some(x=>x.id===t.flightId));
+  // + для вылета после черты — не замороженная до-чертовая запись (ревью R0, _lossFreeFor в app.js)
+  const notOthers = typeof _lossFreeFor==='function'
+    ? t => _lossFreeFor(t,f)
+    : t => !(t.flightId && t.flightId!==f.id && state.flights.some(x=>x.id===t.flightId));
 
   // Проход 2: пилот + борт + дата + время (регистронезависимо)
   if((state.transfers||[]).length===before){
@@ -1024,6 +1224,7 @@ async function syncAddTransfer(op){
   if(!url||!token) return;                       // локальный режим — облака нет, очередь не нужна
   pendingQueue.add({type:'transfer', data:op});  // кэш до подтверждения доставки
   if(!navigator.onLine||syncWriteBlockedByVersion()) return; // версия устарела — ждёт в очереди
+  if(syncWritesPaused()) return; // идёт перешифровка облака — ждёт в очереди
   await trySendQueueItem({type:'transfer', data:op}, url, key, token);
 }
 
@@ -1051,23 +1252,38 @@ async function _syncPushStockSquadsNow(){
   if(syncReadOnly()) return; // viewer не выгружает склад
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;
+  if(syncWritesPaused()) return; // идёт перешифровка облака — дельта остаётся (база не сдвинута)
+  // Последнее чтение ЭТИМ ключом видело нечитаемый склад облака — лист целиком не переписываем (выход —
+  // syncStockOverwriteCloud у admin); смена ключа сбрасывает счётчики, новое чтение их обновит
+  if(syncStockUnreadable()) return;
   // Защита от LWW-гонки: чужая запись склада, которой мы ещё не видели? Тогда сначала
   // принять её (с наложением нашей дельты), и только потом писать объединённый снимок.
-  // Без базы (первый пуш после обновления) дельту не вычислить — приём облака здесь
-  // затёр бы только что сделанную правку; в этом окне — прежнее поведение, база
-  // фиксируется ниже после пуша.
-  const meta = _stockBase ? await syncFetchStockMeta() : null;
-  const remoteTs = meta ? meta.ts : null;
-  if(remoteTs!==null && remoteTs > _lastStockTs){
+  // Ревью R0 (K2): лист склада пишется ЦЕЛИКОМ — вслепую писать нельзя. Метаданные не получены →
+  // не пишем (повтор позже; раньше — запись вслепую). Снимок облака ещё не читался ЭТИМ ключом в
+  // сессии (F5, смена ключа) → читаем, даже если отметка времени не сдвинулась: устройство со старым
+  // ключом иначе переписало бы весь склад облака чужим ключом. Снимок не читается → не пишем.
+  const meta = await syncFetchStockMeta();
+  if(!meta){ syncStockScheduleRepush(_stockVersion); return; }
+  const remoteTs = meta.ts;
+  const mustRead = _stockReadKey!==key;
+  if(remoteTs > _lastStockTs || mustRead){
     const remote = await syncFetchStockSnapshot();
+    if(syncKeyChanged(key)) return; // ключ сменили во время чтения — повтор новым ключом придёт сам
+    if(syncKeyBlocked()||syncStockUnreadable()) return; // K2: облачный склад не читается (целиком — ключ, частично — неполный снимок) — не писать
+    if(!remote){ syncStockScheduleRepush(_stockVersion); return; } // снимок не прочитан (сеть) — не писать вслепую
+    // Без базы (первый пуш после обновления) дельту не вычислить — приём облака затёр бы только что
+    // сделанную правку; снимок здесь нужен лишь для проверки читаемости, дальше — прежнее поведение.
+    if(!_stockBase){ if(remoteTs > _lastStockTs) _lastStockTs = remoteTs; }
+    else {
     if(remote && syncStockRemoteIsNewer(remote)){
       const hadDelta = syncAcceptRemoteStock(remote);
       showSyncToast(hadDelta ? '⚠ Склад изменён на другом устройстве — изменения объединены' : '↓ Склад обновлён с другого устройства', 5000);
       if(typeof renderInventory==='function') try{ renderInventory(); renderDashboard(); }catch(e){}
       if(hadDelta) syncStockSelfCheck('merge перед выгрузкой склада');
-      if(!hadDelta){ _lastStockTs = remoteTs; return; } // нашей дельты нет — пушить нечего
+      if(!hadDelta){ _lastStockTs = Math.max(_lastStockTs, remoteTs); return; } // нашей дельты нет — пушить нечего
     }
-    _lastStockTs = remoteTs;
+    _lastStockTs = Math.max(_lastStockTs, remoteTs);
+    }
   }
   syncBumpStockVersion();
   const ts = Date.now();
@@ -1163,7 +1379,7 @@ async function syncStockResolveConflict(info, pushed){
   }
   syncStockClearPending();
   const snap=await syncFetchStockSnapshot();
-  if(!snap){ syncStockScheduleRepush(pushed.version); return; }
+  if(!snap){ if(!syncKeyBlocked()&&!syncStockUnreadable()) syncStockScheduleRepush(pushed.version); return; } // K2: при неверном ключе / нечитаемом складе не повторять
   if(syncStockRemoteIsNewer(snap)){
     const had=syncAcceptRemoteStock(snap);
     if(typeof renderInventory==='function') try{ renderInventory(); renderDashboard(); }catch(e){}
@@ -1206,6 +1422,7 @@ async function _syncPushAllOnce(silent){
 }
 async function _syncPushAllNow(silent=false){
   if(syncReadOnly()) return; // viewer не пишет в облако (ambient-write в т.ч.)
+  if(syncWritesPaused()) return false; // идёт перешифровка облака — метка правок остаётся, досыл после
   const {url,key,token} = syncGetCfg();
   if(!url) return;
   if(!silent) syncIndicator('syncing');
@@ -1214,16 +1431,38 @@ async function _syncPushAllNow(silent=false){
   // поведению), append-записи всё равно дублируются через pendingQueue. После черты —
   // не пишем вовсе (см. ниже, защита от воскрешения).
   let mergedOk = false;
+  // Сырые нерасшифрованные строки облака (меньшинство — чужой ключ/битые): возвращаются в облако
+  // КАК ЕСТЬ, иначе полная запись (облако ∪ локаль) стирала бы их (ревью R0).
+  let rawKeepF = [], rawKeepT = [];
   if(token){
     try{
       const d = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
       if(d.error) throw new Error(d.error);
       syncMergeCloudTombstones(d.tombstones); // Путь Б: подтянуть чужие удаления ДО merge
       const tb = tombstones.load();
+      const badF = [], badT = [];
       const [cloudFRaw, cloudTRaw] = await Promise.all([
-        syncDecryptRows(d.flights||[], key, 'flights'),
-        syncDecryptRows(d.transfers||[], key, 'transfers')
+        syncDecryptRows(d.flights||[], key, 'flights', badF),
+        syncDecryptRows(d.transfers||[], key, 'transfers', badT)
       ]);
+      // K2 (R0): облачные записи не расшифровываются этим ключом — полная запись стёрла бы их
+      // (облако ∪ локаль видит только расшифрованное). Не пишем вовсе, метка правок остаётся.
+      if(syncKeyBlocked()){
+        console.warn('[SYNC] pushAll остановлен: облачные записи не расшифровываются ('+syncKeyBlockedInfo()+')');
+        if(!silent) syncIndicator('error');
+        return false;
+      }
+      if(syncKeyChanged(key)){ console.warn('[SYNC] pushAll: ключ сменили во время чтения — выгрузка отложена'); if(!silent) syncIndicator('error'); return false; }
+      // Сырые строки: без id не адресуемы; удалённые (tombstone) — не возвращаем; есть локально —
+      // локальная версия того же id вытесняет сырую (устройство сменило ключ и выгрузило заново).
+      const localIdsStr = arr => new Set((arr||[]).map(x=>x&&x.id).filter(x=>x!=null&&x!=='').map(String));
+      const keepRaw = (bad, local, sheet) => { const seen=new Set(); return bad.filter(r=>{
+        if(!r||r.id==null||r.id==='') return false; const s=String(r.id);
+        if(seen.has(s)||local.has(s)||tb.hasIn(sheet,r.id)) return false; seen.add(s); return true;
+      }).map(r=>({id:r.id, data:r.data})); };
+      rawKeepF = keepRaw(badF, localIdsStr(state.flights), 'flights');
+      rawKeepT = keepRaw(badT, localIdsStr(state.transfers), 'transfers');
+      if(rawKeepF.length||rawKeepT.length) console.warn('[SYNC] pushAll: нерасшифрованные строки облака сохранены как есть — flights '+rawKeepF.length+', transfers '+rawKeepT.length);
       // Дедуп дубль-строк облака — иначе обе копии одного id пройдут фильтр !localFIds
       const cloudF=syncDedupeById(cloudFRaw), cloudT=syncDedupeById(cloudTRaw);
       const localFIds = new Set(state.flights.map(f=>f.id).filter(Boolean));
@@ -1262,6 +1501,16 @@ async function _syncPushAllNow(silent=false){
     if(!silent) syncIndicator('error');
     return false;
   }
+  // Без чтения нельзя и когда облако в этой сессии текущим ключом ещё не читалось (листы целиком
+  // легли бы чужим ключом), и когда последнее чтение видело нечитаемые строки flights/transfers
+  // (их нечем сохранить — стёрли бы). Ревью R0.
+  const unreadFT = ['flights','transfers'].some(s=>_syncUndecryptable[s]&&_syncUndecryptable[s].bad>0);
+  const neverRead = !_syncUndecryptable.flights;
+  if(!mergedOk && (neverRead || unreadFT)){
+    console.warn('[SYNC] pushAll пропущен: облако не прочитано, а '+(neverRead?'текущим ключом оно в этой сессии ещё не читалось':'в облаке есть нерасшифрованные строки'));
+    if(!silent) syncIndicator('error');
+    return false;
+  }
 
   // Склад/расчёты (stock/squads) НЕ пишем здесь — только flights/transfers.
   // Версионируемые листы выгружает исключительно syncPushStockSquads (с актуальным
@@ -1272,10 +1521,11 @@ async function _syncPushAllNow(silent=false){
   // раньше id генерировался только в шифруемой копии, при каждой выгрузке был новым,
   // и другие устройства накапливали копии одной записи через поллинг.
   const encRow = async (obj) => { if(!obj.id) obj.id = genId('x'); return syncEncrypt(obj, key); };
-  const [flights,transfers] = await Promise.all([
+  const [flightsEnc,transfersEnc] = await Promise.all([
     Promise.all(state.flights.map(f=>encRow(f))),
     Promise.all((state.transfers||[]).map(t=>encRow(t)))
   ]);
+  const flights=[...flightsEnc, ...rawKeepF], transfers=[...transfersEnc, ...rawKeepT];
   const data = geoStripFromSync({flights,transfers}); // ГЕО НИКОГДА не уходит в облако; stock/squads не трогаем
   const body = JSON.stringify({action:'write', token, data});
   console.log('[SYNC] pushAll flights:', state.flights.length, 'size:', body.length);
@@ -1312,6 +1562,13 @@ async function syncPushFlightsOnly(){
   // ближайшей полной выгрузкой.
   if(!_syncStaleChecked && typeof marshrutCutTs==='function' && marshrutCutTs()){
     console.warn('[SYNC] flights-only push отложен: state ещё не сверен с облаком после черты');
+    return;
+  }
+  // Лист пишется целиком без чтения: при непроверенном ключе записали бы его чужим ключом, а
+  // нерасшифрованные строки flights стёрли бы (сохранять их умеет только полная выгрузка —
+  // saveLocal после поллинга её и так планирует). Идёт перешифровка — тоже нет. Ревью R0.
+  if(!_syncUndecryptable.flights || syncWritesPaused() || _syncUndecryptable.flights.bad>0){
+    console.warn('[SYNC] flights-only push отложен до полной выгрузки (облако этим ключом не читалось / нечитаемые строки / перешифровка)');
     return;
   }
   // id безыдных вылетов пишем обратно в state (см. комментарий в syncPushAll)
@@ -1359,7 +1616,12 @@ async function _syncFlushQueueOnce(){
   }
   // Версия устарела / смешанная загрузка: данные НЕ шлём (сервер отклонит, а клиент изобразил
   // бы «отправку»), элементы остаются в очереди до обновления. actlog — можно (как наблюдателю).
-  const blocked = syncWriteBlockedByVersion();
+  // K1 (R0): и наблюдатель (устройство, пониженное до viewer, с очередью из прежней роли) — сервер такие
+  // записи отклоняет, элементы висели бы, ретраясь вечно. Они остаются в очереди (доедут, если роль вернут).
+  const blocked = syncWriteBlockedByVersion() || syncIsViewer();
+  // Перешифровка облака идёт — стоит всё: элемент, дописанный между её чтением и записью, лёг бы
+  // старым ключом (ревью R0).
+  if(syncWritesPaused()) return;
   const now = Date.now();
   for(const item of q){
     if(blocked && item.type!=='actlog') continue;
@@ -1391,6 +1653,10 @@ async function syncPullAll(confirm_=false){
       transfers: syncDedupeById(await syncDecryptRows(d.transfers||[], key, 'transfers')),
       users: d.users||[]
     };
+    // Ключ сменили, пока шло чтение, — прочитанное старым ключом к текущему не относится (ревью R0).
+    // При блоке по ключу вызывающие ничего не применяют (syncPullOnLogin/syncFromCloud).
+    if(syncKeyChanged(key)){ console.warn('[SYNC] pullAll: ключ сменили во время чтения — результат отброшен'); return null; }
+    syncNoteStockRead(key);
     // Открытые id ВСЕХ строк облака (в т.ч. нерасшифрованных) — для защиты от воскрешения
     // до-чертовых записей (syncDropStaleLocal): «нет в облаке» решается по ним, а не по расшифрованным
     const rawIds=rows=>new Set((rows||[]).map(r=>r&&r.id).filter(x=>x!=null&&x!=='').map(String));
@@ -1408,6 +1674,9 @@ async function syncPullAll(confirm_=false){
     // Актлог
     if(d.actlog&&d.actlog.length){
       const entries = await syncDecryptRows(d.actlog, key, 'actlog');
+      // Признаки «устройство на чужом ключе» — по открытому id, без расшифровки (ревью R0)
+      const got=new Set(entries.map(e=>e&&e.id));
+      d.actlog.forEach(r=>{ if(!got.has(r.id)){ const km=syncKeyMismatchEntry(r); if(km) entries.push(km); } });
       entries.forEach(e=>{ if(!actLog.some(x=>x.id===e.id)) actLog.unshift(e); });
       actLog.sort((a,b)=>b.ts-a.ts);
       if(actLog.length>500) actLog=actLog.slice(0,500);
@@ -1442,6 +1711,15 @@ async function syncPullOnLogin(){
   const dirtyAtStart = syncHasDirty(), genAtStart = syncDirtyGen();
   const loaded = await syncPullAll(false);
   if(!loaded){ syncIndicator('error'); return; }
+  // K2 (ревью R0): облако не читается этим ключом — прочитанное неполно (почти пусто). Ничего не
+  // применяем: ни вылеты/передачи, ни склад (пустой снимок иначе стал бы базой и после смены
+  // ключа выгрузился бы поверх настоящего склада). Локальное остаётся как есть до смены ключа.
+  if(syncKeyBlocked()){
+    console.warn('[SYNC] полная синхронизация не применена: облако не расшифровывается этим ключом ('+syncKeyBlockedInfo()+')');
+    if(pendingQueue.all().length) setTimeout(()=>syncFlushQueue(), 1000); // actlog уходит и так
+    syncIndicator('error');
+    return;
+  }
   // Путь Б: убрать из state записи, удалённые на других устройствах (облачные tombstones
   // уже слиты в набор внутри syncPullAll) — иначе ветка «localOnly» ниже сохранила бы их
   // как «локальные, которых нет в облаке».
@@ -1452,7 +1730,9 @@ async function syncPullOnLogin(){
     ...loaded.transfers.map(t=>t.id),
     ...(loaded.tombstoneIds||[]).map(id=>'tomb:'+id)
   ].filter(Boolean)));
-  const hasPending = pendingQueue.all().length > 0;
+  // K1 (R0): у наблюдателя очередь данных «заморожена» (отправить её он не может) — не должна навсегда
+  // переключать полную загрузку в ветку слияния, иначе правки существующих записей до него не доходят.
+  const hasPending = !syncIsViewer() && pendingQueue.all().length > 0;
   // Невыгруженные правки существующих записей (метка SYNC_DIRTY_KEY) — как непустая очередь:
   // заменять локальное облачным нельзя, иначе правка откатится (ревью v0.29).
   const dirty = dirtyAtStart || syncHasDirty() || syncDirtyGen()!==genAtStart || syncFullPushBusy();
@@ -1462,7 +1742,8 @@ async function syncPullOnLogin(){
   //  "локальные данные склада уже выгружены").
   const remoteStock = {stock:loaded.stock, squads:loaded.squads, version:syncStockMaxSv(loaded.stock,loaded.squads)};
   // Гейт приёма: версия новее ИЛИ равная с иным содержимым, чем база (см. блок LWW выше).
-  const stockNewer = syncStockRemoteIsNewer(remoteStock);
+  // Снимок с нечитаемыми строками — неполный: не принимать и базу им не перебазировать (ревью R0).
+  const stockNewer = !syncStockUnreadable() && syncStockRemoteIsNewer(remoteStock);
   let stockDelta = false;
   if(!hasPending && !dirty){
     // Защита от потери только что добавленных вылетов/передач: полная замена
@@ -1488,6 +1769,10 @@ async function syncPullOnLogin(){
         .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
     }
     if(stockNewer) stockDelta = syncAcceptRemoteStock(remoteStock); // замена либо merge локальной дельты
+    // Непустая очередь без «pending» — это очередь наблюдателя (K1: только actlog). Раньше её
+    // досылала лишь ветка слияния; у наблюдателя нет 30-секундного поллинга, и неудачно
+    // отправленная запись аудита висела до F5 (ревью R0). Фильтр по типам — в самой очереди.
+    if(pendingQueue.all().length) setTimeout(()=>syncFlushQueue(), 1000);
   } else {
     // Есть несинхронизированное — сливаем только новое из облака
     console.log('[SYNC] '+(hasPending?'pending queue not empty':'невыгруженные правки')+', merging only new records');
@@ -1525,6 +1810,18 @@ async function syncFromCloud(){
     if(st){ st.textContent='Ошибка загрузки'; st.style.color='var(--red)'; }
     return;
   }
+  // Ревью R0: принудительная загрузка заменяет state и ОЧИЩАЕТ очередь. Если облако не
+  // читается этим ключом (или склад в облаке частично нечитаем), прочитанное неполно — замена
+  // стёрла бы локальные данные и очередь, которые блокировка как раз держит. Отказ.
+  if(syncKeyBlocked()||syncStockUnreadable()){
+    const why=syncKeyBlocked()&&typeof updWriteBlockedText==='function'
+      ? updWriteBlockedText()
+      : 'В облаке есть нерасшифрованные строки ('+syncKeyBlockedInfo()+') — снимок неполный.';
+    if(st){ st.textContent='Загрузка отменена: облако не читается полностью'; st.style.color='var(--red)'; }
+    syncIndicator('error');
+    alert('Загрузка из облака отменена — локальные данные и очередь не тронуты.\n\n'+why);
+    return;
+  }
   state.flights   = loaded.flights;
   state.stock     = loaded.stock;
   state.squads    = loaded.squads;
@@ -1544,7 +1841,13 @@ async function syncFromCloud(){
 
 // Принудительная выгрузка вручную (кнопка)
 async function syncToCloud(silent=false){
-  if(syncReadOnly()){ if(!silent) alert('Роль «Наблюдатель» — только просмотр, выгрузка недоступна'); return; }
+  if(syncReadOnly()){
+    // Текст — по фактической причине: «устарел»/смешанная загрузка/ключ, а не только «наблюдатель» (ревью R0)
+    if(!silent) alert(syncIsViewer()||typeof updWriteBlockedText!=='function'||!syncWriteBlockedByVersion()
+      ? 'Роль «Наблюдатель» — только просмотр, выгрузка недоступна'
+      : updWriteBlockedText());
+    return;
+  }
   const ok = await syncPushAll(silent);
   if(!ok && !silent) alert('Ошибка синхронизации. Проверьте соединение.');
 }
@@ -1553,10 +1856,19 @@ async function syncToCloud(silent=false){
 // ПОЛЛИНГ — только дельта каждые 30 сек
 // ============================================================
 
+// Поллинг однопоточный: при таймаутах 25+60 с интервал 30 с иначе накладывал попытки друг на друга
+// (третий раунд ревью R0) — лишний трафик на слабой связи отнимал канал у отправки вылетов.
+let _pollBusy=false, _stockSnapBackoffUntil=0, _stockDeltaRetryAt=0, _deltaKeySuspectAt=0;
 async function pollCloud(){
+  if(_pollBusy) return;
+  _pollBusy=true;
+  try{ await _pollCloudOnce(); } finally{ _pollBusy=false; }
+}
+async function _pollCloudOnce(){
   const {url,key,token} = syncGetCfg();
   if(!url||!token) return;
   const ind = document.getElementById('syncIndicator');
+  let deltaBad=0, deltaTotal=0; // нечитаемые строки flights/transfers в дельте (подозрение на ключ)
   try{
     const since = _lastPollTs;
     const d = await syncFetchJson(url+'?action=read_since&token='+encodeURIComponent(token)+'&since='+since+'&_='+Date.now(), SYNC_GET_TIMEOUT_MS);
@@ -1579,6 +1891,7 @@ async function pollCloud(){
     for(const row of (d.flights||[])){
       if(row.id) deliveredIds.add(row.id); // подтверждаем доставку по открытому id даже у испорченной (#ERROR!) строки — ретрай не поможет, appendOne идемпотентен
       const obj = await syncDecrypt(row, key);
+      if(row && row.data && row.data!=='#ERROR!'){ deltaTotal++; if(!obj) deltaBad++; }
       if(!obj) continue;
       deliveredIds.add(obj.id);
       if(tb.hasIn('flights',obj.id)) continue; // Удалён локально
@@ -1603,6 +1916,7 @@ async function pollCloud(){
     for(const row of (d.transfers||[])){
       if(row.id) deliveredIds.add(row.id); // подтверждение по открытому id (см. flights выше) — испорченную строку из очереди не держим
       const obj = await syncDecrypt(row, key);
+      if(row && row.data && row.data!=='#ERROR!'){ deltaTotal++; if(!obj) deltaBad++; }
       if(!obj) continue;
       deliveredIds.add(obj.id);
       if(tb.hasIn('transfers',obj.id)) continue; // удалена локально (напр. loss-передача удалённого вылета)
@@ -1616,7 +1930,8 @@ async function pollCloud(){
     // Актлог
     for(const row of (d.actlog||[])){
       if(row.id) deliveredIds.add(row.id); // подтверждение по открытому id (см. flights выше) — иначе испорченная (#ERROR!) login-запись висела бы в очереди вечно
-      const obj = await syncDecrypt(row, key);
+      let obj = await syncDecrypt(row, key);
+      if(!obj) obj = syncKeyMismatchEntry(row); // признак «чужой ключ» — по открытому id (ревью R0)
       if(!obj) continue;
       deliveredIds.add(obj.id); // подтверждение доставки записей очереди (actlog тоже в pendingQueue)
       if(!actLog.some(e=>e.id===obj.id)){
@@ -1631,13 +1946,24 @@ async function pollCloud(){
 
     // Склад обновился у другого пользователя (или это наша же запись, ещё не «увиденная»)
     let stockMerged=false;
-    if(d.stock_updated_ts && d.stock_updated_ts > _lastStockTs){
+    if(d.stock_updated_ts && d.stock_updated_ts > _lastStockTs && d.stock_updated_ts !== _stockUnreadTs && Date.now() >= _stockSnapBackoffUntil){
       console.log('[POLL] Склад обновился, загружаем');
       try{
         const d2 = await syncFetchJson(url+'?action=read&token='+encodeURIComponent(token)+'&_='+Date.now(), SYNC_READ_TIMEOUT_MS);
         if(d2.error) throw new Error(d2.error);
         const remoteStock  = await syncDecryptRows(d2.stock||[], key, 'stock');
         const remoteSquads = (await syncDecryptRows(d2.squads||[], key, 'squads')).map(sq=>({...sq,drones:Array.isArray(sq.drones)?sq.drones:[]}));
+        // Ревью R0: снимок с нечитаемыми строками (неверный ключ — почти пустой) НЕ принимать и
+        // базу им не перебазировать: после смены ключа пустая база «подтвердила» бы частичный
+        // state, и выгрузка стёрла бы склад в облаке. Считаем как неудачное чтение (гейт не сдвигаем).
+        if(syncKeyChanged(key)) throw new Error('ключ сменили во время чтения');
+        if(syncKeyBlocked()||syncStockUnreadable()){
+          // Не сдвигаем гейт (выгрузка склада перечитает и откажет), но и не перечитываем этот же
+          // снимок каждые 30 с — до его изменения или смены ключа.
+          _stockUnreadTs = d.stock_updated_ts;
+          throw new Error('снимок склада не расшифровывается целиком ('+syncKeyBlockedInfo()+')');
+        }
+        syncNoteStockRead(key);
         const remote = {stock:remoteStock, squads:remoteSquads, version:syncStockMaxSv(remoteStock,remoteSquads)};
         // Гейт: версия новее ИЛИ равная с иным содержимым, чем база (равная версия со штампом
         // наших строк = наш пуш → перебазирование без merge внутри syncStockRemoteIsNewer).
@@ -1654,9 +1980,13 @@ async function pollCloud(){
       }catch(e){
         console.warn('[POLL] stock sync error:', e.message);
         pollCloud._snapFail = (pollCloud._snapFail||0)+1;
-        if(pollCloud._snapFail>=5){ // после 5 подряд отказов — не долбим read каждые 30 с, ждём полной синхронизации
-          _lastStockTs = d.stock_updated_ts; pollCloud._snapFail = 0;
-          console.warn('[POLL] снимок склада не читается 5 поллингов подряд — до полной синхронизации не повторяю');
+        // После 5 отказов подряд — пауза полных чтений снимка до плановой полной синхронизации (5 мин).
+        // Гейт _lastStockTs при этом НЕ сдвигается (раньше сдвигался вслепую): выгрузка склада сама
+        // перечитает облако перед записью. Третий раунд ревью R0: условие «склад уже читался этим
+        // ключом» отключало предохранитель, и на слабой связи полное чтение шло каждые 30 с.
+        if(pollCloud._snapFail>=5){
+          _stockSnapBackoffUntil = Date.now() + 5*60*1000; pollCloud._snapFail = 0;
+          console.warn('[POLL] снимок склада не читается 5 поллингов подряд — пауза до полной синхронизации');
         }
       }
     }
@@ -1671,6 +2001,27 @@ async function pollCloud(){
     updateQueueIndicator();
     // Досылаем то, что ещё не подтверждено (с защитой от частых повторов)
     syncFlushQueue();
+    // Невыгруженная дельта склада (пре-чек выгрузки не получил метаданных/снимок, автоповтор исчерпан) —
+    // дослать, не чаще раза в минуту. Раньше её досылала только следующая операция, online или F5
+    // (третий раунд ревью R0): журнал движений уже в облаке, а остатки — нет.
+    try{
+      const stockDelta=!!_stockBase&&syncStockHash(state.stock,state.squads)!==syncStockHash(_stockBase.stock,_stockBase.squads);
+      // Пуш «в полёте»/«не подтверждён» ждёт подтверждения чтением (перебазирование без merge) — не повторяем
+      const waitConfirm=!!_stockPending&&(_stockPending.reason==='inflight'||_stockPending.reason==='unverified');
+      if(stockDelta && !waitConfirm && !syncStockPushBusy() && !syncReadOnly() && Date.now()>=_stockDeltaRetryAt && Date.now()>=_stockSnapBackoffUntil){ // в паузе полных чтений — не досылаем (пре-чек читал бы снимок)
+        _stockDeltaRetryAt=Date.now()+60000;
+        syncPushStockSquads();
+      }
+    }catch(e){}
+    // Большинство новых строк flights/transfers в дельте не расшифровывается этим ключом — вероятно,
+    // облако перешифровали. Дельта блок не ставит (строк мало), но запускает полное перечтение, которое
+    // поставит блок, если это правда (не чаще раза в 5 минут; третий раунд ревью R0).
+    if(deltaBad>0 && deltaBad*2>=deltaTotal && Date.now()>=_deltaKeySuspectAt){
+      _deltaKeySuspectAt=Date.now()+5*60*1000;
+      console.warn('[POLL] новые записи облака не расшифровываются этим ключом ('+deltaBad+' из '+deltaTotal+') — перечитываю облако');
+      try{ showSyncToast('⚠ Новые записи облака не расшифровываются этим ключом — проверяю ключ', 8000); }catch(e){}
+      try{ syncKeyRecheck(); }catch(e){}
+    }
 
     if(changed){
       saveLocal({noDirty:true}); // принято из облака — не правка оператора
@@ -1737,7 +2088,7 @@ function appendToCloud(sheet, obj){
       return;
     }
     pendingQueue.add({type:'actlog', data:obj});  // кэш до подтверждения доставки
-    if(!navigator.onLine)return;                  // нет сети — досыл при восстановлении
+    if(!navigator.onLine||syncWritesPaused())return; // нет сети / идёт перешифровка — досыл позже
     trySendQueueItem({type:'actlog', data:obj}, url, key, token);
     return;
   }
