@@ -12,7 +12,7 @@
 // Строку ниже переписывает tools/bump-version.js (регулярка /const SW_BUILD=(\d+);/) —
 // держать её ровно в этом виде и отдельной строкой. Изменение номера меняет байты sw.js,
 // браузер видит новый воркер и ставит его рядом со старым (install → waiting).
-const SW_BUILD=2026092504;
+const SW_BUILD=2026101101;
 
 const CACHE_PREFIX='bpla-';
 const CACHE_NAME=CACHE_PREFIX+SW_BUILD;
@@ -32,7 +32,7 @@ const VERSION_KEY=SCOPE+'version.json';
 const NAV_TIMEOUT_MS=5000;
 
 // Свои js со штампом первой строки: (globalThis.__FILE_BUILDS=…)['<имя>']=<N>;
-const STAMPED_JS=['sync.js','geo.js','parser.js','reports.js','writeoff.js','marshrut.js','vtx.js','update.js','app.js'];
+const STAMPED_JS=['sync.js','geo.js','parser-rules.js','parser.js','reports.js','writeoff.js','marshrut.js','vtx.js','update.js','app.js'];
 
 // Необязательное (best-effort): не версионируется через ?v, ошибка не валит установку —
 // без иконки или шрифта приложение работает, без sync.js — нет.

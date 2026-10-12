@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="2026092504">
+<meta name="app-build" content="2026101101">
 <meta name="referrer" content="no-referrer"><!-- URL с ?u=&t=&k= не должен утекать в Referer (аудит 02.07.2026); первым тегом — до любых загрузок -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>БПЛА Учёт</title>
@@ -11,8 +11,8 @@
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#050a05">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=2026092504">
-<link rel="stylesheet" href="./icons/tabler-icons.min.css?v=2026092504">
+<link rel="stylesheet" href="style.css?v=2026101101">
+<link rel="stylesheet" href="./icons/tabler-icons.min.css?v=2026101101">
 <style id="themeStyle"></style>
 </head>
 <body>
@@ -291,13 +291,19 @@
           onclick="event.stopPropagation();showQuickPicker(this,getSmartPilots(),v=>{this.value=v})">
       </div>
 
-      <div style="min-width:100px;flex:1.2">
-        <label>Точка</label>
-        <input id="qf-target" placeholder="305 Вишня" autocomplete="off"
-          onclick="event.stopPropagation();showQuickPicker(this,getSmartTargets(),v=>{this.value=v})">
+
+      <div style="min-width:60px;flex:0.7">
+        <label>Номер</label>
+        <input id="qf-target-num" placeholder="534" autocomplete="off"
+          onclick="event.stopPropagation();showQuickPicker(this,getSmartTargetNumbers(),v=>{this.value=v})">
+      </div>
+      <div style="min-width:80px;flex:1">
+        <label>Цвет</label>
+        <input id="qf-target-color" placeholder="коралл" autocomplete="off"
+          onclick="event.stopPropagation();showQuickPicker(this,getSmartTargetColors(),v=>{this.value=v})">
       </div>
       <div style="min-width:90px;flex:1">
-        <label>Боеприпас</label>
+        <label>Груз</label>
         <input id="qf-ammo" placeholder="Пом2" autocomplete="off"
           onclick="event.stopPropagation();showQuickPicker(this,getSmartAmmo(),v=>{this.value=v})">
       </div>
@@ -354,8 +360,8 @@
           </div>
         </div>
         <div class="ms-wrap" id="flAmmoWrap">
-          <div class="ms-field" id="flAmmoField" onclick="flMsToggle('Ammo',event)" title="Фильтр по боеприпасу">
-            <span id="flAmmoLabel">Боеприпас: все</span>
+          <div class="ms-field" id="flAmmoField" onclick="flMsToggle('Ammo',event)" title="Фильтр по грузу">
+            <span id="flAmmoLabel">Груз: все</span>
             <i class="ti ti-chevron-down ms-caret"></i>
           </div>
           <div class="ms-panel" id="flAmmoPanel">
@@ -519,17 +525,6 @@
   </div>
 
   <div class="card" style="margin-bottom:12px">
-    <div class="card-title">API-ключ Anthropic (для распознавания ИИ)</div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." style="flex:1;min-width:200px" oninput="saveApiKey(this.value)">
-      <span id="apiKeyStatus" style="font-size:11px;color:var(--muted)"></span>
-    </div>
-    <div style="margin-top:6px;font-size:11px;color:var(--muted)">
-      Получите ключ бесплатно на <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--cb)">console.anthropic.com</a>. Ключ сохраняется в браузере, никуда не отправляется кроме Anthropic API.
-    </div>
-  </div>
-
-  <div class="card" style="margin-bottom:12px">
     <div class="notice">Вставьте одно или несколько сообщений из чата. ИИ распознает каждое и заполнит поля. Вы проверяете и сохраняете.</div>
     <div class="parse-area">
       <label>Сообщения (можно несколько строк)</label>
@@ -559,7 +554,7 @@
     <button class="adm-tab" onclick="showAdminTab('users',this)">Пользователи</button>
     <button class="adm-tab" onclick="showAdminTab('stock',this)">Склад</button>
     <button class="adm-tab" onclick="showAdminTab('squads',this)">Расчёты</button>
-    <button class="adm-tab" onclick="showAdminTab('ammo',this)">Боеприпасы</button>
+    <button class="adm-tab" onclick="showAdminTab('ammo',this)">Грузы</button>
     <button class="adm-tab" onclick="showAdminTab('actlog',this)">Журнал действий</button>
     <button class="adm-tab" onclick="showAdminTab('geo',this)">Карта/Гео</button>
     <button class="adm-tab" onclick="showAdminTab('data',this)">Данные</button>
@@ -735,19 +730,19 @@
     </div>
   </div>
 
-  <!-- ВКЛАДКА: БОЕПРИПАСЫ -->
+  <!-- ВКЛАДКА: ГРУЗЫ -->
   <div class="adm-panel" id="adm-ammo" style="display:none">
     <div class="card" style="margin-bottom:12px">
-      <div class="card-title">Справочник боеприпасов</div>
+      <div class="card-title">Справочник грузов</div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Эталонные названия. При нормализации все варианты написания из колонки «Алиасы» заменятся на эталонное название в базе вылетов.</div>
       <div id="ammoList"></div>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
-        <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text2)">Добавить боеприпас</div>
+        <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text2)">Добавить груз</div>
         <div class="form-row cols3">
           <div><label>Название (эталон)</label><input id="ammo-new-name" placeholder="Пом2"></div>
           <div><label>Категория</label>
             <select id="ammo-new-cat">
-              <option value="минирование">Минирование</option>
+              <option value="применение">Применение</option>
               <option value="доставка">Доставка</option>
             </select>
           </div>
@@ -801,6 +796,77 @@
       <button class="btn btn-primary" id="pwaInstallBtn" style="display:none" onclick="updInstall()">🖥 Установить на компьютер</button>
       <span id="pwaInstallStatus" style="font-size:11px;color:var(--muted)"></span>
     </div>
+  </div>
+
+  <!-- AI-СЕРВЕР (импорт, доклады, репортажи) — видно всем ролям, включая viewer -->
+  <div class="card" style="margin-bottom:10px" id="cfg-ai-card">
+    <div class="card-title">AI-сервер (импорт, доклады, репортажи)</div>
+    <div class="notice">Один сервер на все AI-функции. По умолчанию — локальный opi-ai на Orange Pi: трафик не уходит в интернет, ключ не нужен.</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin:10px 0;align-items:center">
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+        <input type="radio" name="ai-server-type" id="ai-type-local" value="local" onchange="aiToggleServerType('local')" checked>
+        <span>🏠 Локальный opi-ai</span>
+      </label>
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+        <input type="radio" name="ai-server-type" id="ai-type-external" value="external" onchange="aiToggleServerType('external')">
+        <span>🌐 Внешний API</span>
+      </label>
+    </div>
+
+    <!-- Локальный сервер -->
+    <div id="ai-local-block">
+      <div class="form-row cols2">
+        <div>
+          <label>URL сервера</label>
+          <input id="ai-local-url" placeholder="http://192.168.0.163:8080" autocomplete="off">
+        </div>
+        <div>
+          <label>Модель</label>
+          <select id="ai-local-model">
+            <option value="gemma-2b">gemma-2b (быстрая)</option>
+            <option value="gemma-9b">gemma-9b</option>
+            <option value="qwen-7b">qwen-7b</option>
+            <option value="qwen-3b">qwen-3b</option>
+            <option value="qwen-coder-3b">qwen-coder-3b</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row" style="margin-top:8px">
+        <div>
+          <label>Ключ (необязательно — локальный сервер обычно без него)</label>
+          <input type="password" id="ai-local-key" placeholder="Bearer local" autocomplete="off">
+        </div>
+      </div>
+    </div>
+
+    <!-- Внешний API -->
+    <div id="ai-external-block" style="display:none">
+      <div class="form-row cols2">
+        <div>
+          <label>URL API</label>
+          <input id="ai-external-url" placeholder="https://api.anthropic.com" autocomplete="off">
+        </div>
+        <div>
+          <label>Модель</label>
+          <select id="ai-external-model">
+            <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+            <option value="claude-opus-4">claude-opus-4</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row" style="margin-top:8px">
+        <div>
+          <label>Ключ API</label>
+          <input type="password" id="ai-external-key" placeholder="sk-ant-..." autocomplete="off">
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn btn-success btn-sm" onclick="aiSaveSettings()">💾 Сохранить</button>
+      <button class="btn btn-primary btn-sm" onclick="aiTestConnection()">🧪 Проверить связь</button>
+    </div>
+    <div id="ai-test-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
   </div>
 
   <!-- СИНХРОНИЗАЦИЯ (только admin — applySettingsVisibility) -->
@@ -872,17 +938,18 @@
 
 <!-- version.js — ПЕРВЫМ: номер сборки нужен всем файлам. ?v= у всех подключений ставит tools/bump-version.js
      (новый URL = новая загрузка без Ctrl+F5; сервис-воркер держит файлы одной сборки в одном кэше) -->
-<script src="version.js?v=2026092504"></script>
-<script src="sync.js?v=2026092504"></script>
-<script src="geo.js?v=2026092504"></script>
-<script src="parser.js?v=2026092504"></script>
-<script src="html2canvas.min.js?v=2026092504"></script> <!-- локально (офлайн/file://): рендер «доски почёта» репортажа в PNG -->
-<script src="reports.js?v=2026092504"></script>
-<script src="docx.umd.js?v=2026092504"></script> <!-- docx@8.5.0 (build/index.umd.js) локально, был jsDelivr CDN — офлайн/file:// и без внешних запросов (аудит 02.07.2026) -->
-<script src="writeoff.js?v=2026092504"></script>
-<script src="marshrut.js?v=2026092504"></script> <!-- МАРШРУТ Этап 1: getBalance() рядом со старой системой (только чтение) -->
-<script src="vtx.js?v=2026092504"></script> <!-- VTX: генератор Betaflight vtx-команд (автономный, учёта не трогает) -->
-<script src="update.js?v=2026092504"></script> <!-- контроль версии: version.json, безопасное автообновление, «устарел — только чтение», SW, установка PWA -->
-<script src="app.js?v=2026092504"></script>
+<script src="version.js?v=2026101101"></script>
+<script src="sync.js?v=2026101101"></script>
+<script src="geo.js?v=2026101101"></script>
+<script src="parser-rules.js?v=2026101101"></script>
+<script src="parser.js?v=2026101101"></script>
+<script src="html2canvas.min.js?v=2026101101"></script> <!-- локально (офлайн/file://): рендер «доски почёта» репортажа в PNG -->
+<script src="reports.js?v=2026101101"></script>
+<script src="docx.umd.js?v=2026101101"></script> <!-- docx@8.5.0 (build/index.umd.js) локально, был jsDelivr CDN — офлайн/file:// и без внешних запросов (аудит 02.07.2026) -->
+<script src="writeoff.js?v=2026101101"></script>
+<script src="marshrut.js?v=2026101101"></script> <!-- МАРШРУТ Этап 1: getBalance() рядом со старой системой (только чтение) -->
+<script src="vtx.js?v=2026101101"></script> <!-- VTX: генератор Betaflight vtx-команд (автономный, учёта не трогает) -->
+<script src="update.js?v=2026101101"></script> <!-- контроль версии: version.json, безопасное автообновление, «устарел — только чтение», SW, установка PWA -->
+<script src="app.js?v=2026101101"></script>
 </body>
 </html>

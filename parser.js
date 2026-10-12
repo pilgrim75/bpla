@@ -1,35 +1,168 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['parser.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['parser.js']=2026101101; // сборка файла — ставит tools/bump-version.js, руками не править
 // parser.js — импорт и AI-парсер сообщений (часть app.js, грузить ПЕРЕД reports.js/app.js)
 
 // ============ AI-КОНСТАНТЫ (единая точка, 02.07.2026) ============
-// Модель для ВСЕХ AI-вызовов проекта: парсер (здесь) + устный доклад и репортаж
-// (reports.js — грузится после parser.js, берёт константу в рантайме). Смена модели —
-// ТОЛЬКО здесь (раньше id был захардкожен в 3 местах, миграция = 3 правки в 2 файлах).
-const AI_MODEL='claude-sonnet-4-6';
-// Таймаут AI-вызова парсера, мс. У vr/rpg свои (10с/20с — короткие payload'ы);
-// парсер обрабатывает длинные простыни сообщений — даём больше.
-const AI_PARSE_TIMEOUT_MS=45000;
+// Сервер и модель выбираются в Настройках → «AI-сервер» (localStorage), читает callAI().
+// Таймаут AI-вызова парсера, мс. У vr/rpg свои (60с/90с — короткие payload'ы);
+// парсер обрабатывает длинные простыни сообщений на слабом железе — даём 5 минут.
+const AI_PARSE_TIMEOUT_MS=300000; // 5 минут — gemma-2b на малом железе отвечает долго
+
+// ============ УНИВЕРСАЛЬНЫЙ AI-КЛИЕНТ (callAI) ============
+// Единый интерфейс для всех AI-вызовов: импорт (parser), устный доклад (vr), репортаж (rpg).
+// Читает настройки из localStorage, формирует OpenAI-совместимый запрос, возвращает текст.
+// @param systemPrompt — system-сообщение (промпт, инструкции для модели)
+// @param userContent — user-сообщение (входные данные)
+// @param maxTokens — лимит токенов ответа (по умолчанию 800; парсер передаёт 1200 — запас на 6+ сообщений)
+// @param timeoutMs — таймаут запроса (по умолчанию 45000)
+// @returns Promise<string> — текст ответа модели
+// @throws Error — при ошибке сети, API, таймауте или пустом ответе
+async function callAI(systemPrompt, userContent, maxTokens=800, timeoutMs=45000){
+  const serverType = localStorage['aiServerType'] || 'local';
+  let url, model, apiKey;
+  
+  if(serverType === 'local'){
+    url = (localStorage['aiLocalUrl'] || 'http://192.168.0.163:8080').trim().replace(/\/+$/,'') + '/v1/chat/completions';
+    model = localStorage['aiLocalModel'] || 'gemma-2b';
+    apiKey = localStorage['opiAiKey'] || '';
+  } else {
+    url = (localStorage['aiExternalUrl'] || 'https://api.anthropic.com').trim().replace(/\/+$/,'');
+    model = localStorage['aiExternalModel'] || 'claude-sonnet-4-6';
+    apiKey = (localStorage['aiExternalKey'] || '').trim();
+    // Anthropic API использует другой формат — конвертируем
+    if(url.includes('anthropic.com')){
+      const ctrl=new AbortController();
+      const tid=setTimeout(()=>ctrl.abort(),timeoutMs);
+      try{
+        const resp=await fetch(url+'/v1/messages',{
+          method:'POST',
+          headers:{
+            'Content-Type':'application/json',
+            'x-api-key':apiKey,
+            'anthropic-version':'2023-06-01',
+            'anthropic-dangerous-direct-browser-access':'true'
+          },
+          body:JSON.stringify({
+            model,
+            max_tokens:maxTokens,
+            system:systemPrompt,
+            messages:[{role:'user',content:userContent}]
+          }),
+          signal:ctrl.signal
+        });
+        clearTimeout(tid);
+        if(!resp.ok){
+          const err=await resp.json().catch(()=>({}));
+          throw new Error(`HTTP ${resp.status}: ${err.error?.message||resp.statusText}`);
+        }
+        const data=await resp.json();
+        const txt=(data.content||[]).map(i=>i.text||'').join('').trim();
+        if(!txt) throw new Error('пустой ответ API');
+        return txt;
+      } catch(e) {
+        clearTimeout(tid);
+        throw e;
+      }
+    }
+  }
+  
+  // OpenAI-совместимый формат (локальный сервер + внешний OpenAI-совместимый)
+  if(serverType !== 'local' && !/\/chat\/completions$/.test(url)) url += '/v1/chat/completions';
+  const ctrl=new AbortController();
+  const tid=setTimeout(()=>ctrl.abort(),timeoutMs);
+  try{
+    const resp=await fetch(url,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+(apiKey||'local')
+      },
+      body:JSON.stringify({
+        model,
+        messages:[
+          {role:'system',content:systemPrompt},
+          {role:'user',content:userContent}
+        ],
+        max_tokens:maxTokens,
+        temperature:0.2, // JSON-разбор требует точности, не креативности
+        stream:false
+      }),
+      signal:ctrl.signal
+    });
+    clearTimeout(tid);
+    if(!resp.ok){
+      const err=await resp.json().catch(()=>({}));
+      throw new Error(`HTTP ${resp.status}: ${err.error?.message||resp.statusText}`);
+    }
+    const data=await resp.json();
+    const txt=data.choices?.[0]?.message?.content||'';
+    if(!txt) throw new Error('AI-сервер вернул пустой ответ');
+    return txt;
+  } catch(e) {
+    clearTimeout(tid);
+    throw e;
+  }
+}
+
 // fetch с жёстким таймаутом: по истечении timeoutMs запрос отменяется (AbortController),
 // promise падает с AbortError (e.name==='AbortError' — ловить в catch вызывающего).
+// DEPRECATED: используйте callAI() — он уже содержит таймаут и выбор сервера.
 function aiFetchWithTimeout(url,options,timeoutMs){
   const ctrl=new AbortController();
   const tid=setTimeout(()=>ctrl.abort(),timeoutMs);
   return fetch(url,{...options,signal:ctrl.signal}).finally(()=>clearTimeout(tid));
 }
 
-// ============ API KEY ============
-function saveApiKey(val){
-  try{localStorage.setItem('anthropicKey',val);}catch(e){}
-  if(val.startsWith('sk-ant'))setStatus('apiKeyStatus','✓ ключ сохранён','ok');
-  else if(val)setStatus('apiKeyStatus','⚠ ключ должен начинаться с sk-ant-','err');
-  else setStatus('apiKeyStatus','','muted');
+// ============ НАСТРОЙКИ AI-СЕРВЕРА ============
+function aiToggleServerType(type){
+  const isLocal=type==='local';
+  const l=document.getElementById('ai-local-block'), x=document.getElementById('ai-external-block');
+  if(l)l.style.display=isLocal?'':'none';
+  if(x)x.style.display=isLocal?'none':'';
+  const rl=document.getElementById('ai-type-local'), rx=document.getElementById('ai-type-external');
+  if(rl)rl.checked=isLocal;
+  if(rx)rx.checked=!isLocal;
 }
-function loadApiKey(){
+function aiLoadSettings(){
   try{
-    const k=localStorage.getItem('anthropicKey')||'';
-    const inp=document.getElementById('apiKeyInput');
-    if(inp&&k){inp.value=k;saveApiKey(k);}
+    // Миграция ключа из старой карточки («Импорт», anthropicKey) → внешний API
+    const old=localStorage.getItem('anthropicKey');
+    if(old&&!localStorage.getItem('aiExternalKey')){localStorage.setItem('aiExternalKey',old);}
+    if(old)localStorage.removeItem('anthropicKey');
   }catch(e){}
+  const g=(k,d)=>localStorage.getItem(k)||d;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
+  set('ai-local-url',g('aiLocalUrl','http://192.168.0.163:8080'));
+  set('ai-local-model',g('aiLocalModel','gemma-2b'));
+  set('ai-local-key',g('opiAiKey',''));
+  set('ai-external-url',g('aiExternalUrl','https://api.anthropic.com'));
+  set('ai-external-model',g('aiExternalModel','claude-sonnet-4-6'));
+  set('ai-external-key',g('aiExternalKey',''));
+  aiToggleServerType(g('aiServerType','local'));
+}
+function aiSaveSettings(){
+  const v=id=>(document.getElementById(id)?.value||'').trim();
+  const type=document.querySelector('input[name="ai-server-type"]:checked')?.value||'local';
+  try{
+    localStorage.setItem('aiServerType',type);
+    localStorage.setItem('aiLocalUrl',v('ai-local-url'));
+    localStorage.setItem('aiLocalModel',v('ai-local-model'));
+    localStorage.setItem('opiAiKey',v('ai-local-key'));
+    localStorage.setItem('aiExternalUrl',v('ai-external-url'));
+    localStorage.setItem('aiExternalModel',v('ai-external-model'));
+    localStorage.setItem('aiExternalKey',v('ai-external-key'));
+    setStatus('ai-test-status','✓ настройки сохранены','ok');
+  }catch(e){setStatus('ai-test-status','✗ не удалось сохранить: '+e.message,'err');}
+}
+async function aiTestConnection(){
+  aiSaveSettings();
+  setStatus('ai-test-status','Проверяю связь...','muted');
+  const t0=Date.now();
+  try{
+    const r=await callAI('Отвечай одним словом.','Ответь: ok',20,15000);
+    setStatus('ai-test-status','✓ связь есть ('+((Date.now()-t0)/1000).toFixed(1)+' с): '+r.slice(0,40),'ok');
+  }catch(e){
+    setStatus('ai-test-status','✗ '+(e.name==='AbortError'?'таймаут':e.message),'err');
+  }
 }
 
 // ============ IMPORT / PARSE ============
@@ -37,87 +170,124 @@ async function parseMessages(){
   if(!guardWrite())return; // viewer — только просмотр (вкладка Импорт и так скрыта)
   const raw=document.getElementById('rawMsg').value.trim();
   if(!raw)return;
-  const apiKey=(document.getElementById('apiKeyInput').value||'').trim();
   const st=document.getElementById('parseStatus');
-  if(!apiKey||!apiKey.startsWith('sk-ant')){
-    setStatus(st,'Укажите API-ключ Anthropic выше (начинается с sk-ant-...)','err');
-    return;
-  }
-  setStatus(st,'Распознаю...','muted');
+
+  setStatus(st,'Распознаю правилами...','muted');
   document.getElementById('parsedCards').innerHTML='';
-  // Подготавливаем строки ДО запроса — передаём парсеру с номерами
+  // Подготавливаем строки
   const srcLines=raw.split('\n').map(l=>l.trim());
-  const srcNonEmpty=srcLines.filter(Boolean);
-  const numberedInput=srcLines.map((l,i)=>`[${i}] ${l}`).join('\n');
-  const ammoKnown=ammoCatalog.flatMap(a=>[a.name,...(a.aliases||[])]).filter(Boolean);
-  // Словарь моделей для нормализации — динамический (каталог ∪ склад ∪ расчёты),
-  // иначе AI схлопывает новые борта к ближайшему старому (напр. «ПВХ 2» → «ПВХ1»).
-  const droneVocab=(typeof getDroneVocab==='function')?getDroneVocab():DRONE_CATALOG;
-  // Идёт платный AI-разбор: автообновление версии (update.js) в этот момент не перезагружает
-  // страницу — результат пропал бы, а запрос пришлось бы оплатить повторно.
-  window._parseBusy=true;
-  try{
-    // Раньше был единственный AI-вызов БЕЗ таймаута — оборванная сеть вешала импорт навечно.
-    const resp=await aiFetchWithTimeout('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key':apiKey,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
-      body:JSON.stringify({
-        model:AI_MODEL,
-        max_tokens:2000,
-        system:`Ты парсер военных сообщений о вылетах дронов ФПВ. Из входного текста извлеки КАЖДЫЙ вылет отдельно.
-Каждая строка входного текста помечена номером в квадратных скобках [N]. Используй этот номер как _line.
-Верни ТОЛЬКО валидный JSON-массив без лишнего текста, пример:
-[{"_line":0,"date":"2026-05-23","time":"08:34","pilot":"Рама","flightnum":1,"target":"305 Вишня","ammo":"пом2","drone":"Гамаюн13","result":"yes","returned":"yes","note":""},...]
+
+  // 1. СНАЧАЛА — правила (parser-rules.js)
+  const {parsed: rulesParsed, missingLines}=parseAllByRules(srcLines);
+
+  // 2. ЕСЛЬ есть строки с missing — ОДИН вызов AI только для них
+  let aiResults=[], aiOk=false;
+  if(missingLines.length>0){
+    setStatus(st,'Дозапрос к ИИ для '+missingLines.length+' строк...','muted');
+    window._parseBusy=true;
+    try{
+      // Формируем вход для AI: только проблемные строки с их номерами
+      const aiInput=missingLines.map(idx=>`[${idx}] ${srcLines[idx]}`).join('\n');
+      const SYSTEM_PROMPT=`Парсер вылетов дронов. Извлеки каждый вылет из текста в JSON.
+Формат: [{"_line":N,"date":"YYYY-MM-DD","time":"HH:MM","pilot":"имя","flightnum":N,"target":"номер цвет","ammo":"груз","drone":"модель","result":"yes/no","returned":"yes/no","note":"текст"}]
+
 Правила:
-- _line: ТОЧНЫЙ номер строки [N] из которой взят этот вылет — обязателен и уникален для каждого вылета
-- время всегда в формате HH:MM с ведущим нулём (08:34, не 8:34)
-- flightnum: число вылета если упомянуто ("первый вылет"=1, "второй вылет"=2 и т.д.), иначе null
-- target: комбинация "ЧИСЛО + СЛОВО-ЦВЕТ" (янтарь, красный, синий, зелёный, белый, чёрный, жёлтый, фиолетовый, серый, оранжевый, розовый) — это ВСЕГДА точка/цель; пиши оба слова в target, не разбивай, не путай с позывным
-- ammo: если токен совпадает (точно или приблизительно) с одним из известных боеприпасов [${ammoKnown.length?ammoKnown.join(', '):'—'}] — это груз/боеприпас, пиши в ammo; НЕ путай с позывным или целью${ammoKnown.length?'':'; если список пуст — определяй по контексту'}
-- note: ТОЛЬКО дополнительные обстоятельства (перебили видео, потеря управления, спикировал и т.п.) — НЕ номер вылета, НЕ цель, НЕ боеприпас
-- returned: вернул/борт вернул = yes; не вернули/спикировал/перебили/потеря управления/борт остался/борт не вернул = no
-- result: на месте/выполнена = yes; не на месте/не выполнена = no
-- drone: нормализуй написание к ближайшему из словаря: ${droneVocab.join(', ')}. Если в тексте модель отличается от всех в словаре (другой номер/суффикс) — НЕ подменяй её ближайшей, оставь как в тексте (оператор уточнит вручную)
-Верни ТОЛЬКО JSON-массив.`,
-        messages:[{role:'user',content:numberedInput}]
-      })
-    },AI_PARSE_TIMEOUT_MS);
-    if(!resp.ok){
-      const err=await resp.json().catch(()=>({}));
-      throw new Error(`HTTP ${resp.status}: ${err.error?.message||resp.statusText}`);
+- _line: номер строки [N] из входа (обязателен, уникален)
+- time: HH:MM с ведущим нулём (08:34, не 8:34)
+- target: "ЧИСЛО ЦВЕТ" (например "305 вишня", "85 коралл")
+- returned: "вернул/борт вернул"=yes, "не вернул/потерян/спикировал"=no
+- result: "на месте/выполнена"=yes, иначе no
+- drone: нормализуй написание (убери лишние пробелы/тире)
+
+Верни ТОЛЬКО JSON-массив, без текста до/после.`;
+      const txt=await callAI(SYSTEM_PROMPT,aiInput,1200,AI_PARSE_TIMEOUT_MS);
+      let ans=JSON.parse(txt.replace(/```json|```/g,'').trim());
+      // Модель могла вернуть объект ({"flights":[…]}) или мусорные элементы — берём только объекты
+      if(!Array.isArray(ans)) ans=(ans&&Array.isArray(ans.flights))?ans.flights:[];
+      aiResults=ans.filter(a=>a&&typeof a==='object'&&!Array.isArray(a));
+      aiOk=true;
+    }catch(e){
+      // AI недоступен — не ошибка импорта, работаем с тем, что нашли правилами
+      console.warn('AI fallback failed:',e);
+      setStatus(st,'⚠ ИИ недоступен, разобрано правилами — проверьте подсвеченные поля','warn');
+    }finally{
+      window._parseBusy=false;
     }
-    const data=await resp.json();
-    const txt=data.content.map(i=>i.text||'').join('');
-    const parsed=JSON.parse(txt.replace(/```json|```/g,'').trim());
-    parsed.forEach((item,i)=>{
-      const lineIdx=typeof item._line==='number'?item._line:null;
-      if(lineIdx!==null&&srcLines[lineIdx]&&srcLines[lineIdx].trim()){
-        item._src=srcLines[lineIdx].trim();
-      } else {
-        item._src=srcNonEmpty[i]||'';
-      }
-      delete item._line;
-    });
-    setStatus(st,`Распознано: ${parsed.length} вылет(ов). Проверьте и сохраните.`,'ok');
-    renderParsedCards(parsed);
-  }catch(e){
-    // Отменённый по таймауту запрос — понятная ошибка, а не «AbortError»/вечное «Распознаю...»
-    if(e&&e.name==='AbortError')
-      setStatus(st,'Ошибка: сервер не ответил за '+(AI_PARSE_TIMEOUT_MS/1000)+' сек (сеть или API недоступны). Проверьте соединение и повторите.','err');
-    else
-      setStatus(st,'Ошибка: '+e.message,'err');
-  }finally{
-    window._parseBusy=false;
+  }else{
+    setStatus(st,'Распознано правилами: '+rulesParsed.filter(p=>!p._continuation).length+' вылет(ов). Проверьте и сохраните.','ok');
   }
+
+  // 3. СЛИЯНИЕ: AI заполняет ТОЛЬКО missing поля, найденное правилами не перетираем
+  let aiFilled=0;
+  const merged=rulesParsed.map((item,i)=>{
+    if(item._continuation) return item;
+    const aiItem=aiResults.find(a=>typeof a._line==='number' && a._line===item._lineIdx);
+    if(aiItem){
+      let filled=false;
+      for(const key of item.missing){
+        if(aiItem[key]!==undefined && aiItem[key]!==null && aiItem[key]!==''){
+          item.fields[key]=aiItem[key];
+          filled=true;
+        }
+      }
+      if(filled) aiFilled++;
+      // _parsedFlightnum не перетираем в flightnum — система сама пересчитает
+      if(aiItem._parsedFlightnum!==undefined && item.fields._parsedFlightnum===undefined){
+        item.fields._parsedFlightnum=aiItem._parsedFlightnum;
+      }
+      item.missing=item.missing.filter(k=>item.fields[k]===undefined || item.fields[k]==='');
+    }
+    // _src для рендера
+    item._src=item._src || srcLines[item._lineIdx] || '';
+    return item;
+  });
+
+  // 3a. Распаковка: parseAllByRules отдаёт {fields:{...}, missing, _src}, а
+  // renderParsedCards читает поля ПЛОСКО (x.date, x.pilot, ...). Без этого шага
+  // карточки рисовались, но все поля были пустыми.
+  // Продолжения примечания (_continuation) в карточки не идут: их текст уже
+  // дописан в note предыдущего вылета самим parseAllByRules.
+  const flattened=merged
+    .filter(item=>!item._continuation)
+    .map(item=>({...item.fields,
+      // Номер вылета, распознанный из текста («Первый»=1, «Второй»=2, «4-й»=4),
+      // идёт в обычное поле flightnum — его и показывает карточка, и читает
+      // confirmParsed при сохранении. Без автонумерации: если номер в тексте не
+      // распознан, поле остаётся пустым → flightnum=null при сохранении.
+      flightnum: item.fields._parsedFlightnum,
+      missing:item.missing, _src:item._src, _lineIdx:item._lineIdx}));
+
+  if(aiOk) setStatus(st,'Распознано: '+flattened.length+' (ИИ дополнил строк: '+aiFilled+'). Проверьте и сохраните.','ok');
+
+  // 4. Рендер карточек (renderParsedCards сам подсветит missing через --amber)
+  renderParsedCards(flattened);
 }
 
 function renderParsedCards(items){
-  document.getElementById('parsedCards').innerHTML=items.map((x,i)=>`
+  // Вспомогательная: инпут с янтарной подсветкой, если поле в missing
+  const inp=(id, label, value, type='text', missing=[])=>{
+    // id формата "p0-date" → поле "date".
+    // ВАЖНО: здесь нельзя обращаться к i из items.map() — эта функция объявлена ВЫШЕ map,
+    // и такой доступ давал ReferenceError: i is not defined.
+    const field=id.replace(/^p\d+-/,'');
+    const warn=missing.includes(field) ? ' style="border-color:var(--amber);box-shadow:0 0 0 2px var(--amber-soft)"' : '';
+    return `<div><label>${label}</label><input id="${id}" type="${type}" value="${esc(value||'')}"${warn}></div>`;
+  };
+  const sel=(id, label, value, options, missing=[])=>{
+    const field=id.replace(/^p\d+-/,'');
+    const warn=missing.includes(field) ? ' style="border-color:var(--amber);box-shadow:0 0 0 2px var(--amber-soft)"' : '';
+    // Поле не распознано — пустой вариант: иначе молча выбрался бы первый («Выполнена»/«Вернул»)
+    if(!value&&missing.includes(field)) options=[{value:'',text:'— выбрать —'},...options];
+    const opts=options.map(o=>{
+      const s=o.value===value?' selected':'';
+      return `<option value="${esc(o.value)}"${s}>${esc(o.text)}</option>`;
+    }).join('');
+    return `<div><label>${label}</label><select id="${id}"${warn}>${opts}</select></div>`;
+  };
+
+  document.getElementById('parsedCards').innerHTML=items.map((x,i)=>{
+    const miss=x.missing||[];
+    return `
     <div class="card" style="margin-bottom:8px" id="pcard-${i}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-size:12px;font-weight:700;color:var(--muted)">Вылет ${esc(x.flightnum||i+1)} — ${esc(x.pilot||'?')} · ${esc(x.date||'')} ${esc(x.time||'')}</div>
@@ -128,26 +298,23 @@ function renderParsedCards(items){
       </div>
       ${x._src?`<div id="psrc-${i}" style="font-size:11px;color:var(--muted);background:var(--bg2);border:1px solid var(--border);padding:5px 8px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap">${esc(x._src)}</div>`:''}
       <div class="form-row cols3">
-        <div><label>Дата</label><input id="p${i}-date" type="date" value="${esc(x.date)}"></div>
-        <div><label>Время</label><input id="p${i}-time" type="time" value="${esc(x.time)}"></div>
-        <div><label>Номер вылета</label><input id="p${i}-flightnum" type="number" min="1" value="${esc(x.flightnum||'')}"></div>
+        ${inp(`p${i}-date`,'Дата',x.date,'date',miss)}
+        ${inp(`p${i}-time`,'Время',x.time,'time',miss)}
+        ${inp(`p${i}-flightnum`,'Номер вылета',x.flightnum||'','number',miss)}
       </div>
       <div class="form-row cols3">
-        <div><label>Пилот</label><input id="p${i}-pilot" value="${esc(x.pilot||'')}"></div>
-        <div><label>Точка</label><input id="p${i}-target" value="${esc(x.target||'')}"></div>
-        <div><label>Боеприпас / груз</label><input id="p${i}-ammo" value="${esc(x.ammo||'')}"></div>
+        ${inp(`p${i}-pilot`,'Пилот',x.pilot, 'text',miss)}
+        ${inp(`p${i}-target`,'Точка',x.target, 'text',miss)}
+        ${inp(`p${i}-ammo`,'Груз',x.ammo, 'text',miss)}
       </div>
       <div class="form-row cols3">
-        <div><label>БПЛА</label><input id="p${i}-drone" value="${esc(x.drone||'')}"></div>
-        <div><label>Задача</label>
-          <select id="p${i}-result"><option value="yes" ${x.result==='yes'?'selected':''}>Выполнена</option><option value="no" ${x.result==='no'?'selected':''}>Не выполнена</option></select>
-        </div>
-        <div><label>Борт</label>
-          <select id="p${i}-returned"><option value="yes" ${x.returned==='yes'?'selected':''}>Вернул</option><option value="no" ${x.returned==='no'?'selected':''}>Потерян</option></select>
-        </div>
+        ${inp(`p${i}-drone`,'БПЛА',x.drone, 'text',miss)}
+        ${sel(`p${i}-result`,'Задача',x.result||'', [{value:'yes',text:'Выполнена'},{value:'no',text:'Не выполнена'}], miss)}
+        ${sel(`p${i}-returned`,'Борт',x.returned||'', [{value:'yes',text:'Вернул'},{value:'no',text:'Потерян'}], miss)}
       </div>
-      <div><label>Примечание</label><input id="p${i}-note" value="${esc(x.note||'')}"></div>
-    </div>`).join('');
+      <div>${inp(`p${i}-note`,'Примечание',x.note, 'text',miss)}</div>
+    </div>`;
+  }).join('');
 }
 
 function hideCard(i){
@@ -285,6 +452,15 @@ async function confirmParsed(i){
   const srcEl=document.getElementById(`psrc-${i}`);
   const srcText=srcEl?srcEl.textContent.trim():'';
   const hideThisCard=()=>{const card=document.getElementById(`pcard-${i}`);if(card)card.style.display='none';};
+
+  // Обязательные поля: без даты и пилота вылет не сохраняем; «Задача»/«Борт» из missing — до явного выбора
+  const need=[['date','дату'],['pilot','пилота'],['result','«Задача»'],['returned','«Борт»']]
+    .filter(([k])=>!((document.getElementById(`p${i}-${k}`)||{}).value||'').trim());
+  if(need.length){
+    showCardError(i,'⛔ Укажите '+need.map(n=>n[1]).join(', '));
+    const el=document.getElementById(`p${i}-${need[0][0]}`); if(el)el.focus();
+    return;
+  }
 
   // Шаг 1: пилот — при несовпадении показываем всех пилотов из базы
   const pilotName=(pilotInput.value||'').trim();

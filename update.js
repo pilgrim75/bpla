@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['update.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['update.js']=2026101101; // сборка файла — ставит tools/bump-version.js, руками не править
 // update.js — контроль версии клиента и PWA (выпуск v0.29, 25.09.2026). Грузится перед app.js.
 // Проект: _НЕ_ПУБЛИКОВАТЬ/ПРОЕКТ_контроль_версии_2026-09-25.md. Повод — форензика 25.09:
 // давно открытая вкладка со старым кодом переписала облако и вернула удалённое; «Ctrl+F5
@@ -26,7 +26,7 @@
 // последним); верхний уровень — только константы, состояние и слушатели beforeinstallprompt.
 
 // Файлы со штампом сборки — тот же список, что в tools/bump-version.js (его --check сверяет).
-const UPD_STAMPED=['sync.js','geo.js','parser.js','reports.js','writeoff.js','marshrut.js','vtx.js','update.js','app.js'];
+const UPD_STAMPED=['sync.js','geo.js','parser-rules.js','parser.js','reports.js','writeoff.js','marshrut.js','vtx.js','update.js','app.js'];
 const UPD_CHECK_EVERY_MS=5*60*1000;   // плановая проверка version.json (как полная синхронизация)
 const UPD_RETRY_SAFE_MS=30*1000;      // пока есть несохранённое — перепроверять условия (без сети)
 const UPD_IDLE_MS=30*1000;            // «ввод был недавно» — не перезагружать под пальцами

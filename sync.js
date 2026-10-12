@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['sync.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['sync.js']=2026101101; // сборка файла — ставит tools/bump-version.js, руками не править
 // sync.js — Sync Module v2 (часть app.js, грузить ПЕРВЫМ)
 // ============================================================
 // SYNC MODULE v2 — переписан с нуля
@@ -714,6 +714,7 @@ function syncPruneStateByTombstones(){
     // Только считаем — pollCloud после приёма запускает самопроверку qty vs ledger.
     syncPruneStateByTombstones.lastLoss=state.transfers.filter(t=>t.id&&tb.hasIn('transfers',t.id)&&t.type==='loss').length;
     state.transfers=state.transfers.filter(t=>!t.id||!tb.hasIn('transfers',t.id));
+    if(typeof marshrutInvalidate==='function')marshrutInvalidate();
     if(state.transfers.length!==n) removed=true;
   }
   return removed;
@@ -758,6 +759,7 @@ function syncDropStaleLocal(cloudF,cloudT,where){
   const dF=new Set(dropF), dT=new Set(dropT);
   state.flights=state.flights.filter(f=>!dF.has(f));
   state.transfers=(state.transfers||[]).filter(t=>!dT.has(t));
+  if(typeof marshrutInvalidate==='function')marshrutInvalidate();
   const who=(typeof authUser!=='undefined'&&authUser&&authUser.login)||'?';
   const role=(typeof authUser!=='undefined'&&authUser&&authUser.role)||'';
   const ua=(typeof navigator!=='undefined'&&navigator.userAgent)?navigator.userAgent.slice(0,60):'';
@@ -1135,7 +1137,7 @@ async function syncDeleteFlight(idx){
   const removeLoss = (pred)=>{
     const keep=[], removed=[];
     (state.transfers||[]).forEach(t=>(pred(t)?removed:keep).push(t));
-    state.transfers=keep; return removed;
+    state.transfers=keep; if(typeof marshrutInvalidate==='function')marshrutInvalidate(); return removed;
   };
 
   // Проход 1: по flightId (для записей, созданных после обновления)
@@ -1207,7 +1209,16 @@ async function syncDeleteFlight(idx){
 
 // Обновить поле вылета
 function syncEditFlight(idx, field, val){
-  if(state.flights[idx]) state.flights[idx][field] = val;
+  if(state.flights[idx]){
+    const f=state.flights[idx];
+    // Смена даты → пересчёт порядкового номера вылета пилота за НОВУЮ дату
+    if(field==='date' && val && val!==f.date && typeof nextFlightNumFor==='function'){
+      f.date=val;
+      f.flightnum=nextFlightNumFor(f.pilot,val,f.id);
+    } else {
+      f[field]=val;
+    }
+  }
   // Дефект C (10.06.2026): раньше saveLocalQuiet оставлял правку только локально —
   // если до следующего ambient-write успевал плановый syncPullOnLogin (5 мин),
   // полная замена flights откатывала правку облачной версией. syncPushAll теперь
@@ -1477,6 +1488,7 @@ async function _syncPushAllNow(silent=false){
         if(!state.transfers) state.transfers=[];
         state.transfers = [...state.transfers, ...addT]
           .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
+        if(typeof marshrutInvalidate==='function')marshrutInvalidate();
       }
       if(addF.length || addT.length){
         console.log('[SYNC] pushAll merge: +'+addF.length+' flights, +'+addT.length+' transfers из облака');
@@ -1768,6 +1780,7 @@ async function syncPullOnLogin(){
       state.transfers = [...loaded.transfers, ...localOnlyT]
         .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
     }
+    if(typeof marshrutInvalidate==='function')marshrutInvalidate();
     if(stockNewer) stockDelta = syncAcceptRemoteStock(remoteStock); // замена либо merge локальной дельты
     // Непустая очередь без «pending» — это очередь наблюдателя (K1: только actlog). Раньше её
     // досылала лишь ветка слияния; у наблюдателя нет 30-секундного поллинга, и неудачно
@@ -1782,6 +1795,7 @@ async function syncPullOnLogin(){
     const localTIds = new Set((state.transfers||[]).map(t=>t.id).filter(Boolean));
     const newT = loaded.transfers.filter(t=>t.id&&!localTIds.has(t.id));
     state.transfers = [...(state.transfers||[]),...newT].sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));
+    if(typeof marshrutInvalidate==='function')marshrutInvalidate();
     // Склад берём из облака только если его снимок новее (merge локальной дельты)
     if(stockNewer) stockDelta = syncAcceptRemoteStock(remoteStock);
     // Отправляем накопленное
@@ -1826,6 +1840,7 @@ async function syncFromCloud(){
   state.stock     = loaded.stock;
   state.squads    = loaded.squads;
   state.transfers = loaded.transfers;
+  if(typeof marshrutInvalidate==='function')marshrutInvalidate();
   // Принудительная загрузка = облако авторитетно: версия и база — облачные
   _stockVersion = syncStockMaxSv(loaded.stock,loaded.squads); syncPersistStockVersion();
   syncStockSetBase(loaded.stock, loaded.squads, _stockVersion);
@@ -1878,7 +1893,6 @@ async function _pollCloudOnce(){
 
     let changed = false;
     let newFlights = 0;      // фактически добавленные чужие вылеты (для тоста — не вся дельта)
-    let lossFlagSet = false; // выставили _lossWritten при приёме чужой потери — надо вернуть в облако
     // Путь Б: слить облачные tombstones (чужие удаления) ДО обработки вылетов/передач —
     // иначе только что удалённое на другом устройстве снова добавилось бы из дельты.
     const tombIds = syncMergeCloudTombstones(d.tombstones);
@@ -1899,16 +1913,10 @@ async function _pollCloudOnce(){
         state.flights.unshift(obj);
         changed = true;
         newFlights++;
-        // Списываем дрон если потеря — но только если списание ещё не зафиксировано
-        // на устройстве-источнике (флаг приходит вместе с вылетом). Viewer не участвует:
-        // не списывает и не пушит — ждёт авторитетный склад от пишущего устройства.
-        if(obj.returned==='no' && obj.drone && !obj._lossWritten && !syncReadOnly()){
-          // минус у пилота (борт без передачи) — сигнал тостом/консолью, не блок (ADR-001 §4)
-          lossDeficitWarn(writeDroneLoss(obj.pilot, obj.drone, obj.date, obj.time, obj.id));
-          obj._lossWritten=true;
-          lossFlagSet = true;                       // Risk 4: вернём флаг в облако ниже
-          setTimeout(()=>syncPushStockSquads(), 500); // списание + версия склада
-        }
+        // D3 ЗАКРЫТ (Этап 4 МАРШРУТ, 10.10.2026): вылет с returned='no' приходит из облака
+        // УЖЕ с loss-записью (создана на устройстве-источнике через applyLossIfNeeded).
+        // Автосоздание loss в pollCloud удваивало потерю. Флаг _lossWritten проверять не нужно —
+        // все легитимные пути ставят его ДО syncAddFlight (saveFlightEdit, импорт, AI-импорт).
       }
     }
 
@@ -2028,10 +2036,8 @@ async function _pollCloudOnce(){
       renderDashboard(); renderFlights(); renderInventory(); rebuildRoleSelector();
       if(newFlights>0) showSyncToast('↓ '+newFlights+' '+ruPlural(newFlights,'новый вылет','новых вылета','новых вылетов'));
     }
-    // Risk 4: вернуть выставленный _lossWritten в облако, чтобы другие устройства
-    // не списали тот же борт повторно. Точечный write листа flights сразу после
-    // поллинга (состояние максимально свежее → риск затирания минимален).
-    if(lossFlagSet) syncPushFlightsOnly();
+    // D3 ЗАКРЫТ: Risk 4 (возврат флага _lossWritten в облако через syncPushFlightsOnly)
+    // больше не нужен — флаг ставится на устройстве-источнике и приходит вместе с вылетом.
     if(ind){ ind.className='sync-indicator saved'; ind.textContent='● '+new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}); }
   }catch(e){
     console.warn('[POLL] error:', e.message);

@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['reports.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['reports.js']=2026101101; // сборка файла — ставит tools/bump-version.js, руками не править
 // reports.js — отчёты и фильтр БПЛА (часть app.js, грузить ПЕРЕД app.js)
 // ============ REPORT ============
 // Выбранные борты для фильтра отчётов (пусто = все)
@@ -506,7 +506,7 @@ function reportByFilter(out){
   const filt=[
     meta.pilot?`пилот: ${meta.pilot}`:'',
     (meta.drones&&meta.drones.length)?`борт: ${meta.drones.join(', ')}`:'',
-    (meta.ammo&&meta.ammo.length)?`боеприпас: ${meta.ammo.join(', ')}`:'',
+    (meta.ammo&&meta.ammo.length)?`груз: ${meta.ammo.join(', ')}`:'',
     (meta.result&&meta.result!=='all')?`результат: ${RES[meta.result]||meta.result}`:'',
     (meta.returned&&meta.returned!=='all')?`возврат: ${RET[meta.returned]||meta.returned}`:''
   ].filter(Boolean);
@@ -541,7 +541,7 @@ function reportByFilter(out){
     };
   };
   const tDrone=mkTable(['Модель','Вылетов','Потеряно'],droneRows);
-  const tAmmo=mkTable(['Боеприпас','Применений'],ammoRows);
+  const tAmmo=mkTable(['Груз','Применений'],ammoRows);
   const tPilot=mkTable(['Пилот','Вылетов','Выполнено','Потеряно'],pilotRows);
   const total=f.length;
   // HTML
@@ -552,7 +552,7 @@ function reportByFilter(out){
     ${filtHtml}
   </div>
   ${total?`<div class="report-block">${head('Борта')}${tDrone.html}</div>
-  <div class="report-block">${head('Боеприпасы')}${tAmmo.html}</div>
+  <div class="report-block">${head('Грузы')}${tAmmo.html}</div>
   <div class="report-block">${head('Итоги')}
     <div class="rb-line" style="${MONO}">Выполнено · <span style="color:var(--green2)">${done}</span>   Не выполнено · <span style="color:var(--red)">${notdone}</span>   Всего вылетов · ${total}</div>
   </div>
@@ -562,7 +562,7 @@ function reportByFilter(out){
   const lines=['Отчёт по выборке журнала','Период: '+rangeTxt+' · вылетов в выборке: '+total];
   if(filt.length)lines.push('Фильтры: '+filt.join(' · '));
   if(total){
-    lines.push('','Борта',...tDrone.text,'','Боеприпасы',...tAmmo.text,'',
+    lines.push('','Борта',...tDrone.text,'','Грузы',...tAmmo.text,'',
       'Итоги: выполнено '+done+', не выполнено '+notdone+', всего '+total,
       '','По пилотам',...tPilot.text);
   } else lines.push('','Нет вылетов в выборке');
@@ -693,7 +693,7 @@ function buildDetailedReport(f,filterLabel,out){
     {label:'Борт вернулся',fn:s=>`${s.ret} ${s.pct(s.ret,s.total)}`},
     {label:'Борт потерян',fn:s=>`${s.lost} ${s.pct(s.lost,s.total)}`,red:s=>s.lost>0},
     null,
-    {label:'Минирование (всего)',section:true,fn:s=>String(s.mining.total)},
+    {label:'Применение (всего)',section:true,fn:s=>String(s.mining.total)},
     {label:'— удачных',fn:s=>`${s.mining.done} ${s.pct(s.mining.done,s.mining.total)}`},
     {label:'— неудачных',fn:s=>`${s.mining.notDone} ${s.pct(s.mining.notDone,s.mining.total)}`,red:s=>s.mining.notDone>0},
     null,
@@ -791,7 +791,7 @@ function printReport(){
 // ===== УСТНЫЙ ДОКЛАД (AI, claude-sonnet-4-6) =====
 // Данные анонимизируются перед отправкой в Claude API и восстанавливаются в ответе.
 // Ничего не сохраняется и не уходит в Google Sheets.
-const VR_PROMPT = 'Составь устный военный доклад на русском языке на основе данных о боевых вылетах подразделения за указанный период. Стиль — чёткий, лаконичный, военный. Структура: общие итоги, действия по расчётам, потери, выводы. Не добавляй данные которых нет в исходных данных.';
+const VR_PROMPT = 'Составь устный доклад на русском языке на основе данных о вылетах подразделения за указанный период. Стиль — чёткий, лаконичный. Структура: общие итоги, действия по расчётам, потери, выводы. Не добавляй данные которых нет в исходных данных.';
 
 // Панель устного доклада. Состояние (период, текст, даты) сохраняется в window._vr*,
 // чтобы не теряться при перерисовке отчёта.
@@ -800,7 +800,7 @@ function reportVerbal(out){
   const txt=window._vrText||'';
   out.innerHTML=`<div class="report-block">
     <div class="rb-head">Устный доклад (AI)</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Период выбирается вверху (Неделя/Месяц/Год/Произвольный). Перед отправкой в Claude API имена расчётов, точки, борта и грузы заменяются условными номерами и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт». Нажмите «Сформировать» вверху — при недоступности сети/API доклад будет составлен по шаблону автоматически.</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Период выбирается вверху (Неделя/Месяц/Год/Произвольный). Перед отправкой в Claude API имена расчётов, точки, борта и грузы заменяются условными номерами и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Настройки AI-сервера — вкладка «Настройки». Нажмите «Сформировать» вверху — при недоступности сети/API доклад будет составлен по шаблону автоматически.</div>
     <div id="vrStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
     <div id="vrResultWrap" style="display:${txt?'block':'none'}">
       <textarea id="vrResult" style="width:100%;min-height:320px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(txt)}</textarea>
@@ -860,13 +860,13 @@ function vrBuildPayload(flights,label){
   const mining=flights.filter(f=>!isDeliv(f.ammo)).length;
   const delivery=flights.filter(f=>isDeliv(f.ammo)).length;
   const L=[];
-  L.push('Данные о боевых вылетах подразделения '+label+'. Обозначения «Расчёт N», «Борт типа N», «Точка N», «Груз N» используй в докладе дословно, не переименовывай.');
+  L.push('Данные о вылетах подразделения '+label+'. Обозначения «Расчёт N», «Борт типа N», «Точка N», «Груз N» используй в докладе дословно, не переименовывай.');
   L.push('');
   L.push('ОБЩИЕ ИТОГИ:');
   L.push('- Всего вылетов: '+total+'.');
   L.push('- Задача выполнена: '+done+' ('+pct(done,total)+').');
   L.push('- Потеряно бортов: '+lost+' ('+pct(lost,total)+').');
-  L.push('- Минирование: '+mining+'; доставка: '+delivery+'.');
+  L.push('- Применение: '+mining+'; доставка: '+delivery+'.');
   L.push('');
   L.push('ПО РАСЧЁТАМ:');
   P.sorted.forEach(p=>{
@@ -875,7 +875,7 @@ function vrBuildPayload(flights,label){
     const l=fs.filter(f=>f.returned==='no').length;
     const m=fs.filter(f=>!isDeliv(f.ammo)).length;
     const dl=fs.filter(f=>isDeliv(f.ammo)).length;
-    L.push('- '+P.toTok.get(p)+': вылетов '+fs.length+', выполнено '+d+' ('+pct(d,fs.length)+'), потерь '+l+'; минирование '+m+', доставка '+dl+'.');
+    L.push('- '+P.toTok.get(p)+': вылетов '+fs.length+', выполнено '+d+' ('+pct(d,fs.length)+'), потерь '+l+'; применение '+m+', доставка '+dl+'.');
   });
   const lossBy={};
   flights.filter(f=>f.returned==='no'&&f.drone).forEach(f=>{ lossBy[f.drone]=(lossBy[f.drone]||0)+1; });
@@ -947,7 +947,7 @@ function vrBuildTemplate(flights, range){
   const dFrom=range.from||dates[0]||'';
   const dTo=range.to||dates[dates.length-1]||'';
   const L=[];
-  L.push(`За период с ${fd(dFrom)} по ${fd(dTo)} силами расчётов ${pilots.join(', ')} выполнено ${total} ${ruPlural(total,'боевой вылет','боевых вылета','боевых вылетов')}.`);
+  L.push(`За период с ${fd(dFrom)} по ${fd(dTo)} силами расчётов ${pilots.join(', ')} выполнено ${total} ${ruPlural(total,'вылет','вылета','вылетов')}.`);
   L.push('');
   L.push(`Процент выполнения задач составил ${pct(done,total)}%.`);
   L.push(`Потери техники: ${lost} ${ruPlural(lost,'единица','единицы','единиц')}.`);
@@ -998,33 +998,14 @@ async function vrGenerate(){
   const r=vrPeriodRange();
   const flights=vrFilterFlights(r);
   if(!flights.length){ vrSetStatus('За выбранный период вылетов нет.','var(--amber)'); return; }
-  const apiKey=(localStorage.getItem('anthropicKey')||'').trim();
   const btn=document.getElementById('repRunBtn');
   const fallback=(notice)=>{ vrShowText(vrBuildTemplate(flights,r)); vrSetStatus(notice,'var(--amber)'); };
-
-  // Нет ключа или нет сети — сразу шаблон, без попытки запроса
-  if(!apiKey||!apiKey.startsWith('sk-ant')){ fallback('API-ключ не задан — сформирован шаблонный доклад.'); return; }
-  if(!navigator.onLine){ fallback('Сеть недоступна — сформирован шаблонный доклад.'); return; }
 
   const {payload,maps}=vrBuildPayload(flights,r.label);
   if(btn) btn.disabled=true;
   vrSetStatus('⏳ Формирую доклад…');
   try{
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),10000); // таймаут 10с
-    let resp;
-    try{
-      resp=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({ model:AI_MODEL, max_tokens:1000, system:VR_PROMPT, messages:[{role:'user',content:payload}] }), // AI_MODEL — единая точка (parser.js)
-        signal:ctrl.signal
-      });
-    } finally { clearTimeout(tid); }
-    if(!resp.ok){ const err=await resp.json().catch(()=>({})); throw new Error('HTTP '+resp.status+': '+((err.error&&err.error.message)||resp.statusText)); }
-    const data=await resp.json();
-    let txt=(data.content||[]).map(i=>i.text||'').join('').trim();
-    if(!txt) throw new Error('пустой ответ API');
+    let txt=(await callAI(VR_PROMPT,payload,1500,60000)).trim();
     txt=vrDeanon(txt,maps);
     vrShowText(txt);
     vrSetStatus('✓ Готово','var(--green2)');
@@ -1066,7 +1047,7 @@ function vrPrint(){
 // Состояние панели — в window._rpg* (период/текст), переживает перерисовку.
 // Модель: claude-sonnet-4-6 (текущая; запрошенный claude-sonnet-4-20250514
 // устарел и снимается 15.06.2026 — используем актуальный ID, как в остальном app).
-const RPG_PROMPT = 'Напиши шутливый и ироничный репортаж на русском языке о боевых достижениях пилотов FPV-дронов за указанный период. Стиль — как залихватский спортивный комментатор, с грубым юмором, иронией и лёгким матом (не перебарщивай). Можно намекать на двусмысленные ситуации. Упоминай соперничество между пилотами — кто кого обошёл, кто затаил обиду, кто готовится к реваншу. Уважение к пилотам при этом сохраняется — смеёмся вместе, не над ними. Используй эмодзи медалей в тексте: 🎖️🚀⚡🥇🛡️🔥💎📈🌟🎯 и золотой щит 🛡️. Упоминай конкретные цифры из данных. Длина — 150-250 слов. Не добавляй данные которых нет. ТЕХНИКА (опциональная тема): в данных может быть блок про дроны — дебютанты (впервые применены в этом периоде) и модели с заметным сдвигом результативности. Если такой материал есть и он яркий — впиши его в репортаж в общем юмористическом тоне как отдельный сюжет («подразделение обкатало новый борт, и вот что вышло»). Если блока нет или он невыразительный — НЕ упоминай технику и НЕ выдумывай характеристики дронов. Никаких ТТХ, которых нет в данных. СОБЫТИЯ (опциональная тема): в данных может быть блок про яркие события — дебют пилота, первая награда новичка, смена держателя рекорда. Если блок есть и ярко — впиши тем же юмор-тоном как отдельные сюжеты. Нет блока — не упоминай и не выдумывай события. Используй Telegram markdown для форматирования: *жирный текст* (одна звёздочка с каждой стороны, не две). Не используй ## заголовки — вместо них просто текст с эмодзи. Не используй ** двойные звёздочки.';
+const RPG_PROMPT = 'Напиши шутливый и ироничный репортаж на русском языке о достижениях пилотов FPV-дронов за указанный период. Стиль — как залихватский спортивный комментатор, с грубым юмором, иронией и лёгким матом (не перебарщивай). Можно намекать на двусмысленные ситуации. Упоминай соперничество между пилотами — кто кого обошёл, кто затаил обиду, кто готовится к реваншу. Уважение к пилотам при этом сохраняется — смеёмся вместе, не над ними. Используй эмодзи медалей в тексте: 🎖️🚀⚡🥇🛡️🔥💎📈🌟🎯 и золотой щит 🛡️. Упоминай конкретные цифры из данных. Длина — 150-250 слов. Не добавляй данные которых нет. ТЕХНИКА (опциональная тема): в данных может быть блок про дроны — дебютанты (впервые применены в этом периоде) и модели с заметным сдвигом результативности. Если такой материал есть и он яркий — впиши его в репортаж в общем юмористическом тоне как отдельный сюжет («подразделение обкатало новый борт, и вот что вышло»). Если блока нет или он невыразительный — НЕ упоминай технику и НЕ выдумывай характеристики дронов. Никаких ТТХ, которых нет в данных. СОБЫТИЯ (опциональная тема): в данных может быть блок про яркие события — дебют пилота, первая награда новичка, смена держателя рекорда. Если блок есть и ярко — впиши тем же юмор-тоном как отдельные сюжеты. Нет блока — не упоминай и не выдумывай события. Используй Telegram markdown для форматирования: *жирный текст* (одна звёздочка с каждой стороны, не две). Не используй ## заголовки — вместо них просто текст с эмодзи. Не используй ** двойные звёздочки.';
 
 function rpgRole(){ return currentRole(); } // делегат к единому предикату (app.js), вызов только в рантайме
 function rpgIsPrivileged(){ return hasAnyRole(['admin','cmd']); }
@@ -1283,7 +1264,7 @@ function rpgBuildPayload(range){
         const old=before.shields[s.id];
         if(old) evRecord.push('- '+tok(s.pilot)+' отобрал '+shName(s.id)+' у '+tok(old)+'.');
       });
-      // Дебют пилота (первый боевой вылет попал в период) + первая награда, если есть.
+      // Дебют пилота (первый вылет попал в период) + первая награда, если есть.
       debutants.forEach(p=>{
         const fs=periodF.filter(f=>f.pilot===p);
         const d=fs.filter(f=>f.result==='yes').length;
@@ -1348,7 +1329,7 @@ function reportReportage(out){
   const txt=window._rpgText||'';
   out.innerHTML=`<div class="report-block">
     <div class="rb-head">Репортаж недели (AI) 🎙️</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Шутливый репортаж о достижениях пилотов за выбранный вверху период (календарная неделя/месяц). Перед отправкой в Claude API имена пилотов заменяются на «Пилот N» и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Нужен API-ключ во вкладке «Импорт». Нажмите «Сформировать» вверху.</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Шутливый репортаж о достижениях пилотов за выбранный вверху период (календарная неделя/месяц). Перед отправкой в Claude API имена пилотов заменяются на «Пилот N» и восстанавливаются в ответе. Данные не сохраняются и не уходят в Google Sheets. Настройки AI-сервера — вкладка «Настройки». Нажмите «Сформировать» вверху.</div>
     <div id="rpgStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
     <div id="rpgBoardSlot">${rpgBoardSlotHtml()}</div>
     <div id="rpgResultWrap" style="display:${txt?'block':'none'}">
@@ -1365,30 +1346,13 @@ async function rpgGenerate(){
   const range=rpgPeriodRange();
   const {payload,maps,total}=rpgBuildPayload(range);
   if(!total){ rpgSetStatus('За выбранный период вылетов нет.','var(--amber)'); return; }
-  const apiKey=(localStorage.getItem('anthropicKey')||'').trim();
-  if(!apiKey||!apiKey.startsWith('sk-ant')){ rpgSetStatus('API-ключ не задан (вкладка «Импорт»).','var(--amber)'); return; }
-  if(!navigator.onLine){ rpgSetStatus('Нет сети — репортаж формируется только через API.','var(--amber)'); return; }
   const btn=document.getElementById('repRunBtn');
   if(btn) btn.disabled=true;
   // Сбрасываем доску почёта прошлой генерации — появится только после успеха
   window._rpgBoardImg=null; const slot0=document.getElementById('rpgBoardSlot'); if(slot0) slot0.innerHTML='';
   rpgSetStatus('⏳ Пишу репортаж…');
   try{
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),20000);
-    let resp;
-    try{
-      resp=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({ model:AI_MODEL, max_tokens:1000, system:RPG_PROMPT, messages:[{role:'user',content:payload}] }), // AI_MODEL — единая точка (parser.js)
-        signal:ctrl.signal
-      });
-    } finally { clearTimeout(tid); }
-    if(!resp.ok){ const err=await resp.json().catch(()=>({})); throw new Error('HTTP '+resp.status+': '+((err.error&&err.error.message)||resp.statusText)); }
-    const data=await resp.json();
-    let txt=(data.content||[]).map(i=>i.text||'').join('').trim();
-    if(!txt) throw new Error('пустой ответ API');
+    let txt=(await callAI(RPG_PROMPT,payload,2000,90000)).trim();
     txt=rpgDeanon(txt,maps);
     // Ссылка на статичную справку о медалях (medals.html на GitHub Pages)
     txt+='\n\n───────────────\nℹ️ Что означают медали: https://pilgrim75.github.io/bpla/medals.html';

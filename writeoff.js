@@ -1,11 +1,11 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['writeoff.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['writeoff.js']=2026101101; // сборка файла — ставит tools/bump-version.js, руками не править
 // writeoff.js — формирование документа Word (.docx) на списание потерянных бортов.
 // ТОЛЬКО ЛОКАЛЬНО, доступно роли 'cmd'. Библиотека docx.js локальная — docx.umd.js (window.docx; до 02.07.2026 CDN).
 // Подсказки/последние значения хранятся в localStorage (ключи writeoff_*) и НИКОГДА не уходят
 // в облако (страж geoStripFromSync — чистит все ключи с префиксом writeoff). Грузить ПЕРЕД app.js.
 //
 // Формат: АКТ НА СУТКИ. Период из фильтра отчёта «Потери» → по акту на каждый день (один файл,
-// разрыв страницы). Внутри суток потери группируются по {модель + причина(note) + боеприпас(ammo)}.
+// разрыв страницы). Внутри суток потери группируются по {модель + причина(note) + груз(ammo)}.
 // Заполнение — мастером по дням («День 1 из N → Далее»).
 
 // ===== ХРАНИЛИЩЕ =====
@@ -47,7 +47,7 @@ function woStatus(msg,kind){
   el.style.color = kind==='err' ? 'var(--red)' : kind==='ok' ? 'var(--accent2)' : 'var(--muted)';
 }
 
-// Не-боевые грузы: поле «груз», взрыватель не включается, задача = доставка
+// Вспомогательные грузы: поле «груз», взрыватель не включается, задача = доставка
 const WO_CARGO=new Set(['доставка','доставка провизия','провизия','провизия доставка','вода']);
 function woIsCargo(ammo){ return WO_CARGO.has(String(ammo||'').trim().toLowerCase()); }
 
@@ -139,7 +139,7 @@ function woSignerBlock(i,s){
 }
 
 // ===== ГРУППИРОВКА =====
-// Потери одного дня → группы {model, ammo, reason, count, pilots[]} по {модель+причина+боеприпас}
+// Потери одного дня → группы {model, ammo, reason, count, pilots[]} по {модель+причина+груз}
 function woGroupDay(losses){
   const groups=new Map();
   losses.forEach(f=>{
@@ -207,8 +207,8 @@ function woRenderDayForm(){
   `</div>`;
 
   const fuzeSection = combatAmmos.length
-    ? `<div class="wo-sec">Взрыватели (по типам боеприпаса)</div>`+
-      `<div class="wo-note">Подтягиваются подсказки для каждого боеприпаса отдельно; по умолчанию пусто.</div>`+
+    ? `<div class="wo-sec">Взрыватели (по типам груза)</div>`+
+      `<div class="wo-note">Подтягиваются подсказки для каждого груза отдельно; по умолчанию пусто.</div>`+
       `<div id="wo-fuzes">`+combatAmmos.map(a=>woHintField('взрыватель_'+a,'Взрыватель для «'+a+'»',fzOf(a),{ph:'напр. РГН с УДЗ'})).join('')+`</div>`
     : '';
 
@@ -314,7 +314,7 @@ function woBuildDocx(flow){
 
     // Шапка: гриф утверждения (место для подписи и даты — всегда)
     children.push(P(R('УТВЕРЖДАЮ',{bold:true}),{align:AlignmentType.RIGHT,pageBreak:di>0}));
-    children.push(P(R(cfg.approver||'Командир войсковой части ______'),{align:AlignmentType.RIGHT}));
+    children.push(P(R(cfg.approver||'Руководитель подразделения ______'),{align:AlignmentType.RIGHT}));
     children.push(P(R('_____________________'),{align:AlignmentType.RIGHT}));
     children.push(P(R('«___» __________ 20__ г.'),{align:AlignmentType.RIGHT,after:200}));
     // Заголовок
@@ -333,8 +333,8 @@ function woBuildDocx(flow){
     groups.forEach((grp,gi)=>{
       const mc=cfgModels[grp.model]||{};
       const cargo=woIsCargo(grp.ammo);
-      const zadacha=cargo?'доставку':'минирование';
-      const cargoWord=cargo?'груз':'боеприпас';
+      const zadacha=cargo?'доставку':'применение';
+      const cargoWord=cargo?'груз':'груз';
       const lostWord=grp.count===1?'Потеряна':'Потеряны';
       const ptak=ruPlural(grp.count,'птица','птицы','птиц');
       const ammoSfx=grp.ammo?` (с ${grp.ammo})`:'';
@@ -353,7 +353,7 @@ function woBuildDocx(flow){
       const battTotal=grp.count*(parseInt(mc.battQty,10)||1);
 
       content.push(P(R(`${lostWord} ${grp.count} ${ptak}${ammoSfx} — ${grp.reason}`,{bold:true})));
-      content.push(P(R(`Расчёт FPV ${cfg.subunit||''} в составе: ${comp.join(', ')} ${primenil} «${grp.model}» вылет на ${zadacha}.${place?' Цель подавлена '+place+'.':''}`)));
+      content.push(P(R(`Расчёт FPV ${cfg.subunit||''} в составе: ${comp.join(', ')} ${primenil} «${grp.model}» вылет на ${zadacha}.${place?' Задача выполнена '+place+'.':''}`)));
       content.push(P(R(`В связи с этим считать израсходованным следующее имущество${imName?' '+imName:''}:`)));
       let n=0;
       n++; content.push(P(R(`${n}. FPV-дрон «${grp.model}» — ${grp.count} шт.,`)));

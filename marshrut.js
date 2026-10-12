@@ -1,4 +1,4 @@
-(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['marshrut.js']=2026092504; // сборка файла — ставит tools/bump-version.js, руками не править
+(globalThis.__FILE_BUILDS=globalThis.__FILE_BUILDS||{})['marshrut.js']=2026101101; // сборка файла — ставит tools/bump-version.js, руками не править
 // ===== МАРШРУТ — Event Sourcing учёта (ADR-001) =====
 // ЭТАПЫ 1–3: getBalance(model, location) РЯДОМ со старой системой + самосверка + ЧЕРТА.
 // ТОЛЬКО ЧТЕНИЕ. Ничего не мутирует, не пишет, не синкает. qty/stock/squads
@@ -42,6 +42,13 @@ function _mNorm(s){ return (s==null?'':String(s)).toLowerCase().trim(); }
 // Локация склада по умолчанию для приходных записей без явной локации.
 const MARSHRUT_STOCK_LOC = 'склад';
 
+// Кэш для _marshrutWalk (Этап 4, 10.10.2026): снимок балансов вычисляется раз, пока
+// не изменится журнал. Ключ: длина, первый и последний id, черта; плюс явный marshrutInvalidate().
+let _marshrutCache = null;
+let _marshrutCacheKey = '';
+// Явный сброс кэша: правки движений «на месте» (переименования, смена борта) ключ не меняют.
+function marshrutInvalidate(){ _marshrutCache = null; _marshrutCacheKey = ''; }
+
 // Прибавить дельту к балансу пары модель×локация в накопителе map.
 // map: { modelNorm: { model:'<display>', locs:{ locNorm:{ location:'<display>', balance:N } } } }
 function _mAdd(map, model, loc, delta){
@@ -84,10 +91,14 @@ function marshrutCutTs(){
 function isBeforeCut(ts){ const cut=marshrutCutTs(); return !!cut && (+ts||0) < cut; }
 
 // Полный прогон журнала движений → накопитель балансов (внутренний, pure read).
+// Этап 4 (10.10.2026): кэшированный снимок — пересчитывается только при изменении журнала.
 function _marshrutWalk(){
-  const map={};
   const transfers=(typeof state!=='undefined' && state && state.transfers) ? state.transfers : [];
   const cut=marshrutCutTs(); // 0 — черты нет
+  const cacheKey = transfers.length + ':' + (transfers[0]?.id || '') + ':' + (transfers[transfers.length-1]?.id || '') + ':' + cut;
+  if(_marshrutCache && _marshrutCacheKey === cacheKey) return _marshrutCache;
+  
+  const map={};
   transfers.forEach(t=>{
     if(!t || !t.type) return;
     // ЧЕРТА: до неё история ЗАМОРОЖЕНА — в баланс входят только движения, ЗАПИСАННЫЕ
@@ -107,7 +118,7 @@ function _marshrutWalk(){
         break;
       }
       case 'loss': {
-        // Боевая потеря — списание с локации РАСЧЁТА (squadKey, сейчас = имя пилота
+        // Потеря — списание с локации РАСЧЁТА (squadKey, сейчас = имя пилота
         // t.pilot; склад-семантика — при разделении «расчёт/пилот» остаётся на
         // squadKeyOf). qty по умолчанию 1 (как в _stockAuditCompute).
         _mAdd(map, t.drone, squadKeyOf(t.pilot||t.location||t.from), -(t.qty||1));
@@ -149,6 +160,9 @@ function _marshrutWalk(){
       default: break; // неизвестный тип — игнор (не роняем)
     }
   });
+  
+  _marshrutCache = map;
+  _marshrutCacheKey = cacheKey;
   return map;
 }
 
